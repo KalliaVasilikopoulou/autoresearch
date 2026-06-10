@@ -1,0 +1,68 @@
+# Multi-Agent NN Parameter Optimization Configuration
+# ===================================================
+
+# AGENT 1: Training Specialist
+agent1:
+  # Whether to use Claude for hyperparameter suggestions (optional, default: false)
+  use_llm: false
+
+  # Stop when accuracy reaches this threshold (val_bpb lower is better)
+  accuracy_threshold: 0.97
+
+  # Stop when total API cost exceeds this amount (USD)
+  cost_limit_usd: 50.0
+
+  # Training time budget per model (seconds)
+  training_budget_seconds: 300
+
+# AGENT 2: XAI Specialist
+agent2:
+  # Which XAI method to use: "fast" or "thorough"
+  xai_method: "fast"
+
+  # Whether to use Claude for prose report interpretation (optional, default: false)
+  use_llm: false
+
+  # Fast methods
+  fast_methods:
+    - ablation  # Turn off attention heads, measure impact
+    - partial_dependence  # Vary hyperparams, estimate impact
+
+  # For ablation: analyze top-K heads by weight magnitude
+  ablation_k: 10
+
+  # Only re-analyze what changed (incremental analysis)
+  incremental: true
+
+# AGENT 3: Report Analyst
+agent3:
+  # Summarize every N new reports (batch size)
+  batch_size: 3
+
+  # Whether to use Claude for narrative summary (optional, default: false)
+  use_llm: false
+
+  # Include previous summary in new summary (preserve history)
+  preserve_history: true
+
+# ORCHESTRATOR
+orchestrator:
+  # Enable parallel execution (agents don't wait for each other)
+  parallel: true
+
+  # Polling interval (seconds) - how often to check for work
+  poll_interval_seconds: 5
+
+  # Maximum iterations before stopping
+  max_iterations: 100
+
+# Model Training Configuration
+# (Agent 1 will adjust these based on summary feedback)
+model_params:
+  n_layer: 12
+  n_head: 8
+  n_embd: 512
+  learning_rate: 0.001
+  batch_size: 128
+  warmup_ratio: 0.1
+  weight_decay: 0.1

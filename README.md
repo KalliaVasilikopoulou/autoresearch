@@ -18,6 +18,153 @@ By design, training runs for a **fixed 5-minute time budget** (wall clock, exclu
 
 If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
 
+## Multi-Agent NN Parameter Optimization (NEW)
+
+This repo now includes a **multi-agent framework** for intelligent hyperparameter optimization using explainability feedback. Instead of blindly trying random changes, a team of AI agents work together to understand *why* models succeed or fail, then make informed decisions.
+
+### The Multi-Agent Team
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ ORCHESTRATOR (Team Leader)                              │
+│ Coordinates parallel execution of all agents            │
+└──────────────┬──────────────┬──────────────┬────────────┘
+               │              │              │
+     ┌─────────▼──┐  ┌────────▼──────┐  ┌───▼──────────┐
+     │ Agent 1    │  │ Agent 2       │  │ Agent 3      │
+     │ TRAINING   │  │ XAI           │  │ ANALYST      │
+     │ SPECIALIST │  │ SPECIALIST    │  │              │
+     └────────────┘  └───────────────┘  └──────────────┘
+```
+
+**Agent 1: Training Specialist**
+- Trains models on specific hyperparameters
+- Validates and measures performance (val_bpb)
+- Adjusts hyperparameters based on Agent 3 summaries
+- Uses heuristic rules by default (no API cost)
+- Optional: Can consult Claude for smarter suggestions
+
+**Agent 2: XAI Specialist**
+- Analyzes each trained model using explainability techniques
+- Fast method (default):
+  - **Ablation**: Turn off attention heads, measure impact
+  - **Partial Dependence**: Vary hyperparameters, see effect
+- Generates statistical reports (+ optional Claude prose interpretation)
+- Flags important insights like "Learning rate matters 70% more than batch size"
+
+**Agent 3: Report Analyst**
+- Waits for batch of 3 new reports from Agent 2
+- Aggregates across all past reports
+- Finds consistent patterns: "Which hyperparameters always matter?"
+- Creates hierarchical summaries that preserve all historical context
+- Sends strategically important insights to Agent 1
+
+**Orchestrator**
+- Manages parallel execution
+- Ensures agents run efficiently without deadlock
+- Tracks state: models, reports, hyperparameters
+- Implements stopping conditions (accuracy threshold, cost limit)
+
+### Workflow
+
+```
+1. Agent 1 trains model with hyperparameters
+2. Agent 2 analyzes: "Which attention heads matter? Which hyperparams?"
+   → Generates statistical report
+3. Agent 3 waits for batch of 3 reports
+   → Creates summary: "Learning rate consistency → try 2x higher next time"
+4. Agent 1 reads summary
+   → Adjusts hyperparameters intelligently based on patterns
+5. Repeat until accuracy threshold reached or cost limit hit
+```
+
+### Zero-Cost by Default
+
+**All features are optional and disabled by default to avoid API costs:**
+
+```yaml
+agents:
+  agent1:
+    use_llm: false  # Statistical heuristics, no LLM cost
+  agent2:
+    use_llm: false  # Statistical reports, no LLM cost
+  agent3:
+    use_llm: false  # Pattern tables, no LLM cost
+```
+
+Cost breakdown if you enable LLM:
+- Agent 2 report: $0.05-0.10 per model
+- Agent 3 summary: $0.10-0.20 per batch (3 models)
+- Agent 1 suggestions: $0.02-0.05 per decision
+
+**Total default cost: $0.00 (all statistical)**
+**Total with all LLMs enabled: ~$0.20-0.35 per model** (negligible vs GPU cost)
+
+### Configuration
+
+Edit `agents_config.yaml` to customize:
+
+```yaml
+# Stop when accuracy reaches this threshold
+accuracy_threshold: 0.97
+
+# Analyze only top-K attention heads (fast)
+ablation_k: 10
+
+# Batch size for report aggregation
+batch_size: 3
+
+# Enable Claude for intelligent analysis (optional)
+use_llm: false
+```
+
+### Running Multi-Agent Optimization
+
+```bash
+# Start the multi-agent loop
+python agents/orchestrator.py --config agents_config.yaml
+
+# Monitor reports
+ls -la reports/agent2_reports/  # Individual analyses
+ls -la reports/agent3_summaries/  # Strategic summaries
+
+# Check state
+cat state/metadata.json  # Track all models and hyperparameters
+```
+
+### Key Design Decisions
+
+1. **LLM is Optional**: All XAI analysis uses pure statistical methods by default. Claude can enhance reports, but isn't required.
+2. **Hierarchical Memory**: Agent 3 summaries include condensed history—no information is lost, patterns accumulate.
+3. **Incremental Analysis**: Agent 2 only re-analyzes what changed, not the entire model each iteration.
+4. **Heuristic + Optional Claude**: Agent 1 uses statistical rules first ("LR matters most → try 2x"), Claude confirms or overrides.
+5. **Stuck Detection**: Automatically triggers radical changes if model patterns repeat too much.
+
+### Example Multi-Agent Run Output
+
+```
+============================================================
+[Orchestrator] Iteration 1
+============================================================
+
+[Orchestrator] Phase 1: Agent 1 Training
+[Agent 1] Deciding next hyperparameters (iteration 0)...
+[Agent 1] Next hyperparams: {'n_layer': 12, 'n_embd': 512, 'learning_rate': 0.001}
+[Agent 1] Starting training with: ...
+[Orchestrator] Saved model: model_0000, val_bpb: 0.998400
+
+[Orchestrator] Phase 2: Agent 2 XAI Analysis
+[Agent 2] Analyzing model model_0000...
+[Agent 2] Report saved: reports/agent2_reports/report_0000.md
+
+[Orchestrator] Phase 3: Agent 3 Report Aggregation
+(waiting for batch of 3...)
+
+[Orchestrator] Iteration 1 complete
+```
+
+
+
 ## Quick start
 
 **Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
@@ -63,6 +210,68 @@ pyproject.toml  — dependencies
 - **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
 - **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
 - **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+
+## Multi-Agent System: Hardware & Subscriptions
+
+### Minimum Requirements
+
+**For single-agent baseline (original autoresearch):**
+- NVIDIA GPU: H100 recommended, but A100, A6000, or similar work
+- RAM: 80GB+ for H100, 40GB+ for smaller GPUs
+- Cost: ~$2-3 per hour on cloud GPU
+
+**For multi-agent optimization:**
+Same as above. Multi-agent system **runs on same GPU**, just adds analysis overhead.
+
+### Optional: Claude API (For Enhanced Reports)
+
+**Cost if you enable LLM features:**
+- ~$0.20-0.35 per model trained (~5 minutes per model)
+- ~2-3 USD for 100 models overnight
+- Completely optional—system works with $0 cost if disabled
+
+**Setup:**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...  # From Claude console
+```
+
+### Simple Breakdown
+
+| Scenario | GPU Cost | API Cost | Total Cost |
+|----------|----------|----------|-----------|
+| 100 models overnight (8h) | $16-24 | $0 | $16-24 |
+| 100 models with Claude analysis | $16-24 | $2-3 | $18-27 |
+| 1000 models overnight (80h) | $160-240 | $20-30 | $180-270 |
+
+The GPU dominates the cost. LLM analysis is negligible but **improves decision quality**.
+
+### Easy Start (No API)
+
+```bash
+# Everything works without Claude API
+# Agent 1 uses heuristics
+# Agent 2 generates pure statistical reports
+# Agent 3 creates pattern tables
+# Total cost: just GPU
+
+python agents/orchestrator.py --config agents_config.yaml
+```
+
+### Advanced (With Claude)
+
+```bash
+# Edit agents_config.yaml
+agent1:
+  use_llm: true  # Claude suggests next hyperparams
+agent2:
+  use_llm: true  # Claude interprets XAI results
+agent3:
+  use_llm: true  # Claude writes strategic summaries
+
+python agents/orchestrator.py --config agents_config.yaml
+```
+
+
 
 ## Platform support
 
