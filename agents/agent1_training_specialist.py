@@ -61,6 +61,7 @@ class Agent1TrainingSpecialist:
     def decide_next_hyperparams(
         self,
         latest_summary: Optional[str] = None,
+        evidence: Optional[list] = None,
         stuck_signal: bool = False,
         latest_val_bpb: Optional[float] = None,
         iteration: int = 0,
@@ -87,10 +88,19 @@ class Agent1TrainingSpecialist:
 
         print(f"\n[Agent 1] Deciding next hyperparameters (iteration {iteration})...")
 
-        # ALWAYS: Use heuristics
-        new_hyperparams = self._heuristic_adjustment(
-            latest_summary, stuck_signal, iteration
+        # PRIMARY: use report-driven evidence when available
+        new_hyperparams = self._evidence_adjustment(
+            latest_summary=latest_summary,
+            evidence=evidence,
+            stuck_signal=stuck_signal,
+            iteration=iteration,
         )
+
+        # FALLBACK: use heuristics if evidence is sparse
+        if not evidence:
+            new_hyperparams = self._heuristic_adjustment(
+                latest_summary, stuck_signal, iteration
+            )
 
         # OPTIONAL: If LLM enabled, get Claude suggestions
         if self.use_llm and latest_summary:
@@ -110,6 +120,52 @@ class Agent1TrainingSpecialist:
 
         print(f"[Agent 1] Next hyperparams: {new_hyperparams}")
         return new_hyperparams
+
+    def _evidence_adjustment(
+        self,
+        latest_summary: Optional[str],
+        evidence: Optional[list],
+        stuck_signal: bool,
+        iteration: int,
+    ) -> Dict[str, Any]:
+        """Translate structured evidence from Agents 2 and 3 into new hyperparameters."""
+        new_params = self.current_hyperparams.copy()
+
+        if stuck_signal:
+            print("[Agent 1] Model stuck - trying radical changes")
+            new_params["n_layer"] = random.randint(8, 20)
+            new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+            return new_params
+
+        if not evidence:
+            return new_params
+
+        importance_by_param: Dict[str, float] = {}
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            for param, score in item.get("hyperparameter_importance", {}).items():
+                importance_by_param[param] = importance_by_param.get(param, 0.0) + float(score)
+            if item.get("stuck_signal"):
+                print("[Agent 1] Evidence indicates a stuck pattern")
+
+        if latest_summary:
+            summary_lower = latest_summary.lower()
+            if "learning rate" in summary_lower and "important" in summary_lower:
+                new_params["learning_rate"] *= 1.5
+            if ("depth" in summary_lower or "layer" in summary_lower) and (
+                "important" in summary_lower or "matter" in summary_lower
+            ):
+                new_params["n_layer"] = max(4, min(new_params["n_layer"] + 1, 24))
+
+        if "learning_rate" in importance_by_param:
+            new_params["learning_rate"] *= 1.2
+        if "n_layer" in importance_by_param:
+            new_params["n_layer"] = max(4, min(new_params["n_layer"] + 1, 24))
+        if "n_embd" in importance_by_param:
+            new_params["n_embd"] = int(new_params["n_embd"] * 1.1)
+
+        return new_params
 
     def _heuristic_adjustment(
         self, summary: Optional[str], stuck: bool, iteration: int
@@ -164,7 +220,7 @@ class Agent1TrainingSpecialist:
         return new_params
 
     def train_model(
-        self, hyperparams: Dict[str, Any]
+        self, hyperparams: Dict[str, Any], dry_run: bool = False, iteration: int = 0
     ) -> Dict[str, Any]:
         """
         Train model and return metrics.
@@ -175,6 +231,15 @@ class Agent1TrainingSpecialist:
         self._save_hyperparams()
 
         print(f"[Agent 1] Starting training with: {hyperparams}")
+
+        if dry_run:
+            print("[Agent 1] Dry run enabled; skipping actual training")
+            return {
+                "val_bpb": 1.0 - 0.001 * (iteration + 1),
+                "training_time": 0.0,
+                "checkpoint_path": None,
+                "status": "dry_run",
+            }
 
         try:
             # Run training subprocess

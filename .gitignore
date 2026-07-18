@@ -21,3 +21,7 @@ dev/
 
 # Results file
 results.tsv
+
+# Tests/reports
+tests/
+reports/

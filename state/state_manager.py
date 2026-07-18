@@ -55,11 +55,12 @@ class StateManager:
         model_id = f"model_{iteration:04d}"
         model_path = self.models_dir / f"{model_id}.pt"
 
-        # Save weights only
-        torch.save(model.state_dict(), model_path)
+        if model is not None:
+            # Save weights only
+            torch.save(model.state_dict(), model_path)
 
         # Track metadata
-        self.metadata["models"][model_id] = {
+        self.metadata.setdefault("models", {})[model_id] = {
             "iteration": iteration,
             "hyperparams": hyperparams,
             "val_bpb": None,
@@ -83,13 +84,13 @@ class StateManager:
 
     def link_model_to_report(self, model_id: str, report_id: str):
         """Associate trained model with its XAI report."""
-        if model_id in self.metadata["models"]:
+        if model_id in self.metadata.setdefault("models", {}):
             self.metadata["models"][model_id]["report_id"] = report_id
             self._save_metadata()
 
     def update_val_bpb(self, model_id: str, val_bpb: float):
         """Update validation metric for a model."""
-        if model_id in self.metadata["models"]:
+        if model_id in self.metadata.setdefault("models", {}):
             self.metadata["models"][model_id]["val_bpb"] = val_bpb
             self._save_metadata()
 
@@ -134,3 +135,31 @@ class StateManager:
     def get_current_iteration(self) -> int:
         """Get current iteration counter."""
         return self.metadata.get("iteration", 0)
+
+    def add_result(self, result: Dict[str, Any]):
+        """Store a completed training result."""
+        self.metadata.setdefault("results", []).append(result)
+        self._save_metadata()
+
+    def get_all_results(self) -> List[Dict[str, Any]]:
+        """Get all recorded training results."""
+        return self.metadata.get("results", [])
+
+    def add_evidence(self, evidence: Dict[str, Any]):
+        """Store structured evidence from Agent 2."""
+        self.metadata.setdefault("evidence", []).append(evidence)
+        self._save_metadata()
+
+    def get_recent_evidence(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get the most recent evidence items."""
+        evidence = self.metadata.get("evidence", [])
+        return evidence[-limit:]
+
+    def add_summary(self, summary: Dict[str, Any]):
+        """Store structured summary from Agent 3."""
+        self.metadata.setdefault("summaries", []).append(summary)
+        self._save_metadata()
+
+    def get_latest_summary(self) -> Optional[str]:
+        """Return the latest summary id that was recorded."""
+        return self.metadata.get("latest_summary")
