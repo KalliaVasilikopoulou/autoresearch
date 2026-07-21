@@ -1,7 +1,7 @@
 batch_size: 128
-learning_rate: 0.0004010414504934852
-n_embd: 748
+learning_rate: 410.4590024685451
+n_embd: 1024
 n_head: 8
-n_layer: 16
+n_layer: 24
 warmup_ratio: 0.1
 weight_decay: 0.1

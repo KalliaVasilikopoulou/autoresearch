@@ -11,6 +11,7 @@ from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
 from state.state_manager import StateManager
+from state.results_logger import log_result
 
 
 class Orchestrator:
@@ -89,6 +90,7 @@ class Orchestrator:
             )
             self.state_mgr.add_result(result_payload.to_dict())
             self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
+            log_result(result_payload.run_id, new_hyperparams, train_result)
 
             print("\n[Orchestrator] Phase 3: Agent 2 analyzes the result")
             evidence = self.agent2.analyze_result(result_payload.to_dict())

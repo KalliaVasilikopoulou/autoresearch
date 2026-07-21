@@ -52,14 +52,17 @@ def is_remote_configured() -> bool:
 
 def run_training_remote(
     hyperparams_local_path: str,
-    timeout: int = 360,
+    timeout: int = 600,
 ) -> Dict[str, Any]:
     """
     Upload hyperparams YAML to the remote server and run train.py there.
 
-    Args:
-        hyperparams_local_path: local path to model_hyperparams.yaml.
-        timeout: seconds to wait for the remote training process.
+    Steps:
+      1. Connect via SSH.
+      2. Pull latest code on remote (git pull).
+      3. Upload local model_hyperparams.yaml via SFTP.
+      4. Execute train.py inside the conda env.
+      5. Stream output back and parse metrics.
 
     Returns:
         Metrics dict with at least {"val_bpb": float, "status": str}.
@@ -73,16 +76,14 @@ def run_training_remote(
     cfg = _load_cfg()
     remote_repo = cfg["repo"]
     remote_hyperparams = f"{remote_repo}/model_hyperparams.yaml"
+    activate = cfg["conda_activate"]
+    env = cfg["conda_env"]
 
     client = paramiko.SSHClient()
-    # AutoAddPolicy accepts unknown host keys automatically.
-    # On a trusted university network this is acceptable.
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     try:
-        print(
-            f"[RemoteRunner] Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} …"
-        )
+        print(f"[RemoteRunner] Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} ...")
         client.connect(
             hostname=cfg["host"],
             port=cfg["port"],
@@ -91,24 +92,27 @@ def run_training_remote(
             timeout=30,
         )
 
-        # --- 1. Upload hyperparameters ---
-        print(f"[RemoteRunner] Uploading hyperparams → {remote_hyperparams}")
+        # --- 1. Pull latest code on remote so train.py is always up to date ---
+        print("[RemoteRunner] Pulling latest code on remote ...")
+        _, o, e = client.exec_command(
+            f'bash -lc "{activate} {env} && cd {remote_repo} && git pull --ff-only 2>&1"'
+        )
+        pull_out = o.read().decode("utf-8", errors="replace").strip()
+        print(f"[RemoteRunner] git pull: {pull_out[:120]}")
+
+        # --- 2. Upload hyperparameters ---
+        print(f"[RemoteRunner] Uploading hyperparams -> {remote_hyperparams}")
         sftp = client.open_sftp()
         sftp.put(hyperparams_local_path, remote_hyperparams)
         sftp.close()
 
-        # --- 2. Run training remotely ---
-        activate = cfg["conda_activate"]
-        env = cfg["conda_env"]
-        # The semicolons make this a single login-like shell so conda works.
+        # --- 3. Run training ---
         remote_cmd = (
-            f"bash -lc \"{activate} {env} && cd {remote_repo} && python train.py\""
+            f'bash -lc "{activate} {env} && cd {remote_repo} && python -u train.py"'
         )
         print(f"[RemoteRunner] Executing: {remote_cmd}")
-
         _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
 
-        # Stream output lines as they arrive
         output_lines = []
         for line in iter(stdout.readline, ""):
             line = line.rstrip("\n")
@@ -136,30 +140,35 @@ def run_training_remote(
         client.close()
 
 
+# Mapping from train.py output key -> metrics dict key
+_OUTPUT_FIELDS = {
+    "val_bpb:": ("val_bpb", float),
+    "training_seconds:": ("training_time", float),
+    "total_seconds:": ("total_seconds", float),
+    "peak_vram_mb:": ("peak_vram_mb", float),
+    "mfu_percent:": ("mfu_percent", float),
+    "total_tokens_m:": ("total_tokens_M", float),
+    "num_steps:": ("num_steps", int),
+    "num_params_m:": ("num_params_M", float),
+    "depth:": ("depth", int),
+}
+
+
 def _parse_output(stdout: str) -> Dict[str, Any]:
-    """Extract val_bpb and other metrics from train.py stdout."""
+    """Extract all metrics from train.py's final summary block."""
     metrics: Dict[str, Any] = {
         "val_bpb": float("inf"),
-        "train_loss": None,
         "training_time": None,
         "status": "remote_ok",
     }
     for line in stdout.splitlines():
-        ll = line.lower()
-        if "val_bpb" in ll:
+        key = line.split()[0].lower() if line.split() else ""
+        if key in _OUTPUT_FIELDS:
+            dest, cast = _OUTPUT_FIELDS[key]
             parts = line.split()
-            for i, part in enumerate(parts):
-                if "bpb" in part.lower() and i + 1 < len(parts):
-                    try:
-                        metrics["val_bpb"] = float(parts[i + 1])
-                    except ValueError:
-                        pass
-        if "train_loss" in ll:
-            parts = line.split()
-            for i, part in enumerate(parts):
-                if "loss" in part.lower() and i + 1 < len(parts):
-                    try:
-                        metrics["train_loss"] = float(parts[i + 1])
-                    except ValueError:
-                        pass
+            if len(parts) >= 2:
+                try:
+                    metrics[dest] = cast(parts[1])
+                except (ValueError, IndexError):
+                    pass
     return metrics

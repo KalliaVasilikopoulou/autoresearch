@@ -25,6 +25,9 @@ dev/
 # Results file
 results.tsv
 
+# Logs folder (training runs, diagnostics)
+logs/
+
 # Runtime-generated agent state (JSON state files and saved model checkpoints)
 state/metadata.json
 state/report_tracking.json

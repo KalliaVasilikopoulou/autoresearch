@@ -257,7 +257,7 @@ class Agent1TrainingSpecialist:
         if "n_layer" in importance_by_param:
             new_params["n_layer"] = max(4, min(new_params["n_layer"] + 1, 24))
         if "n_embd" in importance_by_param:
-            new_params["n_embd"] = int(new_params["n_embd"] * 1.1)
+            new_params["n_embd"] = min(int(new_params["n_embd"] * 1.1), 1024)
 
         return new_params
 
@@ -303,12 +303,15 @@ class Agent1TrainingSpecialist:
             if "embedding" in summary_lower and "important" in summary_lower:
                 emb_factor = random.choice([0.8, 1.2, 1.5])
                 new_params["n_embd"] = int(new_params["n_embd"] * emb_factor)
+                # Cap embedding to fit in A100 VRAM with SDPA (batch size 1)
+                new_params["n_embd"] = min(new_params["n_embd"], 1024)
                 print(f"[Agent 1] Adjusted embedding: {new_params['n_embd']}")
         else:
             # No summary yet - early iterations, try random exploration
             if iteration < 5:
                 print("[Agent 1] Early iteration - random exploration")
                 new_params["n_layer"] = random.randint(6, 18)
+                new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
                 new_params["learning_rate"] = 10 ** random.uniform(-4, -2)
 
         return new_params
@@ -403,27 +406,32 @@ class Agent1TrainingSpecialist:
             "error": error,
         }
 
+    _TRAIN_OUTPUT_FIELDS = {
+        "val_bpb:": ("val_bpb", float),
+        "training_seconds:": ("training_time", float),
+        "total_seconds:": ("total_seconds", float),
+        "peak_vram_mb:": ("peak_vram_mb", float),
+        "mfu_percent:": ("mfu_percent", float),
+        "total_tokens_m:": ("total_tokens_M", float),
+        "num_steps:": ("num_steps", int),
+        "num_params_m:": ("num_params_M", float),
+        "depth:": ("depth", int),
+    }
+
     def _parse_training_output(self, stdout: str) -> Dict[str, Any]:
-        """Parse metrics from train.py output."""
-        metrics = {
-            "val_bpb": float("inf"),
-            "train_loss": None,
-            "train_time": None,
-        }
-
-        # Look for specific patterns in output
-        lines = stdout.split("\n")
-        for line in lines:
-            if "val_bpb" in line.lower():
+        """Parse all metrics from train.py's final summary block."""
+        metrics: Dict[str, Any] = {"val_bpb": float("inf")}
+        for line in stdout.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            key = parts[0].lower()
+            if key in self._TRAIN_OUTPUT_FIELDS and len(parts) >= 2:
+                dest, cast = self._TRAIN_OUTPUT_FIELDS[key]
                 try:
-                    # Extract number
-                    parts = line.split()
-                    for i, part in enumerate(parts):
-                        if "bpb" in part.lower() and i + 1 < len(parts):
-                            metrics["val_bpb"] = float(parts[i + 1])
-                except:
+                    metrics[dest] = cast(parts[1])
+                except (ValueError, IndexError):
                     pass
-
         return metrics
 
     def _init_claude(self):

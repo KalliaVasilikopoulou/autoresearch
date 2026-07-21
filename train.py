@@ -17,11 +17,47 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from kernels import get_kernel
-cap = torch.cuda.get_device_capability()
-# varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
-repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
-fa3 = get_kernel(repo).flash_attn_interface
+try:
+    from kernels import get_kernel
+    cap = torch.cuda.get_device_capability()
+    # varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
+    repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
+    fa3 = get_kernel(repo, version=1).flash_attn_interface
+    _USE_FA3 = True
+    print(f"[train.py] Flash Attention 3 loaded ({repo})")
+except Exception as _fa3_err:
+    print(f"[train.py] FA3 unavailable ({type(_fa3_err).__name__}), using PyTorch SDPA fallback")
+    fa3 = None
+    _USE_FA3 = False
+
+
+def _attn_func(q, k, v, window_size):
+    """
+    Attention dispatcher.
+    FA3 path  : q/k/v are [B, T, H, D] (Flash-Attn convention).
+    SDPA path : transposes to [B, H, T, D], handles GQA + sliding window.
+    """
+    if _USE_FA3:
+        return fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
+
+    # --- PyTorch SDPA fallback ---
+    B, T, Hq, D = q.shape
+    Hkv = k.shape[2]
+    q2 = q.transpose(1, 2)          # [B, Hq, T, D]
+    k2 = k.transpose(1, 2)          # [B, Hkv, T, D]
+    v2 = v.transpose(1, 2)          # [B, Hkv, T, D]
+    if Hkv < Hq:                    # expand GQA
+        ratio = Hq // Hkv
+        k2 = k2.repeat_interleave(ratio, dim=1)
+        v2 = v2.repeat_interleave(ratio, dim=1)
+    w = window_size[0]
+    if w >= T:
+        y = F.scaled_dot_product_attention(q2, k2, v2, is_causal=True)
+    else:
+        mask = torch.ones(T, T, dtype=torch.bool, device=q2.device).tril()
+        mask &= torch.ones(T, T, dtype=torch.bool, device=q2.device).tril().triu(-(w - 1))
+        y = F.scaled_dot_product_attention(q2, k2, v2, attn_mask=mask)
+    return y.transpose(1, 2)        # [B, T, Hq, D]
 
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
 
@@ -90,7 +126,7 @@ class CausalSelfAttention(nn.Module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
 
-        y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
+        y = _attn_func(q, k, v, window_size)
         y = y.contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
@@ -302,7 +338,6 @@ polar_express_coeffs = [
     (2.3465413258596377, -1.7097828382687081, 0.42323551169305323),
 ]
 
-@torch.compile(dynamic=False, fullgraph=True)
 def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
     p.mul_(1 - lr_t * wd_t)
     exp_avg.lerp_(grad, 1 - beta1_t)
@@ -313,7 +348,6 @@ def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_
     step_size = lr_t / bias1
     p.add_(exp_avg / denom, alpha=-step_size)
 
-@torch.compile(dynamic=False, fullgraph=True)
 def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
                     momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
     # Nesterov momentum
@@ -340,7 +374,9 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
     red_dim_size = g.size(red_dim)
     v_norm_sq = v_mean.sum(dim=(-2, -1), keepdim=True) * red_dim_size
     v_norm = v_norm_sq.sqrt()
-    second_momentum_buffer.lerp_(v_mean.to(dtype=second_momentum_buffer.dtype), 1 - beta2)
+    # Ensure all operands match dtype of second_momentum_buffer
+    second_momentum_buffer.lerp_(v_mean.to(dtype=second_momentum_buffer.dtype), 
+                                 (1 - beta2).to(dtype=second_momentum_buffer.dtype))
     step_size = second_momentum_buffer.clamp_min(1e-10).rsqrt()
     scaled_sq_sum = (v_mean * red_dim_size) * step_size.float().square()
     v_norm_new = scaled_sq_sum.sum(dim=(-2, -1), keepdim=True).sqrt()
@@ -381,15 +417,19 @@ class MuonAdamW(torch.optim.Optimizer):
                 state['exp_avg'] = torch.zeros_like(p)
                 state['exp_avg_sq'] = torch.zeros_like(p)
             state['step'] += 1
-            self._adamw_step_t.fill_(state['step'])
-            self._adamw_lr_t.fill_(group['lr'])
-            self._adamw_beta1_t.fill_(group['betas'][0])
-            self._adamw_beta2_t.fill_(group['betas'][1])
-            self._adamw_eps_t.fill_(group['eps'])
-            self._adamw_wd_t.fill_(group['weight_decay'])
+            self._adamw_step_t.fill_(state['step']).to(device=p.device, dtype=p.dtype)
+            self._adamw_lr_t.fill_(group['lr']).to(device=p.device, dtype=p.dtype)
+            self._adamw_beta1_t.fill_(group['betas'][0]).to(device=p.device, dtype=p.dtype)
+            self._adamw_beta2_t.fill_(group['betas'][1]).to(device=p.device, dtype=p.dtype)
+            self._adamw_eps_t.fill_(group['eps']).to(device=p.device, dtype=p.dtype)
+            self._adamw_wd_t.fill_(group['weight_decay']).to(device=p.device, dtype=p.dtype)
             adamw_step_fused(p, grad, state['exp_avg'], state['exp_avg_sq'],
-                            self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
-                            self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
+                            self._adamw_step_t.to(device=p.device, dtype=p.dtype),
+                            self._adamw_lr_t.to(device=p.device, dtype=p.dtype),
+                            self._adamw_beta1_t.to(device=p.device, dtype=p.dtype),
+                            self._adamw_beta2_t.to(device=p.device, dtype=p.dtype),
+                            self._adamw_eps_t.to(device=p.device, dtype=p.dtype),
+                            self._adamw_wd_t.to(device=p.device, dtype=p.dtype))
 
     def _step_muon(self, group):
         params = group['params']
@@ -407,14 +447,17 @@ class MuonAdamW(torch.optim.Optimizer):
         red_dim = -1 if shape[-2] >= shape[-1] else -2
         stacked_grads = torch.stack([p.grad for p in params])
         stacked_params = torch.stack(params)
-        self._muon_momentum_t.fill_(group["momentum"])
-        self._muon_beta2_t.fill_(group["beta2"] if group["beta2"] is not None else 0.0)
-        self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5)
-        self._muon_wd_t.fill_(group["weight_decay"])
+        self._muon_momentum_t.fill_(group["momentum"]).to(device=device, dtype=dtype)
+        self._muon_beta2_t.fill_(group["beta2"] if group["beta2"] is not None else 0.0).to(device=device, dtype=dtype)
+        self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5).to(device=device, dtype=dtype)
+        self._muon_wd_t.fill_(group["weight_decay"]).to(device=device, dtype=dtype)
         muon_step_fused(stacked_grads, stacked_params,
                         state["momentum_buffer"], state["second_momentum_buffer"],
-                        self._muon_momentum_t, self._muon_lr_t, self._muon_wd_t,
-                        self._muon_beta2_t, group["ns_steps"], red_dim)
+                        self._muon_momentum_t.to(device=device, dtype=dtype),
+                        self._muon_lr_t.to(device=device, dtype=dtype),
+                        self._muon_wd_t.to(device=device, dtype=dtype),
+                        self._muon_beta2_t.to(device=device, dtype=dtype),
+                        group["ns_steps"], red_dim)
         torch._foreach_copy_(params, list(stacked_params.unbind(0)))
 
     @torch.no_grad()
@@ -435,7 +478,7 @@ HEAD_DIM = 128          # target head dimension for attention
 WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
 
 # Optimization
-TOTAL_BATCH_SIZE = 2**19 # ~524K tokens per optimizer step
+TOTAL_BATCH_SIZE = 2**13 # ~8K tokens per optimizer step (heavily reduced for VRAM efficiency with SDPA fallback)
 EMBEDDING_LR = 0.6      # learning rate for token embeddings (Adam)
 UNEMBEDDING_LR = 0.004  # learning rate for lm_head (Adam)
 MATRIX_LR = 0.04        # learning rate for matrix parameters (Muon)
@@ -448,7 +491,34 @@ FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
 
 # Model size
 DEPTH = 8               # number of transformer layers
-DEVICE_BATCH_SIZE = 128  # per-device batch size (reduce if OOM)
+DEVICE_BATCH_SIZE = 1    # per-device batch size (2->1 for extreme memory efficiency; 1*2048 = 2K tokens per fwdbwd)
+
+# ---------------------------------------------------------------------------
+# Override hyperparameters from model_hyperparams.yaml (written by Agent 1)
+# All other training constants above are kept as Karpathy's calibrated defaults.
+# ---------------------------------------------------------------------------
+try:
+    import yaml as _yaml, math as _math
+    _hp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_hyperparams.yaml")
+    if os.path.exists(_hp_path):
+        with open(_hp_path) as _f:
+            _hp = _yaml.safe_load(_f) or {}
+        if "n_layer" in _hp:
+            DEPTH = int(_hp["n_layer"])
+        if "n_embd" in _hp and DEPTH > 0:
+            # Snap model_dim to a multiple of both HEAD_DIM and DEPTH so head count stays integer
+            _lcm = DEPTH * HEAD_DIM // _math.gcd(DEPTH, HEAD_DIM)
+            _target = max(_lcm, int(_hp["n_embd"]))
+            _snapped = max(_lcm, round(_target / _lcm) * _lcm)
+            ASPECT_RATIO = _snapped // DEPTH
+        if "weight_decay" in _hp:
+            WEIGHT_DECAY = float(_hp["weight_decay"])
+        if "warmup_ratio" in _hp:
+            WARMUP_RATIO = float(_hp["warmup_ratio"])
+        print(f"[hyperparams] DEPTH={DEPTH} ASPECT_RATIO={ASPECT_RATIO} "
+              f"model_dim={DEPTH*ASPECT_RATIO} WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO}")
+except Exception as _e:
+    print(f"[hyperparams] Could not load model_hyperparams.yaml: {_e} — using defaults")
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader
@@ -505,7 +575,12 @@ optimizer = model.setup_optimizer(
     weight_decay=WEIGHT_DECAY,
 )
 
-model = torch.compile(model, dynamic=False)
+# Only compile model if using FA3 (compiled SDPA is memory-inefficient)
+if _USE_FA3:
+    model = torch.compile(model, dynamic=False)
+    print("[train.py] torch.compile enabled (FA3 available)")
+else:
+    print("[train.py] torch.compile skipped (using SDPA fallback for memory efficiency)")
 
 train_loader = make_dataloader(tokenizer, DEVICE_BATCH_SIZE, MAX_SEQ_LEN, "train")
 x, y, epoch = next(train_loader)  # prefetch first batch
