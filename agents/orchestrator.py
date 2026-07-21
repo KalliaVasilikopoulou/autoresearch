@@ -55,10 +55,17 @@ class Orchestrator:
             print("\n[Orchestrator] Phase 1: Agent 1 proposes a new configuration")
             latest_summary = self._load_latest_summary()
             recent_evidence = self.state_mgr.get_recent_evidence(limit=5)
+            recent_results = self.state_mgr.get_all_results()[-3:]
+            latest_val_bpb = None
+            if recent_results:
+                latest_result = recent_results[-1]
+                latest_val_bpb = latest_result.get("val_bpb")
             new_hyperparams = self.agent1.decide_next_hyperparams(
                 latest_summary=latest_summary,
                 evidence=recent_evidence,
                 iteration=iteration,
+                latest_val_bpb=latest_val_bpb,
+                recent_results=recent_results,
             )
 
             if new_hyperparams is None:

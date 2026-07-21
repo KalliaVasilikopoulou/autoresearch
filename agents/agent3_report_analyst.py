@@ -3,8 +3,12 @@
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-import yaml
 from collections import Counter
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    yaml = None
 
 from agents.protocols import SummaryEvidence
 
@@ -29,6 +33,8 @@ class Agent3ReportAnalyst:
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
         if not os.path.exists(config_path):
+            return {}
+        if yaml is None:
             return {}
         with open(config_path, "r") as f:
             return yaml.safe_load(f) or {}

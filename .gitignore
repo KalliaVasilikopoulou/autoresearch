@@ -12,6 +12,9 @@ worktrees/
 results/
 queue/
 
+# Secret connection config — never commit
+.env
+
 # Agent prompt files (generated per-session by launchers)
 CLAUDE.md
 AGENTS.md
@@ -22,6 +25,15 @@ dev/
 # Results file
 results.tsv
 
-# Tests/reports
-tests/
+# Runtime-generated agent state (JSON state files and saved model checkpoints)
+state/metadata.json
+state/report_tracking.json
+state/models/
+
+# Generated agent reports (produced during runs)
 reports/
+
+# Pytest artifacts
+.pytest_cache/
+
+# Test source code is tracked; only generated artefacts above are ignored
