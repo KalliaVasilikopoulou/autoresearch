@@ -655,7 +655,7 @@ while True:
     if step > 10:
         total_training_time += dt
 
-    # Logging
+    # Logging with visual progress bar
     ema_beta = 0.9
     smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
@@ -664,9 +664,11 @@ while True:
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
     remaining = max(0, TIME_BUDGET - total_training_time)
 
-    # Print progress every 5 steps to avoid overwhelming remote output streaming
+    # Visual progress bar (ASCII blocks, updates in-place with \r)
     if step % 5 == 0:
-        print(f"step {step:05d} ({pct_done:5.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}% | epoch: {epoch} | remaining: {remaining:6.0f}s")
+        bar_filled = int(pct_done / 5)
+        bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
+        print(f"\r{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", end="", flush=True)
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
