@@ -125,7 +125,13 @@ def run_training_remote(
         for line in iter(stdout.readline, ""):
             line = line.rstrip("\n")
             output_lines.append(line)
-            print(f"  [remote] {line}")
+            # Only prefix lines with meaningful content (progress, errors, etc)
+            if line.strip():
+                if "step" in line.lower() or "loss" in line.lower() or "error" in line.lower():
+                    print(f"  [remote] {line}")
+                elif not line.startswith((" ", "\t")):
+                    # Print non-indented lines (likely important output)
+                    print(f"  [remote] {line}")
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()
         exit_code = stdout.channel.recv_exit_status()

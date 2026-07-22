@@ -664,7 +664,9 @@ while True:
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
     remaining = max(0, TIME_BUDGET - total_training_time)
 
-    print(f"\rstep {step:05d} ({pct_done:5.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}% | epoch: {epoch} | remaining: {remaining:6.0f}s    ", end="", flush=True)
+    # Print progress every 5 steps to avoid overwhelming remote output streaming
+    if step % 5 == 0:
+        print(f"step {step:05d} ({pct_done:5.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}% | epoch: {epoch} | remaining: {remaining:6.0f}s")
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
