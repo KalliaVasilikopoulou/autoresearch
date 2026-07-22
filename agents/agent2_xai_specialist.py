@@ -60,10 +60,15 @@ class Agent2XAISpecialist:
 
     def analyze_result(self, result_payload: Dict[str, Any]) -> Optional[AnalysisEvidence]:
         """Analyze a completed training result and emit structured evidence."""
-        print(f"\n[Agent 2] Analyzing result {result_payload.get('run_id')}...")
+        run_id = result_payload.get('run_id', 'unknown')
+        val_bpb = result_payload.get("val_bpb", float("inf"))
+        status = result_payload.get("status", "unknown")
+        print(f"[Agent 2] Starting XAI analysis of {run_id}")
+        print(f"[Agent 2]   val_bpb={val_bpb:.6f}, status={status}")
 
         hyperparams = result_payload.get("hyperparams", {})
-        val_bpb = result_payload.get("val_bpb", float("inf"))
+        print(f"[Agent 2]   Hyperparams: n_layer={hyperparams.get('n_layer')}, n_embd={hyperparams.get('n_embd')}, lr={hyperparams.get('learning_rate', 0):.2e}")
+        
         report_id = f"report_{self.report_counter:04d}"
         stuck_signal = val_bpb > 1.0
 
@@ -94,7 +99,7 @@ class Agent2XAISpecialist:
         report_path.write_text(self._render_markdown_report(evidence, hyperparams, val_bpb))
 
         self.report_counter += 1
-        print(f"[Agent 2] Report saved: {report_path}")
+        print(f"[Agent 2] Analysis complete: {report_path} (stuck={stuck_signal})")
         return evidence
 
     def _render_markdown_report(

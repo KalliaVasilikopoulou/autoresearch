@@ -73,7 +73,8 @@ class Agent3ReportAnalyst:
         Returns:
             summary_id
         """
-        print(f"\n[Agent 3] Summarizing reports: {new_report_ids}...")
+        print(f"[Agent 3] Starting summary generation...")
+        print(f"[Agent 3]   Reports to include: {new_report_ids}")
 
         # Load new reports
         new_reports = []
@@ -82,6 +83,7 @@ class Agent3ReportAnalyst:
             if report_path.exists():
                 with open(report_path, "r") as f:
                     new_reports.append((report_id, f.read()))
+                print(f"[Agent 3]   Loaded: {report_id}")
 
         # Load previous summary if exists
         prev_summary = ""
@@ -94,8 +96,10 @@ class Agent3ReportAnalyst:
                 with open(prev_summary_path, "r") as f:
                     prev_summary = f.read()
                     prev_summary_id = f"summary_{self.summary_counter - 1:04d}"
+                print(f"[Agent 3]   Previous summary: {prev_summary_id}")
 
         summary_id = f"summary_{self.summary_counter:04d}"
+        print(f"[Agent 3]   Generating {summary_id}...")
         summary_content = self._generate_summary(new_reports, prev_summary)
         summary = SummaryEvidence(
             summary_id=summary_id,
@@ -111,7 +115,8 @@ class Agent3ReportAnalyst:
             f.write(summary_content)
 
         self.summary_counter += 1
-        print(f"[Agent 3] Summary saved: {summary_path}")
+        print(f"[Agent 3] Summary complete: {summary_path}")
+        print(f"[Agent 3]   Patterns found: {len(summary.stable_patterns)}, Conflicts: {len(summary.conflicting_signals)}")
 
         return summary
 

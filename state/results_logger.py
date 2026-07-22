@@ -65,7 +65,10 @@ def log_result(
         writer.writerow(row)
 
     val_bpb = metrics.get("val_bpb", float("inf"))
-    print(f"[ResultsLogger] Logged {run_id}: val_bpb={val_bpb}")
+    status = metrics.get("status", "unknown")
+    training_time = metrics.get("training_time", 0)
+    print(f"[ResultsLogger] Logged {run_id}: val_bpb={val_bpb:.6f}, status={status}, time={training_time:.1f}s")
+    print(f"[ResultsLogger]   Hyperparams: n_layer={hyperparams.get('n_layer')}, n_embd={hyperparams.get('n_embd')}, lr={hyperparams.get('learning_rate', 0):.2e}")
     if KARPATHY_BASELINE_VAL_BPB is not None:
         delta = val_bpb - KARPATHY_BASELINE_VAL_BPB
         sign = "+" if delta >= 0 else ""

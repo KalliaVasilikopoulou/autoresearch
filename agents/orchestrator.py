@@ -74,11 +74,13 @@ class Orchestrator:
                 break
 
             print("\n[Orchestrator] Phase 2: Training")
+            print(f"[Orchestrator] Training with hyperparams: {new_hyperparams}")
             train_result = self.agent1.train_model(
                 new_hyperparams,
                 dry_run=self.dry_run,
                 iteration=iteration,
             )
+            print(f"[Orchestrator] Training result: val_bpb={train_result.get('val_bpb', 'N/A')}, status={train_result.get('status', 'unknown')}")
             result_payload = TrainingResult(
                 run_id=f"run_{iteration:04d}",
                 hyperparams=new_hyperparams,
@@ -91,22 +93,30 @@ class Orchestrator:
             self.state_mgr.add_result(result_payload.to_dict())
             self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
             log_result(result_payload.run_id, new_hyperparams, train_result)
+            print(f"[Orchestrator] Result logged: {result_payload.run_id}")
 
-            print("\n[Orchestrator] Phase 3: Agent 2 analyzes the result")
+            print("\n[Orchestrator] Phase 3: Analyzing result with Agent 2")
             evidence = self.agent2.analyze_result(result_payload.to_dict())
             if evidence is not None:
                 evidence_payload = evidence.to_dict()
                 self.state_mgr.add_evidence(evidence_payload)
                 report_batch.append(evidence_payload["report_id"])
                 self.state_mgr.link_model_to_report(result_payload.run_id, evidence_payload["report_id"])
+                print(f"[Orchestrator] Agent 2 analysis complete: {evidence_payload['report_id']}")
+            else:
+                print(f"[Orchestrator] Agent 2: no analysis available")
 
-            print("\n[Orchestrator] Phase 4: Agent 3 aggregates batch evidence")
+            print("\n[Orchestrator] Phase 4: Aggregating evidence with Agent 3")
+            print(f"[Orchestrator] Batch size: {len(report_batch)} reports")
             if self.agent3.should_create_summary(len(report_batch)):
+                print(f"[Orchestrator] Creating summary from {len(report_batch)} reports...")
                 summary = self.agent3.analyze_and_summarize(report_batch)
                 self.state_mgr.add_summary(summary.to_dict())
                 self.state_mgr.set_latest_summary(summary.summary_id, iteration)
                 report_batch = []
                 print(f"[Orchestrator] Summary created: {summary.summary_id}")
+            else:
+                print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.summary_batch_size}, have {len(report_batch)})")
 
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
