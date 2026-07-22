@@ -686,7 +686,7 @@ while True:
     if step % 5 == 0:
         bar_filled = int(pct_done / 5)
         bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
-        print(f"{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", flush=True)
+        print(f"\r{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", end="", flush=True)
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
