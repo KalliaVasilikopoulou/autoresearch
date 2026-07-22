@@ -6,12 +6,14 @@ Usage: uv run train.py
 
 import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTHONUNBUFFERED"] = "1"
 # Enable progress bars for visibility
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import gc
 import math
+import sys
 import time
 from dataclasses import dataclass, asdict
 
@@ -27,8 +29,10 @@ try:
     fa3 = get_kernel(repo, version=1).flash_attn_interface
     _USE_FA3 = True
     print(f"[train.py] Flash Attention 3 loaded ({repo})")
+    sys.stdout.flush()
 except Exception as _fa3_err:
     print(f"[train.py] FA3 unavailable ({type(_fa3_err).__name__}), using PyTorch SDPA fallback")
+    sys.stdout.flush()
     fa3 = None
     _USE_FA3 = False
 
@@ -550,6 +554,7 @@ def build_model_config(depth):
 
 config = build_model_config(DEPTH)
 print(f"Model config: {asdict(config)}")
+sys.stdout.flush()
 
 with torch.device("meta"):
     model = GPT(config)
@@ -563,6 +568,7 @@ for key, value in param_counts.items():
 num_params = param_counts['total']
 num_flops_per_token = model.estimate_flops()
 print(f"Estimated FLOPs per token: {num_flops_per_token:e}")
+sys.stdout.flush()
 
 tokens_per_fwdbwd = DEVICE_BATCH_SIZE * MAX_SEQ_LEN
 assert TOTAL_BATCH_SIZE % tokens_per_fwdbwd == 0
@@ -583,12 +589,20 @@ if _USE_FA3:
     print("[train.py] torch.compile enabled (FA3 available)")
 else:
     print("[train.py] torch.compile skipped (using SDPA fallback for memory efficiency)")
+sys.stdout.flush()
 
+print("[train.py] Initializing dataloader...")
+sys.stdout.flush()
 train_loader = make_dataloader(tokenizer, DEVICE_BATCH_SIZE, MAX_SEQ_LEN, "train")
+print("[train.py] Dataloader created, prefetching first batch...")
+sys.stdout.flush()
 x, y, epoch = next(train_loader)  # prefetch first batch
+print("[train.py] First batch prefetched successfully")
+sys.stdout.flush()
 
 print(f"Time budget: {TIME_BUDGET}s")
 print(f"Gradient accumulation steps: {grad_accum_steps}")
+sys.stdout.flush()
 
 # Schedules (all based on progress = training_time / TIME_BUDGET)
 
@@ -611,6 +625,9 @@ def get_weight_decay(progress):
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+
+print("[train.py] Starting training loop...")
+sys.stdout.flush()
 
 t_start_training = time.time()
 smooth_train_loss = 0

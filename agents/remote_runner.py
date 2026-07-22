@@ -125,12 +125,12 @@ def run_training_remote(
         for line in iter(stdout.readline, ""):
             line = line.rstrip("\n")
             output_lines.append(line)
-            # Progress bar lines: print raw (preserve \r for in-place updates)
+            # Progress bar lines: print raw with \r (updates in-place)
             if '[' in line and ']' in line and '%' in line:
                 print(line, end='', flush=True)
-            # Other meaningful lines: prefix with [remote]
-            elif line.strip() and any(k in line.lower() for k in ['error', 'fail', 'exception', 'traceback']):
-                print(f"  [remote] {line}")
+            # Print all other non-empty lines with [remote] prefix
+            elif line.strip():
+                print(f"  [remote] {line}", flush=True)
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()
         exit_code = stdout.channel.recv_exit_status()
