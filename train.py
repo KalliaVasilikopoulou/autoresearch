@@ -717,29 +717,64 @@ while True:
         total_training_time += dt
 
     # Logging with visual progress bar
+    if step == 0:
+        print(f"[train.py] Step {step}: Computing progress metrics")
+        sys.stdout.flush()
+    
     ema_beta = 0.9
     smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: Computed smooth loss={debiased_smooth_loss:.6f}")
+        sys.stdout.flush()
+    
     pct_done = 100 * progress
     tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: Computed tok_per_sec={tok_per_sec}")
+        sys.stdout.flush()
+    
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: Computed mfu={mfu:.1f}%")
+        sys.stdout.flush()
+    
     remaining = max(0, TIME_BUDGET - total_training_time)
 
     # Visual progress bar (ASCII blocks, updates in-place with \r)
     if step % 5 == 0:
+        if step == 0:
+            print(f"[train.py] Step {step}: Building progress bar")
+            sys.stdout.flush()
+        
         bar_filled = int(pct_done / 5)
         bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
         print(f"\r{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", end="", flush=True)
+        
+        if step == 0:
+            print("\n[train.py] Step 0: Progress bar printed", flush=True)
+            sys.stdout.flush()
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
+        print(f"[train.py] Step {step}: Starting GC management")
+        sys.stdout.flush()
         gc.collect()
         gc.freeze()
         gc.disable()
+        print(f"[train.py] Step {step}: GC disabled")
+        sys.stdout.flush()
     elif (step + 1) % 5000 == 0:
         gc.collect()
 
     step += 1
+    
+    if step == 1:
+        print(f"[train.py] Step incremented to {step}, checking loop condition")
+        sys.stdout.flush()
 
     # Time's up — but only stop after warmup steps so we don't count compilation
     if step > 10 and total_training_time >= TIME_BUDGET:
