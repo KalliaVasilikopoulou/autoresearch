@@ -116,7 +116,7 @@ class Orchestrator:
                 report_batch = []
                 print(f"[Orchestrator] Summary created: {summary.summary_id}")
             else:
-                print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.summary_batch_size}, have {len(report_batch)})")
+                print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.batch_size}, have {len(report_batch)})")
 
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
