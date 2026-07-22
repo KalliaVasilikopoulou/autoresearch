@@ -635,17 +635,46 @@ total_training_time = 0
 step = 0
 
 while True:
+    if step == 0:
+        print(f"[train.py] Step {step}: Starting first iteration")
+        sys.stdout.flush()
+    
     torch.cuda.synchronize()
+    if step == 0:
+        print(f"[train.py] Step {step}: CUDA sync done")
+        sys.stdout.flush()
+    
     t0 = time.time()
     for micro_step in range(grad_accum_steps):
+        if step == 0 and micro_step == 0:
+            print(f"[train.py] Step {step}: Starting forward pass")
+            sys.stdout.flush()
+        
         with autocast_ctx:
             loss = model(x, y)
+        
+        if step == 0 and micro_step == 0:
+            print(f"[train.py] Step {step}: Forward pass done, loss={loss.item():.6f}")
+            sys.stdout.flush()
+        
         train_loss = loss.detach()
         loss = loss / grad_accum_steps
         loss.backward()
+        
+        if step == 0 and micro_step == 0:
+            print(f"[train.py] Step {step}: Backward pass done")
+            sys.stdout.flush()
         x, y, epoch = next(train_loader)
+        
+        if step == 0 and micro_step == 0:
+            print(f"[train.py] Step {step}: Next batch prefetched")
+            sys.stdout.flush()
 
     # Progress and schedules
+    if step == 0:
+        print(f"[train.py] Step {step}: All micro steps done, updating optimizer")
+        sys.stdout.flush()
+    
     progress = min(total_training_time / TIME_BUDGET, 1.0)
     lrm = get_lr_multiplier(progress)
     muon_momentum = get_muon_momentum(step)
@@ -655,7 +684,17 @@ while True:
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: Calling optimizer.step()")
+        sys.stdout.flush()
+    
     optimizer.step()
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: optimizer.step() done")
+        sys.stdout.flush()
+    
     model.zero_grad(set_to_none=True)
 
     train_loss_f = train_loss.item()
@@ -666,6 +705,11 @@ while True:
         exit(1)
 
     torch.cuda.synchronize()
+    
+    if step == 0:
+        print(f"[train.py] Step {step}: Post-step CUDA sync done")
+        sys.stdout.flush()
+    
     t1 = time.time()
     dt = t1 - t0
 
