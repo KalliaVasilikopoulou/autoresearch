@@ -626,7 +626,7 @@ def get_weight_decay(progress):
 # Training loop
 # ---------------------------------------------------------------------------
 
-print("[train.py] Starting training loop...")
+print(f"[train.py] Starting training loop...")
 sys.stdout.flush()
 
 t_start_training = time.time()
@@ -635,46 +635,18 @@ total_training_time = 0
 step = 0
 
 while True:
-    if step == 0:
-        print(f"[train.py] Step {step}: Starting first iteration")
-        sys.stdout.flush()
-    
     torch.cuda.synchronize()
-    if step == 0:
-        print(f"[train.py] Step {step}: CUDA sync done")
-        sys.stdout.flush()
     
     t0 = time.time()
     for micro_step in range(grad_accum_steps):
-        if step == 0 and micro_step == 0:
-            print(f"[train.py] Step {step}: Starting forward pass")
-            sys.stdout.flush()
-        
         with autocast_ctx:
             loss = model(x, y)
-        
-        if step == 0 and micro_step == 0:
-            print(f"[train.py] Step {step}: Forward pass done, loss={loss.item():.6f}")
-            sys.stdout.flush()
-        
         train_loss = loss.detach()
         loss = loss / grad_accum_steps
         loss.backward()
-        
-        if step == 0 and micro_step == 0:
-            print(f"[train.py] Step {step}: Backward pass done")
-            sys.stdout.flush()
         x, y, epoch = next(train_loader)
-        
-        if step == 0 and micro_step == 0:
-            print(f"[train.py] Step {step}: Next batch prefetched")
-            sys.stdout.flush()
 
     # Progress and schedules
-    if step == 0:
-        print(f"[train.py] Step {step}: All micro steps done, updating optimizer")
-        sys.stdout.flush()
-    
     progress = min(total_training_time / TIME_BUDGET, 1.0)
     lrm = get_lr_multiplier(progress)
     muon_momentum = get_muon_momentum(step)
@@ -684,17 +656,7 @@ while True:
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: Calling optimizer.step()")
-        sys.stdout.flush()
-    
     optimizer.step()
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: optimizer.step() done")
-        sys.stdout.flush()
-    
     model.zero_grad(set_to_none=True)
 
     train_loss_f = train_loss.item()
@@ -705,11 +667,6 @@ while True:
         exit(1)
 
     torch.cuda.synchronize()
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: Post-step CUDA sync done")
-        sys.stdout.flush()
-    
     t1 = time.time()
     dt = t1 - t0
 
@@ -717,64 +674,30 @@ while True:
         total_training_time += dt
 
     # Logging with visual progress bar
-    if step == 0:
-        print(f"[train.py] Step {step}: Computing progress metrics")
-        sys.stdout.flush()
-    
     ema_beta = 0.9
     smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: Computed smooth loss={debiased_smooth_loss:.6f}")
-        sys.stdout.flush()
-    
     pct_done = 100 * progress
     tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: Computed tok_per_sec={tok_per_sec}")
-        sys.stdout.flush()
-    
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
-    
-    if step == 0:
-        print(f"[train.py] Step {step}: Computed mfu={mfu:.1f}%")
-        sys.stdout.flush()
-    
     remaining = max(0, TIME_BUDGET - total_training_time)
 
     # Visual progress bar (ASCII blocks, updates in-place with \r)
     if step % 5 == 0:
-        if step == 0:
-            print(f"[train.py] Step {step}: Building progress bar")
-            sys.stdout.flush()
-        
         bar_filled = int(pct_done / 5)
         bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
-        print(f"\r{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", end="", flush=True)
-        
-        if step == 0:
-            print("\n[train.py] Step 0: Progress bar printed", flush=True)
+        print(f"{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", flush=True)
             sys.stdout.flush()
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
-        print(f"[train.py] Step {step}: Starting GC management")
-        sys.stdout.flush()
         gc.collect()
         gc.freeze()
         gc.disable()
-        print(f"[train.py] Step {step}: GC disabled")
-        sys.stdout.flush()
     elif (step + 1) % 5000 == 0:
         gc.collect()
 
     step += 1
-    
-    if step == 1:
-        print(f"[train.py] Step incremented to {step}, checking loop condition")
-        sys.stdout.flush()
 
     # Time's up — but only stop after warmup steps so we don't count compilation
     if step > 10 and total_training_time >= TIME_BUDGET:
