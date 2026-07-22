@@ -94,8 +94,15 @@ def run_training_remote(
 
         # --- 1. Pull latest code on remote so train.py is always up to date ---
         print("[RemoteRunner] Pulling latest code on remote ...")
+        # Stash local changes (from previous SFTP uploads) before pulling
+        stash_cmd = f'bash -lc "cd {remote_repo} && git stash 2>&1"'
+        _, stash_o, _ = client.exec_command(stash_cmd)
+        stash_out = stash_o.read().decode("utf-8", errors="replace").strip()
+        if stash_out and "No local changes" not in stash_out:
+            print(f"[RemoteRunner] git stash: {stash_out[:100]}")
+        
         _, o, e = client.exec_command(
-            f'bash -lc "{activate} {env} && cd {remote_repo} && git pull --ff-only 2>&1"'
+            f'bash -lc "cd {remote_repo} && git pull --ff-only 2>&1"'
         )
         pull_out = o.read().decode("utf-8", errors="replace").strip()
         print(f"[RemoteRunner] git pull: {pull_out[:120]}")
@@ -106,11 +113,12 @@ def run_training_remote(
         sftp.put(hyperparams_local_path, remote_hyperparams)
         sftp.close()
 
-        # --- 3. Run training ---
+        # --- 3. Run training on GPU 4 (free A100) ---
+        # Use CUDA_VISIBLE_DEVICES to avoid GPU 0 (which has running processes)
         remote_cmd = (
-            f'bash -lc "{activate} {env} && cd {remote_repo} && python -u train.py"'
+            f'bash -lc "{activate} {env} && cd {remote_repo} && CUDA_VISIBLE_DEVICES=4 python -u train.py"'
         )
-        print(f"[RemoteRunner] Executing: {remote_cmd}")
+        print(f"[RemoteRunner] Executing on GPU 4: {remote_cmd}")
         _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
 
         output_lines = []
