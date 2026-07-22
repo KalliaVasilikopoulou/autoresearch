@@ -122,15 +122,23 @@ def run_training_remote(
         _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
 
         output_lines = []
+        last_progress_bar = None
         for line in iter(stdout.readline, ""):
             line = line.rstrip("\n")
             output_lines.append(line)
-            # Progress bar lines: print raw without [remote] prefix to preserve \r formatting
+            # Progress bar lines: update in-place locally with \r
             if line.startswith('[') and ']' in line and '%' in line:
-                print(line, end="", flush=True)
-            # Print all other non-empty lines with [remote] prefix
+                last_progress_bar = line
+                print(f"\r  [remote] {line}", end="", flush=True)
+            # Other non-empty lines: print normally with newline
             elif line.strip():
+                if last_progress_bar:
+                    print()  # newline to finish the progress bar line
+                    last_progress_bar = None
                 print(f"  [remote] {line}", flush=True)
+        
+        if last_progress_bar:
+            print()  # final newline after last progress bar
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()
         exit_code = stdout.channel.recv_exit_status()

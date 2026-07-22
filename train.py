@@ -682,11 +682,11 @@ while True:
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
     remaining = max(0, TIME_BUDGET - total_training_time)
 
-    # Visual progress bar (ASCII blocks, updates in-place with \r)
+    # Visual progress bar (ASCII blocks)
     if step % 5 == 0:
         bar_filled = int(pct_done / 5)
         bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
-        print(f"\r{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%", end="", flush=True)
+        print(f"{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}%")
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:

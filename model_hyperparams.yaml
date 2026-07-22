@@ -1,5 +1,5 @@
 batch_size: 128
-learning_rate: 60532686486.27141
+learning_rate: 108958835675.28853
 n_embd: 1024
 n_head: 8
 n_layer: 24
