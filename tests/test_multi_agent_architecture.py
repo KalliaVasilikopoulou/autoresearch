@@ -1,6 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
+import math
 
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.orchestrator import Orchestrator
@@ -111,3 +112,108 @@ agent1:
     assert new_hyperparams is not None
     assert new_hyperparams["n_layer"] != 12
     assert new_hyperparams["n_embd"] != 512
+
+
+def test_importance_weight_changes_are_scaled_by_score(tmp_path):
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text("agent1:\n  use_llm: false")
+
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist.current_hyperparams = {
+        "n_layer": 12,
+        "n_head": 8,
+        "n_embd": 512,
+        "learning_rate": 1e-3,
+        "batch_size": 128,
+        "warmup_ratio": 0.1,
+        "weight_decay": 0.1,
+    }
+
+    weak = specialist._evidence_adjustment(
+        latest_summary=None,
+        evidence=[{"hyperparameter_importance": {"n_layer": 0.55}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+    specialist.current_hyperparams["n_layer"] = 12
+    strong = specialist._evidence_adjustment(
+        latest_summary=None,
+        evidence=[{"hyperparameter_importance": {"n_layer": 0.95}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+
+    weak_delta = abs(weak["n_layer"] - 12)
+    strong_delta = abs(strong["n_layer"] - 12)
+    assert strong_delta > weak_delta
+
+
+def test_summary_adjustment_is_stronger_than_report_only(tmp_path):
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text("agent1:\n  use_llm: false\n  summary_strength: 2.0")
+
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist.current_hyperparams = {
+        "n_layer": 12,
+        "n_head": 8,
+        "n_embd": 512,
+        "learning_rate": 1e-3,
+        "batch_size": 128,
+        "warmup_ratio": 0.1,
+        "weight_decay": 0.1,
+    }
+
+    report_only = specialist._evidence_adjustment(
+        latest_summary=None,
+        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+
+    specialist.current_hyperparams["learning_rate"] = 1e-3
+    summary_text = "learning_rate importance is stable and important"
+    summary_plus_report = specialist._evidence_adjustment(
+        latest_summary=summary_text,
+        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+
+    report_change = abs(math.log(report_only["learning_rate"] / 1e-3))
+    summary_change = abs(math.log(summary_plus_report["learning_rate"] / 1e-3))
+    assert summary_change > report_change
+
+
+def test_learning_rate_is_always_clamped_to_safe_range(tmp_path):
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text(
+        "agent1:\n  use_llm: false\n  learning_rate_min: 1.0e-5\n  learning_rate_max: 5.0e-3"
+    )
+
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist.current_hyperparams = {
+        "n_layer": 12,
+        "n_head": 8,
+        "n_embd": 512,
+        "learning_rate": 1.0,
+        "batch_size": 128,
+        "warmup_ratio": 0.1,
+        "weight_decay": 0.1,
+    }
+
+    high_case = specialist._evidence_adjustment(
+        latest_summary="learning_rate important",
+        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+    assert 1e-5 <= high_case["learning_rate"] <= 5e-3
+
+    specialist.current_hyperparams["learning_rate"] = 1.0e-9
+    low_case = specialist._evidence_adjustment(
+        latest_summary=None,
+        evidence=[{"hyperparameter_importance": {"learning_rate": 0.0}}],
+        stuck_signal=False,
+        iteration=0,
+    )
+    assert 1e-5 <= low_case["learning_rate"] <= 5e-3

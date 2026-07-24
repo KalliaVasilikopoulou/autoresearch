@@ -4,6 +4,7 @@ import math
 import os
 import random
 import subprocess
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional
 import json
@@ -26,6 +27,9 @@ class Agent1TrainingSpecialist:
         self.training_budget = self.agent1_config.get("training_budget_seconds", 300)
         self.min_improvement = self.agent1_config.get("min_improvement", 0.005)
         self.max_stalled_iterations = self.agent1_config.get("max_stalled_iterations", 3)
+        self.summary_strength = float(self.agent1_config.get("summary_strength", 2.0))
+        self.lr_min = float(self.agent1_config.get("learning_rate_min", 1e-5))
+        self.lr_max = float(self.agent1_config.get("learning_rate_max", 5e-3))
 
         self.model_config_path = Path("model_hyperparams.yaml")
         self.current_hyperparams = self._init_hyperparams()
@@ -229,35 +233,118 @@ class Agent1TrainingSpecialist:
             print("[Agent 1] Model stuck - trying radical changes")
             new_params["n_layer"] = random.randint(8, 20)
             new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+            new_params["learning_rate"] = self._clamp_learning_rate(
+                float(new_params.get("learning_rate", 1e-3))
+            )
             return new_params
 
         if not evidence:
             return new_params
 
         importance_by_param: Dict[str, float] = {}
+        evidence_count_by_param: Dict[str, int] = {}
         for item in evidence:
             if not isinstance(item, dict):
                 continue
             for param, score in item.get("hyperparameter_importance", {}).items():
                 importance_by_param[param] = importance_by_param.get(param, 0.0) + float(score)
+                evidence_count_by_param[param] = evidence_count_by_param.get(param, 0) + 1
             if item.get("stuck_signal"):
                 print("[Agent 1] Evidence indicates a stuck pattern")
 
-        if latest_summary:
-            summary_lower = latest_summary.lower()
-            if "learning rate" in summary_lower and "important" in summary_lower:
-                new_params["learning_rate"] *= 1.5
-            if ("depth" in summary_lower or "layer" in summary_lower) and (
-                "important" in summary_lower or "matter" in summary_lower
-            ):
-                new_params["n_layer"] = max(4, min(new_params["n_layer"] + 1, 24))
+        avg_importance: Dict[str, float] = {}
+        for param, total_score in importance_by_param.items():
+            count = max(1, evidence_count_by_param.get(param, 1))
+            avg_importance[param] = max(0.0, min(1.0, total_score / count))
 
-        if "learning_rate" in importance_by_param:
-            new_params["learning_rate"] *= 1.2
-        if "n_layer" in importance_by_param:
-            new_params["n_layer"] = max(4, min(new_params["n_layer"] + 1, 24))
-        if "n_embd" in importance_by_param:
-            new_params["n_embd"] = min(int(new_params["n_embd"] * 1.1), 1024)
+        # Report-level weighted nudges (single-run evidence): smaller base step.
+        for param, score in avg_importance.items():
+            magnitude = self._importance_magnitude(score)
+            direction = 1 if score >= 0.5 else -1
+
+            if param == "learning_rate":
+                lr = float(new_params.get("learning_rate", 1e-3))
+                lr *= math.exp(direction * 0.20 * magnitude)
+                new_params["learning_rate"] = self._clamp_learning_rate(lr)
+
+            elif param == "n_layer":
+                current = int(new_params.get("n_layer", 12))
+                delta = int(round(direction * (1.0 + magnitude)))
+                new_params["n_layer"] = max(4, min(current + delta, 24))
+
+            elif param == "n_embd":
+                current = int(new_params.get("n_embd", 512))
+                factor = 1.0 + direction * (0.08 * magnitude)
+                new_params["n_embd"] = min(int(current * factor), 1024)
+
+            elif param == "n_head":
+                current = int(new_params.get("n_head", 8))
+                delta = int(round(direction * magnitude))
+                new_params["n_head"] = max(1, min(current + delta, 16))
+
+        # Summary-level updates: stronger than report-level (2x by default).
+        if latest_summary:
+            recs = self._extract_summary_recommendations(latest_summary)
+            summary_hints = self._summary_importance_hints(latest_summary)
+            summary_multiplier = max(1.0, self.summary_strength)
+
+            for param in ["learning_rate", "n_layer", "n_embd", "n_head"]:
+                if not summary_hints.get(param) and param not in recs:
+                    continue
+
+                score = avg_importance.get(param, 0.75)
+                magnitude = self._importance_magnitude(score)
+                direction = 1 if score >= 0.5 else -1
+
+                if param == "learning_rate":
+                    current_lr = float(new_params.get("learning_rate", 1e-3))
+                    if param in recs:
+                        target_lr = self._clamp_learning_rate(float(recs[param]))
+                        pull = min(0.8, 0.25 * summary_multiplier)
+                        current_lr = current_lr * (1.0 - pull) + target_lr * pull
+                    else:
+                        current_lr *= math.exp(direction * 0.20 * summary_multiplier * magnitude)
+                    new_params["learning_rate"] = self._clamp_learning_rate(current_lr)
+
+                elif param == "n_layer":
+                    current = int(new_params.get("n_layer", 12))
+                    if param in recs:
+                        target = int(round(float(recs[param])))
+                        step = int(round((target - current) * min(1.0, 0.35 * summary_multiplier)))
+                        if step == 0 and target != current:
+                            step = 1 if target > current else -1
+                        current += step
+                    else:
+                        current += int(round(direction * summary_multiplier * (1.0 + magnitude)))
+                    new_params["n_layer"] = max(4, min(current, 24))
+
+                elif param == "n_embd":
+                    current = int(new_params.get("n_embd", 512))
+                    if param in recs:
+                        target = max(128, int(round(float(recs[param]))))
+                        pull = min(0.8, 0.25 * summary_multiplier)
+                        current = int(current * (1.0 - pull) + target * pull)
+                    else:
+                        factor = 1.0 + direction * (0.08 * summary_multiplier * magnitude)
+                        current = int(current * factor)
+                    new_params["n_embd"] = min(max(128, current), 1024)
+
+                elif param == "n_head":
+                    current = int(new_params.get("n_head", 8))
+                    if param in recs:
+                        target = int(round(float(recs[param])))
+                        step = int(round((target - current) * min(1.0, 0.35 * summary_multiplier)))
+                        if step == 0 and target != current:
+                            step = 1 if target > current else -1
+                        current += step
+                    else:
+                        current += int(round(direction * summary_multiplier * magnitude))
+                    new_params["n_head"] = max(1, min(current, 16))
+
+        # Hard safety bound for LR after all evidence/summary adjustments.
+        new_params["learning_rate"] = self._clamp_learning_rate(
+            float(new_params.get("learning_rate", 1e-3))
+        )
 
         return new_params
 
@@ -279,32 +366,53 @@ class Agent1TrainingSpecialist:
             # Large change to depth
             new_params["n_layer"] = random.randint(8, 20)
             new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+            new_params["learning_rate"] = self._clamp_learning_rate(
+                float(new_params.get("learning_rate", 1e-3))
+            )
             return new_params
 
         # Extract insights from summary
         if summary:
-            summary_lower = summary.lower()
+            recs = self._extract_summary_recommendations(summary)
+            hints = self._summary_importance_hints(summary)
+            strength = max(1.0, self.summary_strength)
 
-            # Rule 1: If learning rate is mentioned as important
-            if "learning rate" in summary_lower and "important" in summary_lower:
-                lr_factor = random.choice([1.5, 2.0, 0.7, 0.5])  # Try 2x or 0.5x
-                new_params["learning_rate"] *= lr_factor
+            if "learning_rate" in recs:
+                lr = float(new_params.get("learning_rate", 1e-3))
+                target_lr = self._clamp_learning_rate(float(recs["learning_rate"]))
+                pull = min(0.8, 0.25 * strength)
+                lr = lr * (1.0 - pull) + target_lr * pull
+                new_params["learning_rate"] = self._clamp_learning_rate(lr)
+                print(f"[Agent 1] Summary-guided LR: {new_params['learning_rate']:.2e}")
+            elif hints.get("learning_rate"):
+                lr = float(new_params.get("learning_rate", 1e-3))
+                lr *= math.exp(0.25 * strength)
+                new_params["learning_rate"] = self._clamp_learning_rate(lr)
                 print(f"[Agent 1] Adjusted LR: {new_params['learning_rate']:.2e}")
 
-            # Rule 2: If depth/layers mentioned as important
-            if ("depth" in summary_lower or "layer" in summary_lower) and (
-                "important" in summary_lower or "matter" in summary_lower
-            ):
-                new_params["n_layer"] += random.choice([-1, 1, 2])
-                new_params["n_layer"] = max(4, min(new_params["n_layer"], 24))
+            if "n_layer" in recs:
+                current_layer = int(new_params.get("n_layer", 12))
+                target_layer = int(round(float(recs["n_layer"])))
+                delta = int(round((target_layer - current_layer) * min(1.0, 0.35 * strength)))
+                if delta == 0 and target_layer != current_layer:
+                    delta = 1 if target_layer > current_layer else -1
+                new_params["n_layer"] = max(4, min(current_layer + delta, 24))
+            elif hints.get("n_layer"):
+                layer_delta = int(round(2 * strength))
+                new_params["n_layer"] = max(4, min(int(new_params["n_layer"]) + layer_delta, 24))
+            if hints.get("n_layer") or "n_layer" in recs:
                 print(f"[Agent 1] Adjusted layers: {new_params['n_layer']}")
 
-            # Rule 3: If embedding size mentioned
-            if "embedding" in summary_lower and "important" in summary_lower:
-                emb_factor = random.choice([0.8, 1.2, 1.5])
-                new_params["n_embd"] = int(new_params["n_embd"] * emb_factor)
-                # Cap embedding to fit in A100 VRAM with SDPA (batch size 1)
-                new_params["n_embd"] = min(new_params["n_embd"], 1024)
+            if "n_embd" in recs:
+                current_embd = int(new_params.get("n_embd", 512))
+                target_embd = max(128, int(round(float(recs["n_embd"]))))
+                pull = min(0.8, 0.25 * strength)
+                current_embd = int(current_embd * (1.0 - pull) + target_embd * pull)
+                new_params["n_embd"] = min(max(128, current_embd), 1024)
+            elif hints.get("n_embd"):
+                emb_factor = 1.0 + 0.12 * strength
+                new_params["n_embd"] = min(int(new_params["n_embd"] * emb_factor), 1024)
+            if hints.get("n_embd") or "n_embd" in recs:
                 print(f"[Agent 1] Adjusted embedding: {new_params['n_embd']}")
         else:
             # No summary yet - early iterations, try random exploration
@@ -314,7 +422,62 @@ class Agent1TrainingSpecialist:
                 new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
                 new_params["learning_rate"] = 10 ** random.uniform(-4, -2)
 
+        new_params["learning_rate"] = self._clamp_learning_rate(
+            float(new_params.get("learning_rate", 1e-3))
+        )
+
         return new_params
+
+    def _clamp_learning_rate(self, lr: float) -> float:
+        """Keep learning rate inside a safe operating range."""
+        if not math.isfinite(lr):
+            return self.lr_min
+        return max(self.lr_min, min(lr, self.lr_max))
+
+    def _importance_magnitude(self, score: float) -> float:
+        """Map [0,1] score to distance from neutral 0.5 in [0,1]."""
+        bounded = max(0.0, min(1.0, float(score)))
+        return abs(bounded - 0.5) * 2.0
+
+    def _summary_importance_hints(self, summary: str) -> Dict[str, bool]:
+        """Extract lightweight importance hints from summary text."""
+        if not summary:
+            return {}
+        text = summary.lower()
+        important_tokens = ["important", "stable", "strong", "matters"]
+
+        def _has_signal(*tokens: str) -> bool:
+            return any(token in text for token in tokens) and any(t in text for t in important_tokens)
+
+        return {
+            "learning_rate": _has_signal("learning rate", "learning_rate", "lr"),
+            "n_layer": _has_signal("n_layer", "layer", "depth"),
+            "n_embd": _has_signal("n_embd", "embedding"),
+            "n_head": _has_signal("n_head", "head"),
+        }
+
+    def _extract_summary_recommendations(self, summary: str) -> Dict[str, float]:
+        """Parse numeric recommendation lines from Agent 3 markdown summary."""
+        if not summary:
+            return {}
+
+        patterns = {
+            "learning_rate": r"learning_rate[^\n:]*:\s*([0-9eE+\-.]+)",
+            "n_layer": r"n_layer[^\n:]*:\s*([0-9eE+\-.]+)",
+            "n_embd": r"n_embd[^\n:]*:\s*([0-9eE+\-.]+)",
+            "n_head": r"n_head[^\n:]*:\s*([0-9eE+\-.]+)",
+        }
+
+        recommendations: Dict[str, float] = {}
+        for key, pattern in patterns.items():
+            match = re.search(pattern, summary, flags=re.IGNORECASE)
+            if not match:
+                continue
+            try:
+                recommendations[key] = float(match.group(1))
+            except (TypeError, ValueError):
+                continue
+        return recommendations
 
     def train_model(
         self, hyperparams: Dict[str, Any], dry_run: bool = False, iteration: int = 0
