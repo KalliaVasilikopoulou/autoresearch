@@ -17,15 +17,15 @@ repo     = os.getenv("REMOTE_REPO")
 
 # Run a tiny Python snippet on remote that mimics the YAML-reading block in train.py
 snippet = (
-    "import yaml, math; "
-    "ASPECT_RATIO=64; HEAD_DIM=128; DEPTH=8; WEIGHT_DECAY=0.2; WARMUP_RATIO=0.0; "
+    "import yaml; "
+    "ASPECT_RATIO=64; N_HEAD=4; DEPTH=8; "
     "hp=yaml.safe_load(open('model_hyperparams.yaml')); "
     "DEPTH=int(hp.get('n_layer', DEPTH)); "
-    "lcm=DEPTH*HEAD_DIM//math.gcd(DEPTH,HEAD_DIM); "
-    "t=int(hp.get('n_embd', DEPTH*ASPECT_RATIO)); "
-    "snapped=max(lcm, round(t/lcm)*lcm); ASPECT_RATIO=snapped//DEPTH; "
-    "print(f'DEPTH={DEPTH} ASPECT_RATIO={ASPECT_RATIO} "
-    "model_dim={DEPTH*ASPECT_RATIO} heads={DEPTH*ASPECT_RATIO//HEAD_DIM}')"
+    "N_HEAD=int(hp.get('n_head', N_HEAD)); "
+    "target=int(hp.get('n_embd', DEPTH*ASPECT_RATIO)); "
+    "model_dim=max(N_HEAD, round(target/N_HEAD)*N_HEAD); "
+    "print(f'DEPTH={DEPTH} N_HEAD={N_HEAD} "
+    "model_dim={model_dim} head_dim={model_dim//N_HEAD}')"
 )
 
 cmd = f'bash -lc "{activate} {env} && cd {repo} && python -c \\"{snippet}\\""'

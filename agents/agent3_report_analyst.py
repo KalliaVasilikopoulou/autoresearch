@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
 from agents.protocols import SummaryEvidence
+from agents.agent1_training_specialist import LR_KEYS
 
 
 class Agent3ReportAnalyst:
@@ -319,10 +320,14 @@ class Agent3ReportAnalyst:
 
         recommended = {}
         if elite:
-            lr_values = [float(hp.get("learning_rate")) for _, hp in elite if isinstance(hp.get("learning_rate"), (int, float)) and hp.get("learning_rate") > 0]
-            if lr_values:
-                geo_lr = math.exp(sum(math.log(v) for v in lr_values) / len(lr_values))
-                recommended["learning_rate"] = round(geo_lr, 6)
+            for lr_key in LR_KEYS:
+                lr_values = [
+                    float(hp.get(lr_key)) for _, hp in elite
+                    if isinstance(hp.get(lr_key), (int, float)) and hp.get(lr_key) > 0
+                ]
+                if lr_values:
+                    geo_lr = math.exp(sum(math.log(v) for v in lr_values) / len(lr_values))
+                    recommended[lr_key] = round(geo_lr, 6)
             layer_avg = _avg_hp("n_layer")
             embd_avg = _avg_hp("n_embd")
             head_avg = _avg_hp("n_head")
@@ -420,8 +425,9 @@ class Agent3ReportAnalyst:
             f"- Recommendation sample size (elite runs): {len(elite)}",
         ])
         if recommended:
-            if "learning_rate" in recommended:
-                summary_lines.append(f"- learning_rate (geometric mean from elite runs): {recommended['learning_rate']}")
+            for lr_key in LR_KEYS:
+                if lr_key in recommended:
+                    summary_lines.append(f"- {lr_key} (geometric mean from elite runs): {recommended[lr_key]}")
             if "n_layer" in recommended:
                 summary_lines.append(f"- n_layer (rounded elite average): {recommended['n_layer']}")
             if "n_embd" in recommended:

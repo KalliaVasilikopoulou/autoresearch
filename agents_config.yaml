@@ -15,6 +15,19 @@ agent1:
   # Training time budget per model (seconds)
   training_budget_seconds: 300
 
+  # Safe operating ranges for each of train.py's 4 LR groups (see
+  # GPT.setup_optimizer in train.py). Values are clamped to these ranges
+  # before being written to model_hyperparams.yaml; train.py also clamps
+  # independently as a defensive boundary check.
+  embedding_lr_min: 0.05
+  embedding_lr_max: 3.0
+  unembedding_lr_min: 0.0005
+  unembedding_lr_max: 0.02
+  matrix_lr_min: 0.005
+  matrix_lr_max: 0.2
+  scalar_lr_min: 0.05
+  scalar_lr_max: 2.0
+
 # AGENT 2: XAI Specialist
 agent2:
   # Which XAI method to use: "fast" or "thorough"
@@ -57,12 +70,17 @@ orchestrator:
   max_iterations: 100
 
 # Model Training Configuration
-# (Agent 1 will adjust these based on summary feedback)
+# (Agent 1 will adjust these based on summary feedback; mirrors train.py's
+# baseline defaults. Note: this block is illustrative — Agent 1 seeds its
+# own defaults in code and writes the live values to model_hyperparams.yaml.)
 model_params:
-  n_layer: 12
-  n_head: 8
+  n_layer: 8
+  n_head: 4
   n_embd: 512
-  learning_rate: 0.001
-  batch_size: 128
-  warmup_ratio: 0.1
-  weight_decay: 0.1
+  embedding_lr: 0.6
+  unembedding_lr: 0.004
+  matrix_lr: 0.04
+  scalar_lr: 0.5
+  batch_size: 8192
+  warmup_ratio: 0.0
+  weight_decay: 0.2

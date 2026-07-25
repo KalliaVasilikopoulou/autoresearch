@@ -15,6 +15,24 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
 
+# The 4 learning-rate groups train.py's optimizer actually exposes (matches
+# GPT.setup_optimizer's kwargs 1:1 — see train.py). Each has its own default
+# and safe range since the groups operate on very different scales.
+LR_KEYS = ("embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr")
+LR_DEFAULTS = {
+    "embedding_lr": 0.6,
+    "unembedding_lr": 0.004,
+    "matrix_lr": 0.04,
+    "scalar_lr": 0.5,
+}
+LR_SAFE_RANGES = {
+    "embedding_lr": (0.05, 3.0),
+    "unembedding_lr": (0.0005, 0.02),
+    "matrix_lr": (0.005, 0.2),
+    "scalar_lr": (0.05, 2.0),
+}
+
+
 class Agent1TrainingSpecialist:
     """Trains models and adjusts hyperparameters based on agent feedback."""
 
@@ -28,8 +46,13 @@ class Agent1TrainingSpecialist:
         self.min_improvement = self.agent1_config.get("min_improvement", 0.005)
         self.max_stalled_iterations = self.agent1_config.get("max_stalled_iterations", 3)
         self.summary_strength = float(self.agent1_config.get("summary_strength", 2.0))
-        self.lr_min = float(self.agent1_config.get("learning_rate_min", 1e-5))
-        self.lr_max = float(self.agent1_config.get("learning_rate_max", 5e-3))
+        self.lr_bounds: Dict[str, tuple] = {
+            key: (
+                float(self.agent1_config.get(f"{key}_min", LR_SAFE_RANGES[key][0])),
+                float(self.agent1_config.get(f"{key}_max", LR_SAFE_RANGES[key][1])),
+            )
+            for key in LR_KEYS
+        }
 
         self.model_config_path = Path("model_hyperparams.yaml")
         self.current_hyperparams = self._init_hyperparams()
@@ -56,15 +79,18 @@ class Agent1TrainingSpecialist:
         return self._default_hyperparams()
 
     def _default_hyperparams(self) -> Dict[str, Any]:
-        """Default hyperparameters for GPT model."""
+        """Default hyperparameters for GPT model (mirrors train.py's baseline)."""
         return {
-            "n_layer": 12,  # Number of layers
-            "n_head": 8,  # Number of attention heads
+            "n_layer": 8,  # Number of layers
+            "n_head": 4,  # Number of attention heads
             "n_embd": 512,  # Embedding dimension
-            "learning_rate": 1e-3,
-            "batch_size": 128,
-            "warmup_ratio": 0.1,
-            "weight_decay": 0.1,
+            "embedding_lr": LR_DEFAULTS["embedding_lr"],
+            "unembedding_lr": LR_DEFAULTS["unembedding_lr"],
+            "matrix_lr": LR_DEFAULTS["matrix_lr"],
+            "scalar_lr": LR_DEFAULTS["scalar_lr"],
+            "batch_size": 8192,  # tokens per optimizer step (TOTAL_BATCH_SIZE)
+            "warmup_ratio": 0.0,
+            "weight_decay": 0.2,
         }
 
     def _save_hyperparams(self):
@@ -138,6 +164,13 @@ class Agent1TrainingSpecialist:
                 self.total_api_cost += 0.03  # Estimate
             except Exception as e:
                 print(f"[Agent 1] Claude suggestion failed: {e}")
+
+        # Claude's suggestion is free-form JSON — re-clamp every LR group
+        # before it's ever saved, since that path can otherwise bypass the
+        # safety bounds the rest of this class enforces everywhere else.
+        for key in LR_KEYS:
+            if key in new_hyperparams:
+                new_hyperparams[key] = self._clamp_lr(key, float(new_hyperparams[key]))
 
         self.current_hyperparams = new_hyperparams
         self._save_hyperparams()
@@ -219,6 +252,27 @@ class Agent1TrainingSpecialist:
             return not improved and latest_val_bpb >= min(window[-2], window[-3]) - 0.01
         return not improved
 
+    def _radical_change(self, new_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Large random architecture jump used when the model looks stuck."""
+        print("[Agent 1] Model stuck - trying radical changes")
+        new_params["n_layer"] = random.randint(8, 20)
+        new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+        for key in LR_KEYS:
+            new_params[key] = self._clamp_lr(key, float(new_params.get(key, LR_DEFAULTS[key])))
+        return new_params
+
+    def _nudge_lr(self, new_params: Dict[str, Any], key: str, direction: int, magnitude: float, scale: float = 0.20) -> None:
+        """Multiplicative nudge for a single LR group, in-place."""
+        lr = float(new_params.get(key, LR_DEFAULTS[key]))
+        lr *= math.exp(direction * scale * magnitude)
+        new_params[key] = self._clamp_lr(key, lr)
+
+    def _pull_lr_toward(self, new_params: Dict[str, Any], key: str, target: float, pull: float) -> None:
+        """Blend a single LR group toward a target value, in-place."""
+        current = float(new_params.get(key, LR_DEFAULTS[key]))
+        target = self._clamp_lr(key, target)
+        new_params[key] = self._clamp_lr(key, current * (1.0 - pull) + target * pull)
+
     def _evidence_adjustment(
         self,
         latest_summary: Optional[str],
@@ -230,13 +284,7 @@ class Agent1TrainingSpecialist:
         new_params = self.current_hyperparams.copy()
 
         if stuck_signal:
-            print("[Agent 1] Model stuck - trying radical changes")
-            new_params["n_layer"] = random.randint(8, 20)
-            new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
-            new_params["learning_rate"] = self._clamp_learning_rate(
-                float(new_params.get("learning_rate", 1e-3))
-            )
-            return new_params
+            return self._radical_change(new_params)
 
         if not evidence:
             return new_params
@@ -262,10 +310,8 @@ class Agent1TrainingSpecialist:
             magnitude = self._importance_magnitude(score)
             direction = 1 if score >= 0.5 else -1
 
-            if param == "learning_rate":
-                lr = float(new_params.get("learning_rate", 1e-3))
-                lr *= math.exp(direction * 0.20 * magnitude)
-                new_params["learning_rate"] = self._clamp_learning_rate(lr)
+            if param in LR_KEYS:
+                self._nudge_lr(new_params, param, direction, magnitude, scale=0.20)
 
             elif param == "n_layer":
                 current = int(new_params.get("n_layer", 12))
@@ -288,7 +334,7 @@ class Agent1TrainingSpecialist:
             summary_hints = self._summary_importance_hints(latest_summary)
             summary_multiplier = max(1.0, self.summary_strength)
 
-            for param in ["learning_rate", "n_layer", "n_embd", "n_head"]:
+            for param in [*LR_KEYS, "n_layer", "n_embd", "n_head"]:
                 if not summary_hints.get(param) and param not in recs:
                     continue
 
@@ -296,15 +342,12 @@ class Agent1TrainingSpecialist:
                 magnitude = self._importance_magnitude(score)
                 direction = 1 if score >= 0.5 else -1
 
-                if param == "learning_rate":
-                    current_lr = float(new_params.get("learning_rate", 1e-3))
+                if param in LR_KEYS:
                     if param in recs:
-                        target_lr = self._clamp_learning_rate(float(recs[param]))
                         pull = min(0.8, 0.25 * summary_multiplier)
-                        current_lr = current_lr * (1.0 - pull) + target_lr * pull
+                        self._pull_lr_toward(new_params, param, float(recs[param]), pull)
                     else:
-                        current_lr *= math.exp(direction * 0.20 * summary_multiplier * magnitude)
-                    new_params["learning_rate"] = self._clamp_learning_rate(current_lr)
+                        self._nudge_lr(new_params, param, direction, magnitude, scale=0.20 * summary_multiplier)
 
                 elif param == "n_layer":
                     current = int(new_params.get("n_layer", 12))
@@ -341,10 +384,9 @@ class Agent1TrainingSpecialist:
                         current += int(round(direction * summary_multiplier * magnitude))
                     new_params["n_head"] = max(1, min(current, 16))
 
-        # Hard safety bound for LR after all evidence/summary adjustments.
-        new_params["learning_rate"] = self._clamp_learning_rate(
-            float(new_params.get("learning_rate", 1e-3))
-        )
+        # Hard safety bound for LR groups after all evidence/summary adjustments.
+        for key in LR_KEYS:
+            new_params[key] = self._clamp_lr(key, float(new_params.get(key, LR_DEFAULTS[key])))
 
         return new_params
 
@@ -362,14 +404,7 @@ class Agent1TrainingSpecialist:
         new_params = self.current_hyperparams.copy()
 
         if stuck:
-            print("[Agent 1] Model stuck - trying radical changes")
-            # Large change to depth
-            new_params["n_layer"] = random.randint(8, 20)
-            new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
-            new_params["learning_rate"] = self._clamp_learning_rate(
-                float(new_params.get("learning_rate", 1e-3))
-            )
-            return new_params
+            return self._radical_change(new_params)
 
         # Extract insights from summary
         if summary:
@@ -377,18 +412,14 @@ class Agent1TrainingSpecialist:
             hints = self._summary_importance_hints(summary)
             strength = max(1.0, self.summary_strength)
 
-            if "learning_rate" in recs:
-                lr = float(new_params.get("learning_rate", 1e-3))
-                target_lr = self._clamp_learning_rate(float(recs["learning_rate"]))
-                pull = min(0.8, 0.25 * strength)
-                lr = lr * (1.0 - pull) + target_lr * pull
-                new_params["learning_rate"] = self._clamp_learning_rate(lr)
-                print(f"[Agent 1] Summary-guided LR: {new_params['learning_rate']:.2e}")
-            elif hints.get("learning_rate"):
-                lr = float(new_params.get("learning_rate", 1e-3))
-                lr *= math.exp(0.25 * strength)
-                new_params["learning_rate"] = self._clamp_learning_rate(lr)
-                print(f"[Agent 1] Adjusted LR: {new_params['learning_rate']:.2e}")
+            for lr_key in LR_KEYS:
+                if lr_key in recs:
+                    pull = min(0.8, 0.25 * strength)
+                    self._pull_lr_toward(new_params, lr_key, float(recs[lr_key]), pull)
+                    print(f"[Agent 1] Summary-guided {lr_key}: {new_params[lr_key]:.2e}")
+                elif hints.get(lr_key):
+                    self._nudge_lr(new_params, lr_key, direction=1, magnitude=1.0, scale=0.25 * strength)
+                    print(f"[Agent 1] Adjusted {lr_key}: {new_params[lr_key]:.2e}")
 
             if "n_layer" in recs:
                 current_layer = int(new_params.get("n_layer", 12))
@@ -420,19 +451,25 @@ class Agent1TrainingSpecialist:
                 print("[Agent 1] Early iteration - random exploration")
                 new_params["n_layer"] = random.randint(6, 18)
                 new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
-                new_params["learning_rate"] = 10 ** random.uniform(-4, -2)
+                for lr_key in LR_KEYS:
+                    new_params[lr_key] = self._random_lr(lr_key)
 
-        new_params["learning_rate"] = self._clamp_learning_rate(
-            float(new_params.get("learning_rate", 1e-3))
-        )
+        for key in LR_KEYS:
+            new_params[key] = self._clamp_lr(key, float(new_params.get(key, LR_DEFAULTS[key])))
 
         return new_params
 
-    def _clamp_learning_rate(self, lr: float) -> float:
-        """Keep learning rate inside a safe operating range."""
+    def _clamp_lr(self, key: str, lr: float) -> float:
+        """Keep a learning-rate group inside its safe operating range."""
+        lo, hi = self.lr_bounds.get(key, LR_SAFE_RANGES.get(key, (1e-5, 5.0)))
         if not math.isfinite(lr):
-            return self.lr_min
-        return max(self.lr_min, min(lr, self.lr_max))
+            return lo
+        return max(lo, min(lr, hi))
+
+    def _random_lr(self, key: str) -> float:
+        """Log-uniform random sample within the safe range for one LR group."""
+        lo, hi = self.lr_bounds.get(key, LR_SAFE_RANGES[key])
+        return 10 ** random.uniform(math.log10(lo), math.log10(hi))
 
     def _importance_magnitude(self, score: float) -> float:
         """Map [0,1] score to distance from neutral 0.5 in [0,1]."""
@@ -450,7 +487,10 @@ class Agent1TrainingSpecialist:
             return any(token in text for token in tokens) and any(t in text for t in important_tokens)
 
         return {
-            "learning_rate": _has_signal("learning rate", "learning_rate", "lr"),
+            "embedding_lr": _has_signal("embedding_lr", "embedding lr"),
+            "unembedding_lr": _has_signal("unembedding_lr", "unembedding lr"),
+            "matrix_lr": _has_signal("matrix_lr", "matrix lr", "learning rate", "learning_rate", "lr"),
+            "scalar_lr": _has_signal("scalar_lr", "scalar lr"),
             "n_layer": _has_signal("n_layer", "layer", "depth"),
             "n_embd": _has_signal("n_embd", "embedding"),
             "n_head": _has_signal("n_head", "head"),
@@ -462,7 +502,12 @@ class Agent1TrainingSpecialist:
             return {}
 
         patterns = {
-            "learning_rate": r"learning_rate[^\n:]*:\s*([0-9eE+\-.]+)",
+            # Negative lookbehind on "embedding_lr" keeps it from also matching
+            # inside "unembedding_lr" (which would otherwise double-match).
+            "embedding_lr": r"(?<!un)embedding_lr[^\n:]*:\s*([0-9eE+\-.]+)",
+            "unembedding_lr": r"unembedding_lr[^\n:]*:\s*([0-9eE+\-.]+)",
+            "matrix_lr": r"matrix_lr[^\n:]*:\s*([0-9eE+\-.]+)",
+            "scalar_lr": r"scalar_lr[^\n:]*:\s*([0-9eE+\-.]+)",
             "n_layer": r"n_layer[^\n:]*:\s*([0-9eE+\-.]+)",
             "n_embd": r"n_embd[^\n:]*:\s*([0-9eE+\-.]+)",
             "n_head": r"n_head[^\n:]*:\s*([0-9eE+\-.]+)",
@@ -556,10 +601,10 @@ class Agent1TrainingSpecialist:
         self, hyperparams: Dict[str, Any], iteration: int, error: str
     ) -> Dict[str, Any]:
         """Generate a deterministic surrogate metric for local testing."""
-        lr = float(hyperparams.get("learning_rate", 1e-3))
+        matrix_lr = float(hyperparams.get("matrix_lr", LR_DEFAULTS["matrix_lr"]))
         depth = int(hyperparams.get("n_layer", 12))
         width = int(hyperparams.get("n_embd", 512))
-        base = 1.25 - (0.002 * min(depth, 20)) - (0.000001 * width) + (0.15 * min(lr / 1e-3, 2.0))
+        base = 1.25 - (0.002 * min(depth, 20)) - (0.000001 * width) + (0.15 * min(matrix_lr / LR_DEFAULTS["matrix_lr"], 2.0))
         val_bpb = max(0.65, base - 0.001 * iteration)
         return {
             "val_bpb": round(val_bpb, 6),
@@ -625,7 +670,7 @@ Our heuristic suggestion:
 {heuristic_params}
 
 Should we adjust this? Provide JSON with adjustments (or empty {{}} if heuristic is good).
-Example: {{"n_layer": 14, "learning_rate": 0.002}}"""
+Example: {{"n_layer": 14, "matrix_lr": 0.03}}"""
 
         try:
             message = self.claude.messages.create(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from agents.xai_methods.fast_methods import FastXAIMethods
 from agents.protocols import AnalysisEvidence
+from agents.agent1_training_specialist import LR_KEYS, LR_DEFAULTS
 import yaml
 
 
@@ -71,24 +72,21 @@ class Agent2XAISpecialist:
 
         hyperparams = result_payload.get("hyperparams", {})
         run_metrics = result_payload.get("metadata", {}) if isinstance(result_payload.get("metadata", {}), dict) else {}
-        print(f"[Agent 2]   Hyperparams: n_layer={hyperparams.get('n_layer')}, n_embd={hyperparams.get('n_embd')}, lr={hyperparams.get('learning_rate', 0):.2e}")
-        
+        print(f"[Agent 2]   Hyperparams: n_layer={hyperparams.get('n_layer')}, n_embd={hyperparams.get('n_embd')}, "
+              f"matrix_lr={float(hyperparams.get('matrix_lr', LR_DEFAULTS['matrix_lr'])):.2e}")
+
         report_id = f"report_{self.report_counter:04d}"
         stuck_signal = (not math.isfinite(val_bpb)) or (val_bpb > 1.32) or (status in {"remote_error", "simulated"})
         confidence = 0.9 if status in {"remote_ok", "ok"} and math.isfinite(val_bpb) else 0.72
 
-        importance = {
-            "learning_rate": 0.6 if hyperparams.get("learning_rate") else 0.0,
-            "n_layer": 0.4 if hyperparams.get("n_layer") else 0.0,
-            "n_embd": 0.3 if hyperparams.get("n_embd") else 0.0,
-        }
+        importance = {key: (0.6 if hyperparams.get(key) else 0.0) for key in LR_KEYS}
+        importance["n_layer"] = 0.4 if hyperparams.get("n_layer") else 0.0
+        importance["n_embd"] = 0.3 if hyperparams.get("n_embd") else 0.0
 
         if result_payload.get("status") == "dry_run":
-            importance = {
-                "learning_rate": 0.5,
-                "n_layer": 0.3,
-                "n_embd": 0.2,
-            }
+            importance = {key: 0.5 for key in LR_KEYS}
+            importance["n_layer"] = 0.3
+            importance["n_embd"] = 0.2
 
         evidence = AnalysisEvidence(
             report_id=report_id,
@@ -158,15 +156,11 @@ class Agent2XAISpecialist:
         finite_val = val_bpb if math.isfinite(val_bpb) else 1.8
         quality = max(0.0, min(1.0, (1.7 - finite_val) / 0.7))
 
-        lr = float(hyperparams.get("learning_rate", 1e-3) or 1e-3)
         n_layer = int(hyperparams.get("n_layer", 12) or 12)
         n_embd = int(hyperparams.get("n_embd", 512) or 512)
         n_head = int(hyperparams.get("n_head", 8) or 8)
         weight_decay = float(hyperparams.get("weight_decay", 0.1) or 0.1)
         warmup_ratio = float(hyperparams.get("warmup_ratio", 0.1) or 0.1)
-
-        lr_log = abs(math.log10(max(lr, 1e-12)) - math.log10(1e-3))
-        lr_importance = min(1.0, 0.45 + 0.15 * lr_log + 0.2 * (1.0 - quality))
 
         depth_importance = min(1.0, 0.35 + 0.02 * abs(n_layer - 12) + 0.1 * quality)
         width_importance = min(1.0, 0.3 + 0.0003 * abs(n_embd - 768) + 0.1 * quality)
@@ -174,14 +168,21 @@ class Agent2XAISpecialist:
         wd_importance = min(1.0, 0.15 + 0.6 * abs(weight_decay - 0.1))
         warmup_importance = min(1.0, 0.18 + 0.9 * abs(warmup_ratio - 0.1))
 
-        return {
-            "learning_rate": round(lr_importance, 6),
+        result = {
             "n_layer": round(depth_importance, 6),
             "n_embd": round(width_importance, 6),
             "n_head": round(heads_importance, 6),
             "weight_decay": round(wd_importance, 6),
             "warmup_ratio": round(warmup_importance, 6),
         }
+        # Same log-distance-from-default heuristic as before, applied once per
+        # LR group (each group has its own default/scale, unlike the old
+        # single "learning_rate" key).
+        for key in LR_KEYS:
+            lr = float(hyperparams.get(key, LR_DEFAULTS[key]) or LR_DEFAULTS[key])
+            lr_log = abs(math.log10(max(lr, 1e-12)) - math.log10(LR_DEFAULTS[key]))
+            result[key] = round(min(1.0, 0.45 + 0.15 * lr_log + 0.2 * (1.0 - quality)), 6)
+        return result
 
     def _render_markdown_report(
         self,

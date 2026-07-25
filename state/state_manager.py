@@ -159,7 +159,3 @@ class StateManager:
         """Store structured summary from Agent 3."""
         self.metadata.setdefault("summaries", []).append(summary)
         self._save_metadata()
-
-    def get_latest_summary(self) -> Optional[str]:
-        """Return the latest summary id that was recorded."""
-        return self.metadata.get("latest_summary")

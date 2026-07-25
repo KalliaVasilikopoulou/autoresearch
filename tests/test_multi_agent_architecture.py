@@ -1,10 +1,27 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 import math
 
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.orchestrator import Orchestrator
+
+
+def _base_hyperparams():
+    """Hyperparameter dict matching train.py's real schema (4 LR groups)."""
+    return {
+        "n_layer": 12,
+        "n_head": 4,
+        "n_embd": 512,
+        "embedding_lr": 0.6,
+        "unembedding_lr": 0.004,
+        "matrix_lr": 0.04,
+        "scalar_lr": 0.5,
+        "batch_size": 8192,
+        "warmup_ratio": 0.1,
+        "weight_decay": 0.1,
+    }
 
 
 def test_orchestrator_dry_run_builds_reports_and_summary(tmp_path):
@@ -67,7 +84,7 @@ agent1:
 
     specialist = Agent1TrainingSpecialist(config_path=str(config_path))
     result = specialist.train_model(
-        {"learning_rate": 0.001, "n_layer": 10, "n_embd": 256},
+        {"matrix_lr": 0.04, "n_layer": 10, "n_embd": 256},
         dry_run=False,
         iteration=1,
     )
@@ -90,28 +107,26 @@ agent1:
     )
 
     specialist = Agent1TrainingSpecialist(config_path=str(config_path))
-    specialist.current_hyperparams = {
-        "n_layer": 12,
-        "n_head": 8,
-        "n_embd": 512,
-        "learning_rate": 1e-3,
-        "batch_size": 128,
-        "warmup_ratio": 0.1,
-        "weight_decay": 0.1,
-    }
+    specialist.current_hyperparams = _base_hyperparams()
 
-    new_hyperparams = specialist.decide_next_hyperparams(
-        latest_summary=None,
-        evidence=None,
-        stuck_signal=False,
-        latest_val_bpb=0.995,
-        iteration=10,
-        recent_results=[{"val_bpb": 1.0}, {"val_bpb": 0.995}, {"val_bpb": 0.995}],
-    )
+    # Assert on the radical-change path actually firing rather than on the
+    # random n_layer/n_embd draw landing on a different value — random.choice
+    # can coincidentally reproduce the current value, which made the old
+    # value-inequality assertion flaky (~20%+ failure rate). decide_next_hyperparams
+    # runs both the evidence and heuristic paths when no evidence list is given
+    # (the heuristic result wins), so this can legitimately fire more than once.
+    with patch.object(specialist, "_radical_change", wraps=specialist._radical_change) as mock_radical:
+        new_hyperparams = specialist.decide_next_hyperparams(
+            latest_summary=None,
+            evidence=None,
+            stuck_signal=False,
+            latest_val_bpb=0.995,
+            iteration=10,
+            recent_results=[{"val_bpb": 1.0}, {"val_bpb": 0.995}, {"val_bpb": 0.995}],
+        )
 
     assert new_hyperparams is not None
-    assert new_hyperparams["n_layer"] != 12
-    assert new_hyperparams["n_embd"] != 512
+    assert mock_radical.called
 
 
 def test_importance_weight_changes_are_scaled_by_score(tmp_path):
@@ -119,15 +134,7 @@ def test_importance_weight_changes_are_scaled_by_score(tmp_path):
     config_path.write_text("agent1:\n  use_llm: false")
 
     specialist = Agent1TrainingSpecialist(config_path=str(config_path))
-    specialist.current_hyperparams = {
-        "n_layer": 12,
-        "n_head": 8,
-        "n_embd": 512,
-        "learning_rate": 1e-3,
-        "batch_size": 128,
-        "warmup_ratio": 0.1,
-        "weight_decay": 0.1,
-    }
+    specialist.current_hyperparams = _base_hyperparams()
 
     weak = specialist._evidence_adjustment(
         latest_summary=None,
@@ -153,67 +160,52 @@ def test_summary_adjustment_is_stronger_than_report_only(tmp_path):
     config_path.write_text("agent1:\n  use_llm: false\n  summary_strength: 2.0")
 
     specialist = Agent1TrainingSpecialist(config_path=str(config_path))
-    specialist.current_hyperparams = {
-        "n_layer": 12,
-        "n_head": 8,
-        "n_embd": 512,
-        "learning_rate": 1e-3,
-        "batch_size": 128,
-        "warmup_ratio": 0.1,
-        "weight_decay": 0.1,
-    }
+    specialist.current_hyperparams = _base_hyperparams()
 
     report_only = specialist._evidence_adjustment(
         latest_summary=None,
-        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        evidence=[{"hyperparameter_importance": {"matrix_lr": 1.0}}],
         stuck_signal=False,
         iteration=0,
     )
 
-    specialist.current_hyperparams["learning_rate"] = 1e-3
-    summary_text = "learning_rate importance is stable and important"
+    specialist.current_hyperparams["matrix_lr"] = 0.04
+    summary_text = "matrix_lr importance is stable and important"
     summary_plus_report = specialist._evidence_adjustment(
         latest_summary=summary_text,
-        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        evidence=[{"hyperparameter_importance": {"matrix_lr": 1.0}}],
         stuck_signal=False,
         iteration=0,
     )
 
-    report_change = abs(math.log(report_only["learning_rate"] / 1e-3))
-    summary_change = abs(math.log(summary_plus_report["learning_rate"] / 1e-3))
+    report_change = abs(math.log(report_only["matrix_lr"] / 0.04))
+    summary_change = abs(math.log(summary_plus_report["matrix_lr"] / 0.04))
     assert summary_change > report_change
 
 
-def test_learning_rate_is_always_clamped_to_safe_range(tmp_path):
+def test_learning_rate_groups_are_always_clamped_to_safe_range(tmp_path):
     config_path = tmp_path / "agents_config.yaml"
     config_path.write_text(
-        "agent1:\n  use_llm: false\n  learning_rate_min: 1.0e-5\n  learning_rate_max: 5.0e-3"
+        "agent1:\n  use_llm: false\n  matrix_lr_min: 0.005\n  matrix_lr_max: 0.2"
     )
 
     specialist = Agent1TrainingSpecialist(config_path=str(config_path))
-    specialist.current_hyperparams = {
-        "n_layer": 12,
-        "n_head": 8,
-        "n_embd": 512,
-        "learning_rate": 1.0,
-        "batch_size": 128,
-        "warmup_ratio": 0.1,
-        "weight_decay": 0.1,
-    }
+    specialist.current_hyperparams = _base_hyperparams()
+    specialist.current_hyperparams["matrix_lr"] = 1.0
 
     high_case = specialist._evidence_adjustment(
-        latest_summary="learning_rate important",
-        evidence=[{"hyperparameter_importance": {"learning_rate": 1.0}}],
+        latest_summary="matrix_lr important",
+        evidence=[{"hyperparameter_importance": {"matrix_lr": 1.0}}],
         stuck_signal=False,
         iteration=0,
     )
-    assert 1e-5 <= high_case["learning_rate"] <= 5e-3
+    assert 0.005 <= high_case["matrix_lr"] <= 0.2
 
-    specialist.current_hyperparams["learning_rate"] = 1.0e-9
+    specialist.current_hyperparams["matrix_lr"] = 1.0e-9
     low_case = specialist._evidence_adjustment(
         latest_summary=None,
-        evidence=[{"hyperparameter_importance": {"learning_rate": 0.0}}],
+        evidence=[{"hyperparameter_importance": {"matrix_lr": 0.0}}],
         stuck_signal=False,
         iteration=0,
     )
-    assert 1e-5 <= low_case["learning_rate"] <= 5e-3
+    assert 0.005 <= low_case["matrix_lr"] <= 0.2

@@ -21,32 +21,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from kernels import get_kernel
-    cap = torch.cuda.get_device_capability()
-    # varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
-    repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
-    fa3 = get_kernel(repo, version=1).flash_attn_interface
-    _USE_FA3 = True
-    print(f"[train.py] Flash Attention 3 loaded ({repo})")
-    sys.stdout.flush()
-except Exception as _fa3_err:
-    print(f"[train.py] FA3 unavailable ({type(_fa3_err).__name__}), using PyTorch SDPA fallback")
-    sys.stdout.flush()
-    fa3 = None
-    _USE_FA3 = False
-
-
 def _attn_func(q, k, v, window_size):
     """
-    Attention dispatcher.
-    FA3 path  : q/k/v are [B, T, H, D] (Flash-Attn convention).
-    SDPA path : transposes to [B, H, T, D], handles GQA + sliding window.
+    Attention dispatcher (PyTorch SDPA only).
+    q/k/v come in as [B, T, H, D]; transposes to [B, H, T, D], handles GQA + sliding window.
     """
-    if _USE_FA3:
-        return fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
-
-    # --- PyTorch SDPA fallback ---
     B, T, Hq, D = q.shape
     Hkv = k.shape[2]
     q2 = q.transpose(1, 2)          # [B, Hq, T, D]
@@ -479,8 +458,8 @@ class MuonAdamW(torch.optim.Optimizer):
 # ---------------------------------------------------------------------------
 
 # Model architecture
-ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO
-HEAD_DIM = 128          # target head dimension for attention
+ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO (before snapping to N_HEAD)
+N_HEAD = 4              # number of attention heads (model_dim is snapped to a multiple of this)
 WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
 
 # Optimization
@@ -502,29 +481,55 @@ DEVICE_BATCH_SIZE = 1    # per-device batch size (2->1 for extreme memory effici
 # ---------------------------------------------------------------------------
 # Override hyperparameters from model_hyperparams.yaml (written by Agent 1)
 # All other training constants above are kept as Karpathy's calibrated defaults.
+# Every value read here is clamped to a safe range before use — this file is
+# written by an autonomous agent and must never be trusted blindly (a bad
+# value here should degrade gracefully, not silently corrupt or crash a run).
 # ---------------------------------------------------------------------------
+
+def _clamp(name, value, lo, hi):
+    clamped = max(lo, min(hi, value))
+    if clamped != value:
+        print(f"[hyperparams] WARNING: {name}={value} outside safe range [{lo}, {hi}], clamped to {clamped}")
+    return clamped
+
+_target_embd = DEPTH * ASPECT_RATIO
 try:
-    import yaml as _yaml, math as _math
+    import yaml as _yaml
     _hp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_hyperparams.yaml")
     if os.path.exists(_hp_path):
         with open(_hp_path) as _f:
             _hp = _yaml.safe_load(_f) or {}
         if "n_layer" in _hp:
-            DEPTH = int(_hp["n_layer"])
-        if "n_embd" in _hp and DEPTH > 0:
-            # Snap model_dim to a multiple of both HEAD_DIM and DEPTH so head count stays integer
-            _lcm = DEPTH * HEAD_DIM // _math.gcd(DEPTH, HEAD_DIM)
-            _target = max(_lcm, int(_hp["n_embd"]))
-            _snapped = max(_lcm, round(_target / _lcm) * _lcm)
-            ASPECT_RATIO = _snapped // DEPTH
+            DEPTH = _clamp("n_layer", int(_hp["n_layer"]), 1, 48)
+        if "n_head" in _hp:
+            N_HEAD = _clamp("n_head", int(_hp["n_head"]), 1, 64)
+        _target_embd = DEPTH * ASPECT_RATIO
+        if "n_embd" in _hp:
+            _target_embd = _clamp("n_embd", int(_hp["n_embd"]), N_HEAD, 8192)
+        if "embedding_lr" in _hp:
+            EMBEDDING_LR = _clamp("embedding_lr", float(_hp["embedding_lr"]), 0.05, 3.0)
+        if "unembedding_lr" in _hp:
+            UNEMBEDDING_LR = _clamp("unembedding_lr", float(_hp["unembedding_lr"]), 0.0005, 0.02)
+        if "matrix_lr" in _hp:
+            MATRIX_LR = _clamp("matrix_lr", float(_hp["matrix_lr"]), 0.005, 0.2)
+        if "scalar_lr" in _hp:
+            SCALAR_LR = _clamp("scalar_lr", float(_hp["scalar_lr"]), 0.05, 2.0)
         if "weight_decay" in _hp:
-            WEIGHT_DECAY = float(_hp["weight_decay"])
+            WEIGHT_DECAY = _clamp("weight_decay", float(_hp["weight_decay"]), 0.0, 2.0)
         if "warmup_ratio" in _hp:
-            WARMUP_RATIO = float(_hp["warmup_ratio"])
-        print(f"[hyperparams] DEPTH={DEPTH} ASPECT_RATIO={ASPECT_RATIO} "
-              f"model_dim={DEPTH*ASPECT_RATIO} WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO}")
+            WARMUP_RATIO = _clamp("warmup_ratio", float(_hp["warmup_ratio"]), 0.0, 1.0)
+        if "batch_size" in _hp:
+            _tokens_per_fwdbwd = DEVICE_BATCH_SIZE * MAX_SEQ_LEN
+            _raw_batch = _clamp("batch_size", int(_hp["batch_size"]), _tokens_per_fwdbwd, 2**20)
+            TOTAL_BATCH_SIZE = max(_tokens_per_fwdbwd, round(_raw_batch / _tokens_per_fwdbwd) * _tokens_per_fwdbwd)
+        print(f"[hyperparams] DEPTH={DEPTH} N_HEAD={N_HEAD} target_n_embd={_target_embd} "
+              f"EMBEDDING_LR={EMBEDDING_LR} UNEMBEDDING_LR={UNEMBEDDING_LR} MATRIX_LR={MATRIX_LR} SCALAR_LR={SCALAR_LR} "
+              f"WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO} TOTAL_BATCH_SIZE={TOTAL_BATCH_SIZE}")
 except Exception as _e:
     print(f"[hyperparams] Could not load model_hyperparams.yaml: {_e} — using defaults")
+
+# Snap the target embedding size to a multiple of N_HEAD so head_dim stays an integer.
+MODEL_DIM = max(N_HEAD, round(_target_embd / N_HEAD) * N_HEAD)
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader
@@ -542,17 +547,14 @@ tokenizer = Tokenizer.from_directory()
 vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
-def build_model_config(depth):
-    base_dim = depth * ASPECT_RATIO
-    model_dim = ((base_dim + HEAD_DIM - 1) // HEAD_DIM) * HEAD_DIM
-    num_heads = model_dim // HEAD_DIM
+def build_model_config(depth, n_head, model_dim):
     return GPTConfig(
         sequence_len=MAX_SEQ_LEN, vocab_size=vocab_size,
-        n_layer=depth, n_head=num_heads, n_kv_head=num_heads, n_embd=model_dim,
+        n_layer=depth, n_head=n_head, n_kv_head=n_head, n_embd=model_dim,
         window_pattern=WINDOW_PATTERN,
     )
 
-config = build_model_config(DEPTH)
+config = build_model_config(DEPTH, N_HEAD, MODEL_DIM)
 print(f"Model config: {asdict(config)}")
 sys.stdout.flush()
 
@@ -583,12 +585,7 @@ optimizer = model.setup_optimizer(
     weight_decay=WEIGHT_DECAY,
 )
 
-# Only compile model if using FA3 (compiled SDPA is memory-inefficient)
-if _USE_FA3:
-    model = torch.compile(model, dynamic=False)
-    print("[train.py] torch.compile enabled (FA3 available)")
-else:
-    print("[train.py] torch.compile skipped (using SDPA fallback for memory efficiency)")
+print("[train.py] torch.compile skipped (SDPA-only build, compiled SDPA is memory-inefficient)")
 sys.stdout.flush()
 
 print("[train.py] Initializing dataloader...")
