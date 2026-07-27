@@ -1,0 +1,141 @@
+"""Check whether the search loop is fitting noise in its pinned validation
+shard (see prepare.py's HOLDOUT_SHARD / evaluate_bpb_holdout).
+
+Re-trains the top-K configs (by historical val_bpb) from results.tsv with
+holdout_eval enabled, so each retrain reports both val_bpb (the shard the
+search always compares against) and holdout_val_bpb (a shard the search
+never sees) from the *same* trained model. If the config that ranks best on
+val_bpb isn't also best on holdout_val_bpb, the search has been measuring
+its own selection bias, not real improvement.
+
+Cost: K full training runs. Run this once at the end of a search campaign,
+not per-iteration -- the search loop itself never uses holdout_val_bpb to
+decide anything (see prepare.py's _document_batches: HOLDOUT_SHARD is
+excluded from training and never touched by evaluate_bpb).
+
+Usage:
+    uv run python scripts/holdout_eval.py --top-k 5
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agents.agent1_training_specialist import Agent1TrainingSpecialist
+from state.results_analysis import HYPERPARAM_COLUMNS, load_results, spearman
+from state.results_logger import log_result
+
+RUN_ID_PREFIX = "holdout_check"
+REPORT_PATH = Path("reports/holdout_eval_report.md")
+
+
+def _dedupe_top_k(rows, top_k):
+    """Top-K distinct configs by ascending val_bpb (dedupe by hyperparams so
+    repeated noise-floor runs of one config don't crowd out K distinct ones).
+    """
+    finite = [r for r in rows if "val_bpb" in r]
+    finite.sort(key=lambda r: r["val_bpb"])
+    seen = set()
+    candidates = []
+    for row in finite:
+        key = tuple(row.get(col) for col in HYPERPARAM_COLUMNS)
+        if key in seen or any(v is None for v in key):
+            continue
+        seen.add(key)
+        candidates.append(row)
+        if len(candidates) >= top_k:
+            break
+    return candidates
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--config", default="agents_config.yaml")
+    parser.add_argument("--results-path", default="results.tsv")
+    args = parser.parse_args()
+
+    rows = load_results(args.results_path)
+    candidates = _dedupe_top_k(rows, args.top_k)
+    if len(candidates) < 2:
+        print(f"[holdout_eval] Only {len(candidates)} distinct real config(s) in "
+              f"{args.results_path} — need at least 2 to compare. Run a couple of "
+              f"real, distinct search iterations first.")
+        sys.exit(1)
+
+    print(f"[holdout_eval] Re-checking top-{len(candidates)} configs on the holdout shard...")
+    agent1 = Agent1TrainingSpecialist(config_path=args.config)
+
+    results = []
+    for i, cand in enumerate(candidates):
+        hp = {col: cand[col] for col in HYPERPARAM_COLUMNS if col in cand}
+        hp["holdout_eval"] = True
+        original_run_id = cand.get("run_id", f"unknown_{i}")
+        run_id = f"{RUN_ID_PREFIX}_{i:04d}"
+        print(f"\n[holdout_eval] --- {run_id} (was {original_run_id}, "
+              f"historical val_bpb={cand['val_bpb']:.6f}) ---")
+
+        agent1.current_hyperparams = dict(hp)
+        metrics = agent1.train_model(hp, dry_run=False, iteration=i)
+        log_result(run_id, hp, metrics, results_path=args.results_path)
+
+        results.append({
+            "run_id": run_id,
+            "original_run_id": original_run_id,
+            "val_bpb": metrics.get("val_bpb", float("inf")),
+            "holdout_val_bpb": metrics.get("holdout_val_bpb"),
+        })
+
+    scored = [r for r in results if r.get("holdout_val_bpb") is not None]
+    if len(scored) < 2:
+        print("\n[holdout_eval] Fewer than 2 runs produced holdout_val_bpb — "
+              "check that train.py's holdout eval ran (see its stdout above for errors).")
+        sys.exit(1)
+
+    by_val = sorted(scored, key=lambda r: r["val_bpb"])
+    by_holdout = sorted(scored, key=lambda r: r["holdout_val_bpb"])
+    val_rank = {r["run_id"]: i + 1 for i, r in enumerate(by_val)}
+    holdout_rank = {r["run_id"]: i + 1 for i, r in enumerate(by_holdout)}
+
+    rho = spearman(
+        [val_rank[r["run_id"]] for r in scored],
+        [holdout_rank[r["run_id"]] for r in scored],
+    )
+    bias_detected = by_val[0]["run_id"] != by_holdout[0]["run_id"]
+
+    lines = [
+        "# Holdout Evaluation Report",
+        "",
+        f"Re-trained top-{len(scored)} configs with `holdout_eval: true`; each row's "
+        "`val_bpb`/`holdout_val_bpb` come from the same trained model.",
+        "",
+        "| run_id | (was) | val_bpb | holdout_val_bpb | delta | val_rank | holdout_rank |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for r in scored:
+        delta = r["holdout_val_bpb"] - r["val_bpb"]
+        lines.append(
+            f"| {r['run_id']} | {r['original_run_id']} | {r['val_bpb']:.6f} | "
+            f"{r['holdout_val_bpb']:.6f} | {delta:+.6f} | {val_rank[r['run_id']]} | "
+            f"{holdout_rank[r['run_id']]} |"
+        )
+    lines += [
+        "",
+        f"Spearman(val_rank, holdout_rank) = {rho:.4f}",
+        "",
+        "**SELECTION BIAS DETECTED**: best-on-val config is not best-on-holdout."
+        if bias_detected else
+        "No selection bias detected: best-on-val config is also best-on-holdout.",
+    ]
+    report = "\n".join(lines) + "\n"
+
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.write_text(report)
+    print(f"\n{report}")
+    print(f"[holdout_eval] Report written to {REPORT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

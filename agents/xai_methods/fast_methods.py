@@ -1,12 +1,18 @@
-"""Fast XAI methods: Ablation and Partial Dependence analysis."""
+"""Fast XAI methods: real (non-mocked) attention-head ablation."""
 
 import torch
-from typing import Dict, Tuple, List
-import numpy as np
+from typing import Callable, Dict, List
 
 
 class FastXAIMethods:
-    """Fast, practical XAI techniques for Agent 2."""
+    """Fast, practical XAI techniques for Agent 2.
+
+    These methods only make sense while a trained model is still live in
+    memory (train.py runs as a subprocess/SSH session and never checkpoints
+    to disk), so `top_k_ablation_study` is called from inside train.py right
+    after its final evaluation — not from Agent 2, which only ever receives
+    a metrics dict.
+    """
 
     def __init__(self, device: str = "cuda"):
         self.device = device
@@ -14,152 +20,79 @@ class FastXAIMethods:
     def top_k_ablation_study(
         self,
         model,
-        val_dataloader,
-        evaluate_fn,
+        eval_fn: Callable[[object], float],
         k: int = 10,
         verbose: bool = True,
     ) -> Dict[str, float]:
         """
-        Ablate top-K attention heads by weight magnitude.
+        Ablate the top-K attention heads (ranked by the norm of the
+        `c_proj.weight` input-column slice that carries each head's output
+        into the residual stream) and measure the change in `eval_fn`.
+
+        A head is ablated by zeroing that column slice — this removes the
+        head's contribution to the block's output without needing a
+        per-head scale parameter (the model has none).
+
+        Args:
+            model: live GPT instance (see train.py's CausalSelfAttention —
+                per-head slices live in `c_proj`'s input columns, not in a
+                separate `c_attn`/`head_scales`).
+            eval_fn: callable(model) -> bpb. Should be a *cheap* evaluation
+                (small fixed step count), independent of the official
+                full-budget `evaluate_bpb` metric, since this runs k+1
+                forward passes on top of training.
+            k: number of heads to ablate, ranked by weight magnitude.
 
         Returns:
-            {head_description: importance_score}
+            {"L{layer}_H{head}": impact} where impact = baseline_bpb - ablated_bpb
+            (positive = ablating this head hurt bpb, i.e. head is important).
         """
-        # Get baseline performance
-        baseline_bpb = evaluate_fn(model, val_dataloader)
+        baseline_bpb = eval_fn(model)
 
-        impacts = {}
-        head_count = 0
+        candidates = []
+        for layer_idx, block in enumerate(model.transformer.h):
+            attn = block.attn
+            head_dim = attn.head_dim
+            for head_idx in range(attn.n_head):
+                start, end = head_idx * head_dim, (head_idx + 1) * head_dim
+                magnitude = torch.norm(attn.c_proj.weight[:, start:end]).item()
+                candidates.append((layer_idx, head_idx, magnitude))
 
-        # Identify top-K heads by weight magnitude
-        for layer_idx, layer in enumerate(model.transformer.h):
-            # Attention weights: (n_head, 3*n_embd)
-            attn_weights = layer.attn.c_attn.weight  # Shape: (3*n_embd, n_embd)
-            n_head = model.config.n_head
-            head_dim = model.config.n_embd // n_head
+        candidates.sort(key=lambda item: item[2], reverse=True)
+        top_candidates = candidates[:k]
 
-            # Per-head magnitude
-            head_magnitudes = []
-            for head_idx in range(n_head):
-                # Extract weights for this head
-                start = head_idx * head_dim
-                end = (head_idx + 1) * head_dim
-                head_weight = attn_weights[:, start:end]
-                magnitude = torch.norm(head_weight).item()
-                head_magnitudes.append((head_idx, magnitude))
+        impacts: Dict[str, float] = {}
+        for count, (layer_idx, head_idx, _magnitude) in enumerate(top_candidates, start=1):
+            attn = model.transformer.h[layer_idx].attn
+            head_dim = attn.head_dim
+            start, end = head_idx * head_dim, (head_idx + 1) * head_dim
 
-            # Sort by magnitude, keep top-K
-            head_magnitudes.sort(key=lambda x: x[1], reverse=True)
+            with torch.no_grad():
+                original = attn.c_proj.weight[:, start:end].clone()
+                attn.c_proj.weight[:, start:end] = 0.0
+            try:
+                ablated_bpb = eval_fn(model)
+            finally:
+                with torch.no_grad():
+                    attn.c_proj.weight[:, start:end] = original
 
-            for head_idx, magnitude in head_magnitudes[:k]:
-                # Temporarily disable this head
-                original_scale = layer.attn.head_scales[head_idx].clone()
-                layer.attn.head_scales[head_idx] *= 0.0  # Ablate
-
-                # Evaluate
-                ablated_bpb = evaluate_fn(model, val_dataloader)
-
-                # Restore
-                layer.attn.head_scales[head_idx] = original_scale
-
-                # Record impact
-                impact = baseline_bpb - ablated_bpb  # Positive = important
-                head_key = f"L{layer_idx}_H{head_idx}"
-                impacts[head_key] = impact
-
-                head_count += 1
-                if verbose and head_count % 5 == 0:
-                    print(f"Ablated {head_count} heads...")
+            impacts[f"L{layer_idx}_H{head_idx}"] = baseline_bpb - ablated_bpb
+            if verbose and count % 5 == 0:
+                print(f"[FastXAI] Ablated {count}/{len(top_candidates)} heads...")
 
         return impacts
-
-    def partial_dependence_hyperparams(
-        self,
-        model,
-        val_dataloader,
-        evaluate_fn,
-        hyperparams_used: Dict[str, float],
-        param_ranges: Dict[str, Tuple[float, float, int]] = None,
-    ) -> Dict[str, List[Tuple[float, float]]]:
-        """
-        Vary key hyperparameters, measure effect on validation metric.
-
-        param_ranges format:
-            {"learning_rate": (1e-5, 1e-3, 5)}  # min, max, num_points
-        """
-        if param_ranges is None:
-            param_ranges = {
-                "n_layers": (1, min(hyperparams_used.get("n_layers", 12) + 4, 24), 3),
-                "n_embd": (256, 1024, 3),
-            }
-
-        results = {}
-
-        for param_name, (param_min, param_max, num_points) in param_ranges.items():
-            if param_name not in hyperparams_used:
-                continue
-
-            values = np.linspace(param_min, param_max, num_points)
-            curve = []
-
-            for value in values:
-                # Note: This is a MOCK - actual implementation would retrain
-                # For now, we estimate based on current model
-                # In practice, this would involve actual model training with varied params
-                estimated_bpb = self._estimate_metric_for_param(
-                    param_name, value, hyperparams_used
-                )
-                curve.append((value, estimated_bpb))
-
-            results[param_name] = curve
-
-        return results
-
-    def _estimate_metric_for_param(
-        self, param_name: str, param_value: float, baseline_params: Dict[str, float]
-    ) -> float:
-        """
-        Heuristic estimation of metric for parameter variation.
-        (Placeholder - in production would do actual training)
-        """
-        # These are mock heuristics
-        baseline_bpb = 1.0
-
-        if param_name == "learning_rate":
-            # Learning rate has sweet spot around 1e-3
-            optimal = 1e-3
-            distance = abs(np.log10(param_value) - np.log10(optimal))
-            return baseline_bpb + distance * 0.1
-
-        elif param_name == "n_layers":
-            baseline_layers = baseline_params.get("n_layers", 12)
-            if param_value == baseline_layers:
-                return baseline_bpb
-            elif param_value > baseline_layers:
-                # More layers helps until diminishing returns
-                return baseline_bpb - (param_value - baseline_layers) * 0.01
-            else:
-                return baseline_bpb + (baseline_layers - param_value) * 0.02
-
-        elif param_name == "n_embd":
-            baseline_embd = baseline_params.get("n_embd", 512)
-            if param_value == baseline_embd:
-                return baseline_bpb
-            # Larger embedding helps
-            return baseline_bpb - np.log2(param_value / baseline_embd) * 0.05
-
-        return baseline_bpb
 
     def detect_stuck_signal(
         self, all_impacts: List[Dict[str, float]], threshold: int = 5
     ) -> bool:
         """
-        Detect if model is stuck (same pattern as N previous models).
+        Detect if model is stuck (same top-impact heads across N previous
+        ablation runs — a sign the architecture search isn't exploring
+        anything new).
         """
         if len(all_impacts) < threshold:
             return False
 
-        # Compare top-5 important heads across last N models
         recent_tops = []
         for impacts_dict in all_impacts[-threshold:]:
             if not impacts_dict:
@@ -167,35 +100,8 @@ class FastXAIMethods:
             top_5 = sorted(impacts_dict.items(), key=lambda x: x[1], reverse=True)[:5]
             recent_tops.append([head for head, _ in top_5])
 
-        # Check if all recent models have similar top heads
         if not recent_tops:
             return False
 
         first_top = set(recent_tops[0])
-        all_similar = all(set(tops) == first_top for tops in recent_tops)
-
-        return all_similar
-
-
-class ThoroughXAIMethods:
-    """Thorough but slower XAI methods (for future use)."""
-
-    def circuits_analysis(self, model, input_ids: torch.Tensor) -> Dict[str, List[str]]:
-        """
-        Trace attention circuits through the model.
-        (Placeholder for future implementation)
-        """
-        # This would trace information flow through layers
-        # Requires more sophisticated analysis
-        pass
-
-    def svcca_analysis(
-        self, model1_activations, model2_activations
-    ) -> Dict[int, float]:
-        """
-        Compare internal representations using SVCCA.
-        (Placeholder for future implementation)
-        """
-        # Singular Vector Canonical Correlation Analysis
-        # Requires activation recording from two models
-        pass
+        return all(set(tops) == first_top for tops in recent_tops)

@@ -12,6 +12,7 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import gc
+import json
 import math
 import sys
 import time
@@ -44,7 +45,7 @@ def _attn_func(q, k, v, window_size):
         y = F.scaled_dot_product_attention(q2, k2, v2, attn_mask=mask)
     return y.transpose(1, 2)        # [B, T, Hq, D]
 
-from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
+from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb, get_token_bytes
 
 # ---------------------------------------------------------------------------
 # GPT Model
@@ -724,3 +725,100 @@ print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
+
+# ---------------------------------------------------------------------------
+# Held-out shard check (opt-in, off by default). The search loop's val_bpb
+# is measured against one pinned shard across 100+ accept/reject decisions —
+# a multiple-comparisons problem. This re-evaluates on a shard the search
+# never sees, but only when explicitly requested (scripts/holdout_eval.py
+# sets holdout_eval: true for a small number of final top-K candidates —
+# never for every run, since it doubles eval cost for no benefit otherwise).
+# evaluate_bpb itself (the official metric) is untouched by this.
+# ---------------------------------------------------------------------------
+
+try:
+    _do_holdout = False
+    if os.path.exists(_hp_path):
+        with open(_hp_path) as _f:
+            _do_holdout = bool((_yaml.safe_load(_f) or {}).get("holdout_eval", False))
+    if _do_holdout:
+        from prepare import evaluate_bpb_holdout
+        model.eval()
+        with autocast_ctx:
+            holdout_bpb = evaluate_bpb_holdout(model, tokenizer, DEVICE_BATCH_SIZE)
+        print(f"holdout_val_bpb:  {holdout_bpb:.6f}")
+except Exception as _e:
+    print(f"[holdout_eval] Could not evaluate holdout shard: {_e}")
+sys.stdout.flush()
+
+# ---------------------------------------------------------------------------
+# Real interpretable signal for Agent 2 (no mocking, no fabricated numbers).
+#
+# 1) Free scalars: resid_lambdas/x0_lambdas/ve_gate are already-trained
+#    parameters sitting in memory — reading them costs zero extra GPU time.
+# 2) Head ablation: costs real GPU time (k+1 extra cheap eval passes), so it
+#    only runs here, inside the same process that already has the trained
+#    model, tokenizer, and val dataloader live — Agent 2 never receives a
+#    model object (train.py never checkpoints), so this is the only place
+#    real weight-based analysis is possible at all.
+# Both are wrapped defensively: a failure here must never invalidate an
+# otherwise-successful training run.
+# ---------------------------------------------------------------------------
+
+try:
+    resid_lambdas = model.resid_lambdas.detach().float().cpu().tolist()
+    x0_lambdas = model.x0_lambdas.detach().float().cpu().tolist()
+    ve_gate_norm = {
+        str(i): torch.norm(block.attn.ve_gate.weight.detach().float()).item()
+        for i, block in enumerate(model.transformer.h)
+        if block.attn.ve_gate is not None
+    }
+    print("interpretable_scalars: " + json.dumps({
+        "resid_lambdas": resid_lambdas,
+        "x0_lambdas": x0_lambdas,
+        "ve_gate_norm": ve_gate_norm,
+    }))
+except Exception as _e:
+    print(f"[interpretable_scalars] Could not extract: {_e}")
+sys.stdout.flush()
+
+try:
+    from agents.xai_methods.fast_methods import FastXAIMethods
+
+    _ablation_k = 3
+    if os.path.exists(_hp_path):
+        try:
+            with open(_hp_path) as _f:
+                _ablation_hp = _yaml.safe_load(_f) or {}
+            _ablation_k = int(_ablation_hp.get("ablation_k", _ablation_k))
+        except Exception:
+            pass
+    _ablation_k = max(0, min(_ablation_k, 20))  # bound worst-case extra eval passes
+
+    if _ablation_k > 0:
+        _ABLATION_EVAL_STEPS = 8  # cheap, fixed-size — independent of the official EVAL_TOKENS metric
+
+        @torch.no_grad()
+        def _cheap_eval_fn(m):
+            m.eval()
+            token_bytes = get_token_bytes(device="cuda")
+            loader = make_dataloader(tokenizer, DEVICE_BATCH_SIZE, MAX_SEQ_LEN, "val")
+            total_nats, total_bytes = 0.0, 0
+            with autocast_ctx:
+                for _ in range(_ABLATION_EVAL_STEPS):
+                    ax, ay, _epoch = next(loader)
+                    loss_flat = m(ax, ay, reduction='none').view(-1)
+                    y_flat = ay.view(-1)
+                    nbytes = token_bytes[y_flat]
+                    mask = nbytes > 0
+                    total_nats += (loss_flat * mask).sum().item()
+                    total_bytes += nbytes.sum().item()
+            m.train()
+            return total_nats / (math.log(2) * total_bytes)
+
+        xai = FastXAIMethods()
+        head_ablation_impacts = xai.top_k_ablation_study(model, _cheap_eval_fn, k=_ablation_k)
+        print("head_ablation_impacts: " + json.dumps(head_ablation_impacts))
+except Exception as _e:
+    print(f"[head_ablation] Could not run ablation study: {_e}")
+sys.stdout.flush()

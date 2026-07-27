@@ -28,6 +28,16 @@ agent1:
   scalar_lr_min: 0.05
   scalar_lr_max: 2.0
 
+  # Tier 1 surrogate (Random Forest + Expected Improvement, see
+  # state/surrogate.py and agents/search_planner.py). Degrades automatically
+  # to the evidence/heuristic path below when scipy/scikit-learn aren't
+  # installed or there isn't enough data yet -- these keys don't need to be
+  # touched for that fallback to work.
+  use_surrogate: true
+  surrogate_min_observations: 15   # Sobol cold-start size before the RF fits
+  surrogate_cycle_runs: 10         # runs per block-rotation cycle (used once interaction blocking lands)
+  interaction_threshold: 0.15      # reserved for interaction-aware blocking (not used yet)
+
 # AGENT 2: XAI Specialist
 agent2:
   # Which XAI method to use: "fast" or "thorough"
@@ -47,6 +57,10 @@ agent2:
   # Only re-analyze what changed (incremental analysis)
   incremental: true
 
+  # Auto-generate charts (hyperparameter importance, head heatmap, per-layer
+  # scalars) and embed them in every report's markdown. See state/visualize.py.
+  generate_charts: true
+
 # AGENT 3: Report Analyst
 agent3:
   # Summarize every N new reports (batch size)
@@ -57,6 +71,11 @@ agent3:
 
   # Include previous summary in new summary (preserve history)
   preserve_history: true
+
+  # Auto-generate charts (val_bpb trend, importance evolution, status
+  # distribution, layer importance) and embed them in every summary's
+  # markdown. See state/visualize.py.
+  generate_charts: true
 
 # ORCHESTRATOR
 orchestrator:

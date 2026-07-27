@@ -32,6 +32,21 @@ LR_SAFE_RANGES = {
     "scalar_lr": (0.05, 2.0),
 }
 
+# Search space for the Tier 1 surrogate (Sobol cold start + EI acquisition,
+# see state/surrogate.py and agents/search_planner.py). n_layer/n_embd/n_head
+# ranges below match the bounds already used inline throughout
+# _evidence_adjustment/_heuristic_adjustment/_radical_change (not imported
+# from there deliberately -- those methods are kept byte-for-byte unchanged
+# since 4 existing unit tests call them directly; this is a separate,
+# additive constant for the new surrogate-driven code path only).
+# weight_decay/warmup_ratio/batch_size were never tuned by Agent 1 before
+# Tier 1 even though state/results_analysis.HYPERPARAM_COLUMNS already
+# tracks them -- these are new exploration ranges, narrower than train.py's
+# own hard safety clamps (which remain the outer safety net regardless).
+ARCH_SAFE_RANGES = {"n_layer": (4, 24), "n_embd": (128, 1024), "n_head": (1, 16)}
+OTHER_SAFE_RANGES = {"weight_decay": (0.0, 0.5), "warmup_ratio": (0.0, 0.2), "batch_size": (2048, 32768)}
+SEARCH_SPACE = {**LR_SAFE_RANGES, **ARCH_SAFE_RANGES, **OTHER_SAFE_RANGES}
+
 
 class Agent1TrainingSpecialist:
     """Trains models and adjusts hyperparameters based on agent feedback."""
@@ -53,6 +68,20 @@ class Agent1TrainingSpecialist:
             )
             for key in LR_KEYS
         }
+        # agents_config.yaml's agent2.ablation_k previously had no effect at all
+        # (train.py never ran ablation and never read it). It's forwarded through
+        # model_hyperparams.yaml here since that's the only file train.py reads.
+        self.ablation_k = int(self.config.get("agent2", {}).get("ablation_k", 3))
+
+        # Tier 1 surrogate (see agents/search_planner.py, state/surrogate.py).
+        # use_surrogate defaults on; _surrogate_adjustment degrades to None
+        # (triggering the existing evidence/heuristic fallback unchanged)
+        # whenever scipy/scikit-learn aren't installed or there isn't yet
+        # enough data to fit -- this flag just lets it be disabled outright.
+        self.use_surrogate = bool(self.agent1_config.get("use_surrogate", True))
+        self.surrogate_cold_start_n = int(self.agent1_config.get("surrogate_min_observations", 15))
+        self.surrogate_cycle_runs = int(self.agent1_config.get("surrogate_cycle_runs", 10))
+        self.surrogate_interaction_threshold = float(self.agent1_config.get("interaction_threshold", 0.15))
 
         self.model_config_path = Path("model_hyperparams.yaml")
         self.current_hyperparams = self._init_hyperparams()
@@ -91,6 +120,7 @@ class Agent1TrainingSpecialist:
             "batch_size": 8192,  # tokens per optimizer step (TOTAL_BATCH_SIZE)
             "warmup_ratio": 0.0,
             "weight_decay": 0.2,
+            "ablation_k": self.ablation_k,
         }
 
     def _save_hyperparams(self):
@@ -138,19 +168,31 @@ class Agent1TrainingSpecialist:
         detected_stagnation = self._detect_stagnation(recent_results, latest_val_bpb)
         effective_stuck_signal = stuck_signal or detected_stagnation
 
-        # PRIMARY: use report-driven evidence when available
-        new_hyperparams = self._evidence_adjustment(
-            latest_summary=latest_summary,
-            evidence=evidence,
-            stuck_signal=effective_stuck_signal,
-            iteration=iteration,
-        )
-
-        # FALLBACK: use heuristics if evidence is sparse
-        if not evidence:
-            new_hyperparams = self._heuristic_adjustment(
-                latest_summary, effective_stuck_signal, iteration
+        # PRIMARY: the Tier 1 surrogate (Sobol cold start -> EI acquisition,
+        # see agents/search_planner.py), unless stuck -- radical_change stays
+        # wired exactly as before regardless of the surrogate's availability.
+        new_hyperparams = None
+        if effective_stuck_signal:
+            new_hyperparams = self._evidence_adjustment(
+                latest_summary=latest_summary, evidence=evidence, stuck_signal=True, iteration=iteration,
             )
+        elif self.use_surrogate:
+            new_hyperparams = self._surrogate_adjustment(iteration)
+
+        # FALLBACK: report-driven evidence, then heuristics, exactly as
+        # before Tier 1 existed -- reached whenever the surrogate can't run
+        # yet (deps missing, not enough data) or returns nothing useful.
+        if new_hyperparams is None:
+            new_hyperparams = self._evidence_adjustment(
+                latest_summary=latest_summary,
+                evidence=evidence,
+                stuck_signal=effective_stuck_signal,
+                iteration=iteration,
+            )
+            if not evidence:
+                new_hyperparams = self._heuristic_adjustment(
+                    latest_summary, effective_stuck_signal, iteration
+                )
 
         # OPTIONAL: If LLM enabled, get Claude suggestions
         if self.use_llm and latest_summary:
@@ -177,6 +219,28 @@ class Agent1TrainingSpecialist:
 
         print(f"[Agent 1] Next hyperparams: {new_hyperparams}")
         return new_hyperparams
+
+    def _surrogate_adjustment(self, iteration: int) -> Optional[Dict[str, Any]]:
+        """Delegates to agents.search_planner. Returns None (triggering the
+        unchanged evidence/heuristic fallback in decide_next_hyperparams)
+        whenever scipy/scikit-learn aren't installed, the surrogate can't
+        fit yet (too little data), or every dimension is currently frozen.
+        """
+        try:
+            from agents import search_planner
+        except ImportError:
+            return None
+        from state.results_analysis import load_results
+        rows = load_results("results.tsv")
+        return search_planner.propose_next(
+            rows=rows,
+            current_best_hyperparams=self.current_hyperparams,
+            current_best_val_bpb=self.best_val_bpb,
+            iteration=iteration,
+            cold_start_n=self.surrogate_cold_start_n,
+            cycle_runs=self.surrogate_cycle_runs,
+            interaction_threshold=self.surrogate_interaction_threshold,
+        )
 
     def _should_stop_early(
         self,
@@ -554,7 +618,9 @@ class Agent1TrainingSpecialist:
                 print("[Agent 1] Remote GPU server configured — running training remotely")
                 metrics = run_training_remote(
                     hyperparams_local_path=str(self.model_config_path),
-                    timeout=self.training_budget + 60,
+                    # +120s slack: covers the head-ablation study train.py now
+                    # runs after its official eval, plus SSH/data overhead.
+                    timeout=self.training_budget + 120,
                 )
                 print(f"[Agent 1] Remote training complete. Metrics: {metrics}")
                 return metrics
@@ -570,7 +636,10 @@ class Agent1TrainingSpecialist:
                 ["uv", "run", "train.py"],
                 capture_output=True,
                 text=True,
-                timeout=self.training_budget + 30,
+                # +90s slack (not +30s): train.py now also runs a real head-ablation
+                # study after the official eval (see train.py), which costs a few
+                # extra cheap forward passes on top of the training budget.
+                timeout=self.training_budget + 90,
             )
             metrics = self._parse_training_output(result.stdout)
             print(f"[Agent 1] Training complete. Metrics: {metrics}")
@@ -624,12 +693,29 @@ class Agent1TrainingSpecialist:
         "num_steps:": ("num_steps", int),
         "num_params_m:": ("num_params_M", float),
         "depth:": ("depth", int),
+        "holdout_val_bpb:": ("holdout_val_bpb", float),
     }
+
+    # Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`
+    # carry real per-run evidence (see train.py) as a JSON blob rather than a
+    # single scalar; keyed generically so any future `<name>: {json}` line is
+    # picked up without another parser change.
+    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts"}
 
     def _parse_training_output(self, stdout: str) -> Dict[str, Any]:
         """Parse all metrics from train.py's final summary block."""
         metrics: Dict[str, Any] = {"val_bpb": float("inf")}
         for line in stdout.splitlines():
+            if ":" in line:
+                prefix, _, rest = line.partition(":")
+                key = prefix.strip()
+                if key in self._JSON_OUTPUT_KEYS:
+                    try:
+                        metrics[key] = json.loads(rest.strip())
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    continue
+
             parts = line.split()
             if not parts:
                 continue

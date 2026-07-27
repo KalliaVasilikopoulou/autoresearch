@@ -7,6 +7,7 @@ to:
   3. Stream stdout/stderr back and parse the metrics.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Dict, Any
@@ -172,7 +173,13 @@ _OUTPUT_FIELDS = {
     "num_steps:": ("num_steps", int),
     "num_params_m:": ("num_params_M", float),
     "depth:": ("depth", int),
+    "holdout_val_bpb:": ("holdout_val_bpb", float),
 }
+
+
+# Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`
+# carry real per-run evidence as a JSON blob rather than a single scalar.
+_JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts"}
 
 
 def _parse_output(stdout: str) -> Dict[str, Any]:
@@ -183,6 +190,16 @@ def _parse_output(stdout: str) -> Dict[str, Any]:
         "status": "remote_ok",
     }
     for line in stdout.splitlines():
+        if ":" in line:
+            prefix, _, rest = line.partition(":")
+            key = prefix.strip()
+            if key in _JSON_OUTPUT_KEYS:
+                try:
+                    metrics[key] = json.loads(rest.strip())
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                continue
+
         key = line.split()[0].lower() if line.split() else ""
         if key in _OUTPUT_FIELDS:
             dest, cast = _OUTPUT_FIELDS[key]

@@ -28,11 +28,36 @@ COLUMNS = [
     "num_steps",
     "depth",
     "status",
+    "holdout_val_bpb",
 ]
 
 # Karpathy's published baseline for DEPTH=8 on the same dataset/budget.
 # Update this if you find a more precise figure.
 KARPATHY_BASELINE_VAL_BPB = None  # fill in once you have it
+
+
+def _ensure_current_schema(path: Path) -> None:
+    """Guard against silently appending rows under a stale/mismatched header
+    (this happened for real: a prior schema change left 59 rows under one
+    header and 23 rows under a column count the header didn't match, making
+    the file unparseable as a table). If the file's first line doesn't match
+    COLUMNS, move it aside — nothing is lost — so future appends start clean.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    with open(path, newline="") as f:
+        # csv.writer terminates lines with \r\n regardless of platform —
+        # strip both, not just \n, or this never matches even a header this
+        # same code just wrote (and re-triggers the rename below every call).
+        first_line = f.readline().rstrip("\r\n")
+    expected = "\t".join(COLUMNS)
+    if first_line == expected:
+        return
+    backup = path.with_name(f"{path.name}.legacy-{time.strftime('%Y%m%d%H%M%S')}")
+    if backup.exists():
+        backup = backup.with_name(f"{backup.name}-{os.getpid()}")
+    path.rename(backup)
+    print(f"[ResultsLogger] {path} had a stale/mismatched header — moved to {backup}, starting fresh")
 
 
 def log_result(
@@ -43,6 +68,7 @@ def log_result(
 ) -> None:
     """Append one row to results.tsv."""
     path = Path(results_path)
+    _ensure_current_schema(path)
     write_header = not path.exists() or path.stat().st_size == 0
 
     row = {
@@ -66,6 +92,7 @@ def log_result(
         "num_steps": metrics.get("num_steps", ""),
         "depth": metrics.get("depth", hyperparams.get("n_layer", "")),
         "status": metrics.get("status", ""),
+        "holdout_val_bpb": metrics.get("holdout_val_bpb", ""),
     }
 
     with open(path, "a", newline="") as f:

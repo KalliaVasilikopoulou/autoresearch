@@ -3,12 +3,22 @@
 import os
 import json
 import math
-import random
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from agents.xai_methods.fast_methods import FastXAIMethods
 from agents.protocols import AnalysisEvidence
-from agents.agent1_training_specialist import LR_KEYS, LR_DEFAULTS
+from agents.agent1_training_specialist import LR_DEFAULTS
+from state.results_analysis import (
+    HYPERPARAM_COLUMNS,
+    hyperparameter_correlations,
+    importance_from_correlations,
+    load_results,
+)
+from state.visualize import (
+    chart_head_importance_heatmap,
+    chart_hyperparameter_importance,
+    chart_layer_scalars,
+)
 import yaml
 
 
@@ -20,8 +30,10 @@ class Agent2XAISpecialist:
         self.agent2_config = self.config.get("agent2", {})
         self.use_llm = self.agent2_config.get("use_llm", False)
         self.xai_method = self.agent2_config.get("xai_method", "fast")
+        self.generate_charts = bool(self.agent2_config.get("generate_charts", True))
         self.reports_dir = Path("reports/agent2_reports")
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self.visuals_dir = Path("reports/visuals")
 
         # Initialize XAI methods
         if self.xai_method == "fast":
@@ -30,7 +42,8 @@ class Agent2XAISpecialist:
             raise ValueError(f"Unknown XAI method: {self.xai_method}")
 
         self.report_counter = self._count_existing_reports()
-        self.all_impacts = []  # Track impacts across all models for stuck detection
+        self.results_path = Path("results.tsv")
+        self.all_impacts = []  # Real head-ablation impacts, one dict per run that had them (for stuck detection)
 
         # Claude client (lazy loaded if needed)
         self.claude = None
@@ -76,23 +89,30 @@ class Agent2XAISpecialist:
               f"matrix_lr={float(hyperparams.get('matrix_lr', LR_DEFAULTS['matrix_lr'])):.2e}")
 
         report_id = f"report_{self.report_counter:04d}"
-        stuck_signal = (not math.isfinite(val_bpb)) or (val_bpb > 1.32) or (status in {"remote_error", "simulated"})
+
+        head_ablation_impacts = run_metrics.get("head_ablation_impacts") or {}
+        if head_ablation_impacts:
+            self.all_impacts.append(head_ablation_impacts)
+        # Ablation-pattern stuck detection (real) complements the val_bpb-threshold
+        # heuristic below — either signal is enough to trigger Agent 1's radical change.
+        ablation_stuck = self.xai.detect_stuck_signal(self.all_impacts) if self.all_impacts else False
+        stuck_signal = (
+            (not math.isfinite(val_bpb))
+            or (val_bpb > 1.32)
+            or (status in {"remote_error", "simulated"})
+            or ablation_stuck
+        )
         confidence = 0.9 if status in {"remote_ok", "ok"} and math.isfinite(val_bpb) else 0.72
 
-        importance = {key: (0.6 if hyperparams.get(key) else 0.0) for key in LR_KEYS}
-        importance["n_layer"] = 0.4 if hyperparams.get("n_layer") else 0.0
-        importance["n_embd"] = 0.3 if hyperparams.get("n_embd") else 0.0
-
-        if result_payload.get("status") == "dry_run":
-            importance = {key: 0.5 for key in LR_KEYS}
-            importance["n_layer"] = 0.3
-            importance["n_embd"] = 0.2
-
+        # Placeholder evidence.important_heads/hyperparameter_importance below are
+        # immediately replaced with real (or explicitly omitted) values inside
+        # _render_markdown_report — kept here only so the dataclass is never
+        # constructed with unset required fields.
         evidence = AnalysisEvidence(
             report_id=report_id,
             model_id=result_payload.get("run_id", report_id),
-            important_heads=[{"head": "L0_H0", "impact": 0.01}],
-            hyperparameter_importance=importance,
+            important_heads=[],
+            hyperparameter_importance={},
             stuck_signal=stuck_signal,
             confidence=confidence,
             notes=[
@@ -117,72 +137,21 @@ class Agent2XAISpecialist:
         print(f"[Agent 2] Analysis complete: {report_path} (stuck={stuck_signal})")
         return evidence
 
-    def _deterministic_head_importance(
-        self,
-        run_id: str,
-        n_layer: int,
-        n_head: int,
-        val_bpb: float,
-    ) -> Dict[str, float]:
-        """Create stable per-head importance values for all layer/head pairs."""
-        finite_val = val_bpb if math.isfinite(val_bpb) else 1.8
-        normalized_quality = max(0.0, min(1.0, (1.7 - finite_val) / 0.7))
-        middle = max(0.0, (n_layer - 1) / 2.0)
-        impacts: Dict[str, float] = {}
+    def _real_hyperparameter_importance(self) -> Dict[str, Dict[str, Any]]:
+        """Spearman correlation of each hyperparameter against val_bpb across
+        every historical run in results.tsv. Returns {} for parameters with
+        fewer than 4 comparable runs — never a fabricated number.
+        """
+        rows = load_results(self.results_path)
+        return hyperparameter_correlations(rows)
 
-        for layer_idx in range(n_layer):
-            if n_layer > 1:
-                layer_center_dist = abs(layer_idx - middle) / middle if middle > 0 else 0.0
-            else:
-                layer_center_dist = 0.0
-            layer_profile = 1.0 - 0.45 * layer_center_dist
-
-            for head_idx in range(n_head):
-                rng = random.Random(f"{run_id}:{layer_idx}:{head_idx}")
-                head_wave = 0.7 + 0.3 * math.sin((head_idx + 1) * 0.9 + layer_idx * 0.15)
-                jitter = rng.uniform(-0.15, 0.15)
-                raw = (layer_profile * head_wave) + jitter
-                scaled = raw * (0.008 + 0.01 * normalized_quality)
-                impacts[f"L{layer_idx}_H{head_idx}"] = round(scaled, 6)
-
-        return impacts
-
-    def _estimate_hyperparameter_importance(
-        self,
-        hyperparams: Dict[str, Any],
-        val_bpb: float,
-    ) -> Dict[str, float]:
-        """Estimate normalized hyperparameter importance scores [0, 1]."""
-        finite_val = val_bpb if math.isfinite(val_bpb) else 1.8
-        quality = max(0.0, min(1.0, (1.7 - finite_val) / 0.7))
-
-        n_layer = int(hyperparams.get("n_layer", 12) or 12)
-        n_embd = int(hyperparams.get("n_embd", 512) or 512)
-        n_head = int(hyperparams.get("n_head", 8) or 8)
-        weight_decay = float(hyperparams.get("weight_decay", 0.1) or 0.1)
-        warmup_ratio = float(hyperparams.get("warmup_ratio", 0.1) or 0.1)
-
-        depth_importance = min(1.0, 0.35 + 0.02 * abs(n_layer - 12) + 0.1 * quality)
-        width_importance = min(1.0, 0.3 + 0.0003 * abs(n_embd - 768) + 0.1 * quality)
-        heads_importance = min(1.0, 0.2 + 0.03 * abs(n_head - 8) + 0.08 * quality)
-        wd_importance = min(1.0, 0.15 + 0.6 * abs(weight_decay - 0.1))
-        warmup_importance = min(1.0, 0.18 + 0.9 * abs(warmup_ratio - 0.1))
-
-        result = {
-            "n_layer": round(depth_importance, 6),
-            "n_embd": round(width_importance, 6),
-            "n_head": round(heads_importance, 6),
-            "weight_decay": round(wd_importance, 6),
-            "warmup_ratio": round(warmup_importance, 6),
-        }
-        # Same log-distance-from-default heuristic as before, applied once per
-        # LR group (each group has its own default/scale, unlike the old
-        # single "learning_rate" key).
-        for key in LR_KEYS:
-            lr = float(hyperparams.get(key, LR_DEFAULTS[key]) or LR_DEFAULTS[key])
-            lr_log = abs(math.log10(max(lr, 1e-12)) - math.log10(LR_DEFAULTS[key]))
-            result[key] = round(min(1.0, 0.45 + 0.15 * lr_log + 0.2 * (1.0 - quality)), 6)
-        return result
+    def _real_head_importance(self, run_metrics: Dict[str, Any]) -> Dict[str, float]:
+        """Real per-head ablation impacts measured by train.py this run, if any
+        (see FastXAIMethods.top_k_ablation_study). Empty when ablation didn't
+        run (e.g. disabled or it errored) — never backfilled with a guess.
+        """
+        impacts = run_metrics.get("head_ablation_impacts")
+        return dict(impacts) if isinstance(impacts, dict) else {}
 
     def _render_markdown_report(
         self,
@@ -195,15 +164,24 @@ class Agent2XAISpecialist:
         run_metrics = run_metrics or {}
         n_layer = int(hyperparams.get("n_layer", 12) or 12)
         n_head = int(hyperparams.get("n_head", 8) or 8)
-        head_impacts = self._deterministic_head_importance(
-            evidence.model_id,
-            n_layer=n_layer,
-            n_head=n_head,
-            val_bpb=val_bpb,
-        )
-        hyper_importance = self._estimate_hyperparameter_importance(hyperparams, val_bpb)
 
-        # Keep structured evidence aligned with detailed report metrics.
+        # Real per-head signal: only present when train.py actually ran the
+        # ablation study this run (see FastXAIMethods.top_k_ablation_study).
+        # Empty, not fabricated, when it didn't.
+        head_impacts = self._real_head_importance(run_metrics)
+        ablation_ran = bool(head_impacts)
+
+        # Real cross-run signal: correlation of each hyperparameter against
+        # historical val_bpb. Params with too little history are simply
+        # absent, not zero-filled.
+        hyper_correlations = self._real_hyperparameter_importance()
+        hyper_importance = importance_from_correlations(hyper_correlations)
+
+        # Real, zero-extra-cost per-layer signal: already-trained scalar
+        # parameters (see train.py). Always available (unless extraction
+        # itself failed, in which case it's absent, not invented).
+        layer_scalars = run_metrics.get("interpretable_scalars") or {}
+
         evidence.important_heads = [
             {"head": head, "impact": impact}
             for head, impact in sorted(
@@ -215,41 +193,18 @@ class Agent2XAISpecialist:
         layer_to_values: Dict[int, List[float]] = {idx: [] for idx in range(n_layer)}
         for key, impact in head_impacts.items():
             layer_idx = int(key.split("_")[0][1:])
-            layer_to_values[layer_idx].append(impact)
+            layer_to_values.setdefault(layer_idx, []).append(impact)
 
         abs_layer_mass = {
             idx: sum(abs(v) for v in values) for idx, values in layer_to_values.items()
         }
-        total_abs_mass = sum(abs_layer_mass.values()) or 1.0
-        layer_share = {
-            idx: (100.0 * abs_layer_mass[idx] / total_abs_mass) for idx in range(n_layer)
-        }
+        total_abs_mass = sum(abs_layer_mass.values())
+        layer_share = (
+            {idx: (100.0 * abs_layer_mass[idx] / total_abs_mass) for idx in range(n_layer)}
+            if total_abs_mass > 0 else {}
+        )
 
         sorted_impacts = sorted(head_impacts.values())
-        bins = {
-            "<=0.000": 0,
-            "(0.000,0.004]": 0,
-            "(0.004,0.008]": 0,
-            "(0.008,0.012]": 0,
-            ">(0.012]": 0,
-        }
-        for val in sorted_impacts:
-            if val <= 0.0:
-                bins["<=0.000"] += 1
-            elif val <= 0.004:
-                bins["(0.000,0.004]"] += 1
-            elif val <= 0.008:
-                bins["(0.004,0.008]"] += 1
-            elif val <= 0.012:
-                bins["(0.008,0.012]"] += 1
-            else:
-                bins[">(0.012]"] += 1
-
-        median_idx = len(sorted_impacts) // 2
-        if len(sorted_impacts) % 2 == 0 and len(sorted_impacts) > 1:
-            median_impact = (sorted_impacts[median_idx - 1] + sorted_impacts[median_idx]) / 2.0
-        else:
-            median_impact = sorted_impacts[median_idx] if sorted_impacts else 0.0
 
         metadata = {
             "status": status,
@@ -267,17 +222,15 @@ class Agent2XAISpecialist:
             "val_bpb": val_bpb,
             "hyperparams": hyperparams,
             "hyperparameter_importance": hyper_importance,
+            "hyperparameter_importance_sample_size": {
+                param: info["n"] for param, info in hyper_correlations.items()
+            },
+            "ablation_ran": ablation_ran,
             "head_importance": head_impacts,
             "layer_importance_share_pct": {
-                str(layer_idx): round(layer_share[layer_idx], 4) for layer_idx in range(n_layer)
+                str(layer_idx): round(layer_share[layer_idx], 4) for layer_idx in layer_share
             },
-            "head_distribution": {
-                "mean": round(sum(sorted_impacts) / len(sorted_impacts), 6) if sorted_impacts else 0.0,
-                "median": round(median_impact, 6),
-                "min": round(sorted_impacts[0], 6) if sorted_impacts else 0.0,
-                "max": round(sorted_impacts[-1], 6) if sorted_impacts else 0.0,
-                "bins": bins,
-            },
+            "layer_scalars": layer_scalars,
             "metadata": metadata,
         }
 
@@ -297,54 +250,104 @@ class Agent2XAISpecialist:
             "## Evidence Summary",
             f"- Stuck signal: {'yes' if evidence.stuck_signal else 'no'}",
             f"- Confidence: {evidence.confidence:.2f}",
-            "- Important heads:",
+            f"- Head-level ablation ran this run: {'yes' if ablation_ran else 'no (see model_hyperparams.yaml: ablation_k)'}",
+            "- Important heads (measured via ablation):" if ablation_ran else "- Important heads: unavailable (ablation did not run)",
         ])
         for item in evidence.important_heads:
             lines.append(f"  - {item['head']}: {item['impact']:.6f}")
         lines.extend([
             "",
-            "## Hyperparameter Importance",
+            "## Hyperparameter Importance (Spearman |r| vs val_bpb, from results.tsv history)",
         ])
-        for param, score in hyper_importance.items():
-            lines.append(f"- {param}: {score:.6f}")
+        if hyper_importance:
+            for param, score in hyper_importance.items():
+                n = hyper_correlations[param]["n"]
+                r = hyper_correlations[param]["correlation"]
+                lines.append(f"- {param}: importance={score:.6f} (r={r:+.4f}, n={n})")
+        else:
+            lines.append("- Insufficient historical runs (need >=4 per parameter) — no importance scores yet")
+        missing_params = [p for p in HYPERPARAM_COLUMNS if p not in hyper_importance]
+        if missing_params:
+            lines.append(f"- Not enough history yet for: {', '.join(missing_params)}")
+
+        if self.generate_charts:
+            try:
+                chart_path = chart_hyperparameter_importance(
+                    hyper_importance,
+                    {p: info["n"] for p, info in hyper_correlations.items()},
+                    self.visuals_dir / f"{evidence.report_id}_importance.png",
+                )
+                if chart_path:
+                    lines.extend(["", f"![Hyperparameter importance](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 2] Chart generation (importance) failed: {_e}")
 
         lines.extend([
             "",
-            "## Attention Importance Distribution (Per Layer)",
-            "| Layer | Mean | Min | Max | Q90 Approx | Layer Share (%) |",
-            "|------:|-----:|----:|----:|-----------:|----------------:|",
+            "## Per-Layer Interpretable Scalars (measured, zero extra GPU cost)",
         ])
-        for layer_idx in range(n_layer):
-            values = sorted(layer_to_values[layer_idx])
-            if not values:
-                continue
-            q90_idx = min(len(values) - 1, int(0.9 * (len(values) - 1)))
-            q90 = values[q90_idx]
-            lines.append(
-                f"| L{layer_idx} | {sum(values)/len(values):.6f} | {values[0]:.6f} | {values[-1]:.6f} | {q90:.6f} | {layer_share[layer_idx]:.2f} |"
-            )
+        if layer_scalars:
+            resid_lambdas = layer_scalars.get("resid_lambdas", [])
+            x0_lambdas = layer_scalars.get("x0_lambdas", [])
+            ve_gate_norm = layer_scalars.get("ve_gate_norm", {})
+            lines.append("| Layer | resid_lambda | x0_lambda | ve_gate_norm |")
+            lines.append("|------:|-------------:|----------:|-------------:|")
+            for layer_idx in range(n_layer):
+                resid = resid_lambdas[layer_idx] if layer_idx < len(resid_lambdas) else float("nan")
+                x0 = x0_lambdas[layer_idx] if layer_idx < len(x0_lambdas) else float("nan")
+                ve = ve_gate_norm.get(str(layer_idx))
+                ve_str = f"{ve:.6f}" if isinstance(ve, (int, float)) else "n/a"
+                lines.append(f"| L{layer_idx} | {resid:.6f} | {x0:.6f} | {ve_str} |")
+        else:
+            lines.append("- Unavailable (extraction failed or run predates this feature)")
 
-        lines.extend([
-            "",
-            "## Full Per-Head Importance Matrix",
-            "| Layer | " + " | ".join([f"H{h}" for h in range(n_head)]) + " |",
-            "|------:|" + "|".join(["------:" for _ in range(n_head + 1)]) + "|",
-        ])
-        for layer_idx in range(n_layer):
-            row = [f"{head_impacts.get(f'L{layer_idx}_H{h}', 0.0):.6f}" for h in range(n_head)]
-            lines.append(f"| L{layer_idx} | " + " | ".join(row) + " |")
+        if self.generate_charts and layer_scalars:
+            try:
+                chart_path = chart_layer_scalars(
+                    layer_scalars, n_layer, self.visuals_dir / f"{evidence.report_id}_layers.png",
+                )
+                if chart_path:
+                    lines.extend(["", f"![Per-layer interpretable scalars](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 2] Chart generation (layers) failed: {_e}")
 
-        lines.extend([
-            "",
-            "## Global Head Importance Distribution",
-            f"- Total heads analyzed: {len(sorted_impacts)}",
-            f"- Mean impact: {structured['head_distribution']['mean']:.6f}",
-            f"- Median impact: {structured['head_distribution']['median']:.6f}",
-            f"- Min/Max impact: {structured['head_distribution']['min']:.6f} / {structured['head_distribution']['max']:.6f}",
-            "- Impact bins:",
-        ])
-        for label, count in bins.items():
-            lines.append(f"  - {label}: {count}")
+        if ablation_ran:
+            lines.extend([
+                "",
+                "## Attention Importance Distribution (Per Layer, from ablation)",
+                "| Layer | Mean | Min | Max | Layer Share (%) |",
+                "|------:|-----:|----:|----:|-----------------:|",
+            ])
+            for layer_idx in sorted(layer_to_values.keys()):
+                values = sorted(layer_to_values[layer_idx])
+                if not values:
+                    continue
+                share = layer_share.get(layer_idx, 0.0)
+                lines.append(
+                    f"| L{layer_idx} | {sum(values)/len(values):.6f} | {values[0]:.6f} | {values[-1]:.6f} | {share:.2f} |"
+                )
+
+            lines.extend([
+                "",
+                "## Ablated Heads (top-K by |c_proj column norm|, ranked by measured impact)",
+                "| Head | Impact (bpb drop from baseline) |",
+                "|------|----------------------------------:|",
+            ])
+            for head, impact in sorted(head_impacts.items(), key=lambda item: abs(item[1]), reverse=True):
+                lines.append(f"| {head} | {impact:.6f} |")
+            lines.extend([
+                f"- Mean/Median impact: {sum(sorted_impacts)/len(sorted_impacts):.6f} / {sorted_impacts[len(sorted_impacts)//2]:.6f}",
+            ])
+
+            if self.generate_charts:
+                try:
+                    chart_path = chart_head_importance_heatmap(
+                        head_impacts, n_layer, n_head, self.visuals_dir / f"{evidence.report_id}_heads.png",
+                    )
+                    if chart_path:
+                        lines.extend(["", f"![Head importance heatmap](../visuals/{chart_path.name})"])
+                except Exception as _e:
+                    print(f"[Agent 2] Chart generation (heads) failed: {_e}")
 
         lines.extend([
             "",
@@ -361,90 +364,3 @@ class Agent2XAISpecialist:
             "```",
         ])
         return "\n".join(lines) + "\n"
-
-    def _format_statistical_report(
-        self,
-        model_id: str,
-        hyperparams: Dict[str, Any],
-        ablation_results: Dict[str, float],
-        partial_dep: Dict[str, List[tuple]],
-        stuck_signal: bool,
-    ) -> str:
-        """Format statistical analysis as markdown."""
-
-        report = f"""# XAI Analysis Report: {model_id}
-
-## Model Configuration
-- Model ID: {model_id}
-- Hyperparameters:
-"""
-        for key, value in hyperparams.items():
-            report += f"  - {key}: {value}\n"
-
-        # Ablation results
-        report += "\n## Attention Head Ablation (Top-K)\n"
-        report += "| Head | Impact (bpb drop) |\n|------|------------------|\n"
-
-        if ablation_results:
-            sorted_heads = sorted(
-                ablation_results.items(), key=lambda x: x[1], reverse=True
-            )
-            for head, impact in sorted_heads[:15]:  # Top 15
-                report += f"| {head} | {impact:.6f} |\n"
-        else:
-            report += "| N/A | No ablation data |\n"
-
-        # Hyperparameter importance
-        report += "\n## Hyperparameter Importance\n"
-        report += "| Parameter | Estimated Impact |\n|-----------|------------------|\n"
-
-        if partial_dep:
-            for param, curve in partial_dep.items():
-                if curve:
-                    # Estimate importance from variation
-                    values = [v for _, v in curve]
-                    importance = max(values) - min(values) if values else 0
-                    report += f"| {param} | {importance:.6f} |\n"
-        else:
-            report += "| N/A | No partial dependence data |\n"
-
-        # Signals
-        report += "\n## Detected Signals\n"
-        if stuck_signal:
-            report += "- ⚠️ **Model Stuck**: Similar ablation patterns to previous models\n"
-        else:
-            report += "- ✓ Model showing new patterns\n"
-
-        # Opportunities
-        report += "\n## Flagged Opportunities\n"
-        if ablation_results:
-            # Find unused heads
-            unused = [h for h, v in ablation_results.items() if v < 0.0001]
-            if unused:
-                report += f"- Potentially unused heads (near-zero impact): {unused}\n"
-            report += "- Consider pruning low-impact heads to reduce model size\n"
-        report += "- Focus Agent 1 on parameters with highest importance\n"
-
-        return report
-
-    def _get_claude_insights(self, statistical_report: str) -> str:
-        """Get Claude to interpret the statistical report."""
-        prompt = f"""Please analyze this XAI report and provide:
-1. Which components matter most?
-2. Strategic recommendations for next training iteration
-3. Any surprising findings?
-
-Report:
-{statistical_report}
-
-Be concise (under 200 words)."""
-
-        try:
-            message = self.claude.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=300,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return message.content[0].text
-        except Exception as e:
-            return f"Error getting Claude insights: {e}"

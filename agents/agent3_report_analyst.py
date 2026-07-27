@@ -15,6 +15,12 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents.protocols import SummaryEvidence
 from agents.agent1_training_specialist import LR_KEYS
+from state.visualize import (
+    chart_hyperparameter_importance_evolution,
+    chart_layer_importance_distribution,
+    chart_status_distribution,
+    chart_val_bpb_trend,
+)
 
 
 class Agent3ReportAnalyst:
@@ -26,9 +32,12 @@ class Agent3ReportAnalyst:
         self.use_llm = self.agent3_config.get("use_llm", False)
         self.batch_size = self.agent3_config.get("batch_size", 3)
         self.preserve_history = self.agent3_config.get("preserve_history", True)
+        self.generate_charts = bool(self.agent3_config.get("generate_charts", True))
 
         self.summaries_dir = Path("reports/agent3_summaries")
         self.reports_dir = Path("reports/agent2_reports")
+        self.visuals_dir = Path("reports/visuals")
+        self.noise_floor_path = Path("state/noise_floor.json")
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()
@@ -379,6 +388,25 @@ class Agent3ReportAnalyst:
         for status_name, count in statuses.items():
             summary_lines.append(f"  - {status_name}: {count}")
 
+        if self.generate_charts:
+            try:
+                chart_path = chart_val_bpb_trend(
+                    all_metrics, self.noise_floor_path,
+                    self.visuals_dir / f"summary_{self.summary_counter:04d}_trend.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![val_bpb trend](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (trend) failed: {_e}")
+            try:
+                chart_path = chart_status_distribution(
+                    statuses, self.visuals_dir / f"summary_{self.summary_counter:04d}_status.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Run status distribution](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (status) failed: {_e}")
+
         summary_lines.extend([
             "",
             "## Hyperparameter Importance Statistics",
@@ -393,6 +421,16 @@ class Agent3ReportAnalyst:
             )
         if not all_hyper_importance:
             summary_lines.append("| N/A | 0.000000 | 0.000000 | 0 | 0 |")
+
+        if self.generate_charts:
+            try:
+                chart_path = chart_hyperparameter_importance_evolution(
+                    all_metrics, self.visuals_dir / f"summary_{self.summary_counter:04d}_importance_evolution.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Hyperparameter importance evolution](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (importance evolution) failed: {_e}")
 
         summary_lines.extend([
             "",
@@ -418,6 +456,16 @@ class Agent3ReportAnalyst:
             )
         if not sorted_layers:
             summary_lines.append("| N/A | 0.0000 | 0.0000 |")
+
+        if self.generate_charts:
+            try:
+                chart_path = chart_layer_importance_distribution(
+                    layer_shares, self.visuals_dir / f"summary_{self.summary_counter:04d}_layers.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Layer-level importance distribution](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (layer distribution) failed: {_e}")
 
         summary_lines.extend([
             "",
