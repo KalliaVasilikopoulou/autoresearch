@@ -113,6 +113,18 @@ class Agent1TrainingSpecialist:
         self.total_api_cost = 0.0
         self.best_val_bpb = float("inf")
 
+        # Decision log (see agents/pipeline_validator.py): a total, recorded
+        # disposition for every tunable parameter every iteration, so "was
+        # this ignored" and "why is this extreme" are answerable from a file
+        # instead of being a mystery. Pure side-channel state -- none of this
+        # affects decide_next_hyperparams's return value.
+        self.decisions_dir = _reports / "agent1_decisions"
+        self.last_decision_log: Optional[Dict[str, Any]] = None
+        self._last_lr_clamps: Dict[str, Any] = {}
+        self._last_surrogate_phase: Optional[str] = None
+        self._last_surrogate_frozen: list = []
+        self._last_surrogate_active_block: list = []
+
         self.claude = None
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
@@ -190,6 +202,13 @@ class Agent1TrainingSpecialist:
 
         print(f"\n[Agent 1] Deciding next hyperparameters (iteration {iteration})...")
 
+        # Snapshot for the decision log (Part 1 of dev/inpsect_workflow_ideas.txt's
+        # follow-up) -- a total, recorded before/after/reason for every tunable
+        # parameter, built as an external diff so none of the adjustment
+        # methods below need to change.
+        before_hyperparams = dict(self.current_hyperparams)
+        self._last_lr_clamps = {}
+
         detected_stagnation = self._detect_stagnation(recent_results, latest_val_bpb)
         effective_stuck_signal = stuck_signal or detected_stagnation
 
@@ -197,12 +216,16 @@ class Agent1TrainingSpecialist:
         # see agents/search_planner.py), unless stuck -- radical_change stays
         # wired exactly as before regardless of the surrogate's availability.
         new_hyperparams = None
+        path_taken = "unknown"
         if effective_stuck_signal:
             new_hyperparams = self._evidence_adjustment(
                 latest_summary=latest_summary, evidence=evidence, stuck_signal=True, iteration=iteration,
             )
+            path_taken = "radical_change"
         elif self.use_surrogate:
             new_hyperparams = self._surrogate_adjustment(iteration)
+            if new_hyperparams is not None:
+                path_taken = "surrogate"
 
         # FALLBACK: report-driven evidence, then heuristics, exactly as
         # before Tier 1 existed -- reached whenever the surrogate can't run
@@ -214,10 +237,12 @@ class Agent1TrainingSpecialist:
                 stuck_signal=effective_stuck_signal,
                 iteration=iteration,
             )
+            path_taken = "evidence"
             if not evidence:
                 new_hyperparams = self._heuristic_adjustment(
                     latest_summary, effective_stuck_signal, iteration
                 )
+                path_taken = "heuristic"
 
         # OPTIONAL: If LLM enabled, get Claude suggestions
         if self.use_llm and latest_summary:
@@ -242,8 +267,79 @@ class Agent1TrainingSpecialist:
         self.current_hyperparams = new_hyperparams
         self._save_hyperparams()
 
+        self.last_decision_log = self._build_decision_log(
+            before_hyperparams, new_hyperparams, iteration, path_taken, evidence, latest_summary,
+        )
+        self._write_decision_log(self.last_decision_log)
+
         print(f"[Agent 1] Next hyperparams: {new_hyperparams}")
         return new_hyperparams
+
+    def _surrogate_reason_for(self, key: str) -> str:
+        """Best-effort explanation for one parameter's disposition on the
+        surrogate-driven path, from the frozen/active_block info
+        _surrogate_adjustment already stashed this call (see there)."""
+        if self._last_surrogate_phase == "cold_start":
+            return "surrogate: Sobol cold-start exploration"
+        if key in self._last_surrogate_active_block:
+            return "surrogate: EI-tuned this cycle (active block)"
+        if key in self._last_surrogate_frozen:
+            return "surrogate: frozen (total effect below 2*sigma noise floor)"
+        if self._last_surrogate_phase == "ei":
+            return "surrogate: kept but not in this cycle's active block"
+        return "surrogate-driven"
+
+    def _build_decision_log(
+        self,
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+        iteration: int,
+        path_taken: str,
+        evidence: Optional[list],
+        latest_summary: Optional[str],
+    ) -> Dict[str, Any]:
+        """Every key in SEARCH_SPACE (+ any pass-through key present in
+        `after`, e.g. ablation_k) gets an explicit before/after/changed/reason
+        entry -- built by diffing, not by instrumenting the adjustment
+        methods, so it's structurally impossible for a parameter to be
+        silently dropped without this noticing, and none of
+        _evidence_adjustment/_heuristic_adjustment/_radical_change's tested
+        internals need to change.
+        """
+        params_log: Dict[str, Any] = {}
+        for key in SEARCH_SPACE:
+            old, new = before.get(key), after.get(key)
+            changed = old != new
+            if path_taken == "surrogate":
+                reason = self._surrogate_reason_for(key)
+            elif path_taken == "radical_change":
+                reason = "radical_change: stuck signal fired"
+            else:
+                reason = f"{path_taken}-driven" if changed else "unchanged: no signal for this parameter"
+            params_log[key] = {"before": old, "after": new, "changed": changed, "reason": reason}
+        for key in after:
+            if key not in params_log:
+                params_log[key] = {
+                    "before": before.get(key), "after": after.get(key),
+                    "changed": before.get(key) != after.get(key),
+                    "reason": "pass-through (not a tunable search parameter)",
+                }
+        return {
+            "iteration": iteration,
+            "path_taken": path_taken,
+            "evidence_considered": len(evidence) if evidence else 0,
+            "summary_considered": bool(latest_summary),
+            "params": params_log,
+            "lr_clamps": dict(self._last_lr_clamps),
+        }
+
+    def _write_decision_log(self, decision_log: Dict[str, Any]) -> None:
+        try:
+            self.decisions_dir.mkdir(parents=True, exist_ok=True)
+            path = self.decisions_dir / f"decision_{decision_log['iteration']:04d}.json"
+            path.write_text(json.dumps(decision_log, indent=2, sort_keys=True))
+        except OSError as e:
+            print(f"[Agent 1] Could not write decision log: {e}")
 
     def _surrogate_adjustment(self, iteration: int) -> Optional[Dict[str, Any]]:
         """Delegates to agents.search_planner. Returns None (triggering the
@@ -251,13 +347,19 @@ class Agent1TrainingSpecialist:
         whenever scipy/scikit-learn aren't installed, the surrogate can't
         fit yet (too little data), or every dimension is currently frozen.
         """
+        # Reset for this call -- _build_decision_log reads these afterward to
+        # explain *why* each param did or didn't change on the surrogate path.
+        self._last_surrogate_phase = None
+        self._last_surrogate_frozen = []
+        self._last_surrogate_active_block = []
+
         try:
             from agents import search_planner
         except ImportError:
             return None
         from state.results_analysis import load_results
         rows = load_results(str(self.results_path))
-        return search_planner.propose_next(
+        result = search_planner.propose_next(
             rows=rows,
             current_best_hyperparams=self.current_hyperparams,
             current_best_val_bpb=self.best_val_bpb,
@@ -269,6 +371,26 @@ class Agent1TrainingSpecialist:
             noise_floor_path=self._noise_floor_path,
             report_dir=self._search_plan_report_dir,
         )
+        if result is None:
+            return None
+
+        # search_planner only writes plan_{iteration}.json on the EI-driven
+        # branch (not cold-start) -- reuse it rather than recomputing
+        # frozen/active_block here. Read-only, best-effort: a missing/corrupt
+        # file just means the decision log falls back to "surrogate-driven"
+        # without finer detail, never an error.
+        plan_path = Path(self._search_plan_report_dir) / f"plan_{iteration:04d}.json"
+        if plan_path.exists():
+            try:
+                plan = json.loads(plan_path.read_text())
+                self._last_surrogate_phase = "ei"
+                self._last_surrogate_frozen = plan.get("frozen", [])
+                self._last_surrogate_active_block = plan.get("active_block", [])
+            except (json.JSONDecodeError, OSError):
+                self._last_surrogate_phase = "ei"
+        else:
+            self._last_surrogate_phase = "cold_start"
+        return result
 
     def _should_stop_early(
         self,
@@ -552,11 +674,18 @@ class Agent1TrainingSpecialist:
         return new_params
 
     def _clamp_lr(self, key: str, lr: float) -> float:
-        """Keep a learning-rate group inside its safe operating range."""
+        """Keep a learning-rate group inside its safe operating range. Loud:
+        prints and records whenever it actually changes the value -- this
+        was previously silent, which is a real reason "extreme" proposals
+        were hard to explain after the fact (see dev/inpsect_workflow_ideas.txt).
+        """
         lo, hi = self.lr_bounds.get(key, LR_SAFE_RANGES.get(key, (1e-5, 5.0)))
-        if not math.isfinite(lr):
-            return lo
-        return max(lo, min(lr, hi))
+        original = lr
+        clamped = lo if not math.isfinite(lr) else max(lo, min(lr, hi))
+        if clamped != original:
+            print(f"[Agent 1] CLAMP {key}: requested={original} -> clamped={clamped} (bounds [{lo}, {hi}])")
+            self._last_lr_clamps[key] = {"requested": original, "clamped": clamped, "bounds": [lo, hi]}
+        return clamped
 
     def _random_lr(self, key: str) -> float:
         """Log-uniform random sample within the safe range for one LR group."""
@@ -728,7 +857,7 @@ class Agent1TrainingSpecialist:
     # carry real per-run evidence (see train.py) as a JSON blob rather than a
     # single scalar; keyed generically so any future `<name>: {json}` line is
     # picked up without another parser change.
-    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts"}
+    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps"}
 
     def _parse_training_output(self, stdout: str) -> Dict[str, Any]:
         """Parse all metrics from train.py's final summary block."""

@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agents import pipeline_validator
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst
@@ -24,6 +25,7 @@ class Orchestrator:
         reports_dir: str = "./reports",
         root_dir: str = ".",
         dry_run: bool = False,
+        interactive: bool = False,
     ):
         """
         root_dir is where model_hyperparams.yaml and results.tsv live. It
@@ -33,6 +35,12 @@ class Orchestrator:
         invoke train.py. state_dir/reports_dir were already accepted here
         but never forwarded to Agent1/2/3 (they always hit the hardcoded
         repo-root paths regardless) -- that's fixed below.
+
+        interactive: when True, a pipeline_validator ERROR (not just FATAL)
+        pauses with a blocking y/n prompt. False (the default) never blocks
+        -- see agents/pipeline_validator.py: a blocking prompt by default is
+        exactly what kills unattended overnight runs on the first spurious
+        warning.
         """
         print("[Orchestrator] Initializing multi-agent system...")
 
@@ -49,6 +57,15 @@ class Orchestrator:
         self.max_iterations = 100
         self.poll_interval = 5
         self.dry_run = dry_run
+        self.interactive = interactive
+
+        # Deterministic pipeline validation (agents/pipeline_validator.py):
+        # timestamped run directories, never cleared on startup -- that
+        # history is exactly what catches intermittent bugs -- pruned to the
+        # most recent 10 instead.
+        self.validation_dir = self.reports_dir / "pipeline_validation"
+        pipeline_validator.prune_old_runs(self.validation_dir, keep=10)
+        self.current_run_dir = pipeline_validator.new_run_dir(self.validation_dir)
 
         print("[Orchestrator] Initialization complete")
 
@@ -85,6 +102,13 @@ class Orchestrator:
                 print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")
                 break
 
+            issues = pipeline_validator.validate_agent1_decision(
+                self.agent1.last_decision_log, recent_evidence, latest_summary,
+                decisions_dir=self.agent1.decisions_dir,
+            )
+            if self._handle_issues(iteration, issues):
+                break
+
             print("\n[Orchestrator] Phase 2: Training")
             print(f"[Orchestrator] Training with hyperparams: {new_hyperparams}")
             train_result = self.agent1.train_model(
@@ -107,6 +131,10 @@ class Orchestrator:
             log_result(result_payload.run_id, new_hyperparams, train_result, results_path=str(self.results_path))
             print(f"[Orchestrator] Result logged: {result_payload.run_id}")
 
+            issues = pipeline_validator.validate_training_result(train_result, new_hyperparams)
+            if self._handle_issues(iteration, issues):
+                break
+
             print("\n[Orchestrator] Phase 3: Analyzing result with Agent 2")
             evidence = self.agent2.analyze_result(result_payload.to_dict())
             if evidence is not None:
@@ -115,6 +143,10 @@ class Orchestrator:
                 report_batch.append(evidence_payload["report_id"])
                 self.state_mgr.link_model_to_report(result_payload.run_id, evidence_payload["report_id"])
                 print(f"[Orchestrator] Agent 2 analysis complete: {evidence_payload['report_id']}")
+
+                issues = pipeline_validator.validate_agent2_report(evidence_payload)
+                if self._handle_issues(iteration, issues):
+                    break
             else:
                 print(f"[Orchestrator] Agent 2: no analysis available")
 
@@ -127,6 +159,10 @@ class Orchestrator:
                 self.state_mgr.set_latest_summary(summary.summary_id, iteration)
                 report_batch = []
                 print(f"[Orchestrator] Summary created: {summary.summary_id}")
+
+                issues = pipeline_validator.validate_agent3_summary(summary.to_dict(), total_reports=self.agent2.report_counter)
+                if self._handle_issues(iteration, issues):
+                    break
             else:
                 print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.batch_size}, have {len(report_batch)})")
 
@@ -141,6 +177,32 @@ class Orchestrator:
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
         return summary
+
+    def _handle_issues(self, iteration: int, issues: List[pipeline_validator.Issue]) -> bool:
+        """Prints + persists validator issues. Returns True when the
+        orchestrator loop should halt: any FATAL issue (always, no prompt),
+        or the user declining to continue past an ERROR in --interactive
+        mode. ERROR/WARN alone never halt -- they tag the iteration
+        "suspect" and the loop continues, per pipeline_validator's severity
+        model.
+        """
+        if not issues:
+            return False
+        print(pipeline_validator.render_issues(issues))
+        has_fatal = any(i.severity == pipeline_validator.FATAL for i in issues)
+        has_error_or_worse = has_fatal or any(i.severity == pipeline_validator.ERROR for i in issues)
+        pipeline_validator.write_iteration_issues(self.current_run_dir, iteration, issues, suspect=has_error_or_worse)
+
+        if has_fatal:
+            print("[Orchestrator] FATAL issue detected -- halting immediately.")
+            return True
+
+        if self.interactive and has_error_or_worse:
+            answer = input("[Orchestrator] ERROR issue(s) detected. Continue past this? [y/N]: ").strip().lower()
+            if answer != "y":
+                print("[Orchestrator] User chose to stop.")
+                return True
+        return False
 
     def _load_latest_summary(self) -> Optional[str]:
         """Load latest summary report for Agent 1 to read."""
@@ -160,10 +222,13 @@ def main():
     parser.add_argument("--config", default="agents_config.yaml", help="Configuration file path")
     parser.add_argument("--iterations", type=int, default=100, help="Maximum iterations")
     parser.add_argument("--dry-run", action="store_true", help="Run without training")
+    parser.add_argument("--interactive", action="store_true",
+                         help="Prompt (blocking) before continuing past a pipeline_validator ERROR. "
+                              "Off by default so unattended runs never block on a spurious warning.")
 
     args = parser.parse_args()
 
-    orchestrator = Orchestrator(config_path=args.config, dry_run=args.dry_run)
+    orchestrator = Orchestrator(config_path=args.config, dry_run=args.dry_run, interactive=args.interactive)
     orchestrator.run(max_iterations=args.iterations)
 
 

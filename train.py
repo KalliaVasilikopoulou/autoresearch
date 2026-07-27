@@ -487,13 +487,19 @@ DEVICE_BATCH_SIZE = 1    # per-device batch size (2->1 for extreme memory effici
 # value here should degrade gracefully, not silently corrupt or crash a run).
 # ---------------------------------------------------------------------------
 
+_clamp_records = {}  # name -> {"requested": ..., "clamped": ..., "bounds": [lo, hi]}, reported back as
+                      # `hyperparam_clamps:` below so Agent 1 can tell "what caused this extreme value"
+                      # from structured data instead of it being a mystery (dev/inpsect_workflow_ideas.txt).
+
 def _clamp(name, value, lo, hi):
     clamped = max(lo, min(hi, value))
     if clamped != value:
         print(f"[hyperparams] WARNING: {name}={value} outside safe range [{lo}, {hi}], clamped to {clamped}")
+        _clamp_records[name] = {"requested": value, "clamped": clamped, "bounds": [lo, hi]}
     return clamped
 
 _target_embd = DEPTH * ASPECT_RATIO
+_hp = {}
 try:
     import yaml as _yaml
     _hp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_hyperparams.yaml")
@@ -539,6 +545,17 @@ _head_dim = max(1, round(_target_embd / N_HEAD))
 if _head_dim % 2 != 0:
     _head_dim += 1
 MODEL_DIM = _head_dim * N_HEAD
+
+# Loud, end-to-end: if model_hyperparams.yaml requested a specific n_embd and
+# what actually got used (after range-clamping AND the head_dim-parity snap
+# above) differs, record it under the same "n_embd" key -- this is exactly
+# the gap that made a proposal like n_embd=473/n_head=11 look mysterious
+# (silently became 484 with nothing telling Agent 1 afterward).
+if "n_embd" in _hp and MODEL_DIM != int(_hp["n_embd"]):
+    _clamp_records["n_embd"] = {"requested": int(_hp["n_embd"]), "clamped": MODEL_DIM, "bounds": [N_HEAD, 8192]}
+
+if _clamp_records:
+    print("hyperparam_clamps: " + json.dumps(_clamp_records))
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader

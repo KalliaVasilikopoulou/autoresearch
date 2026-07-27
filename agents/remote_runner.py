@@ -179,7 +179,7 @@ _OUTPUT_FIELDS = {
 
 # Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`
 # carry real per-run evidence as a JSON blob rather than a single scalar.
-_JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts"}
+_JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps"}
 
 
 def _parse_output(stdout: str) -> Dict[str, Any]:
