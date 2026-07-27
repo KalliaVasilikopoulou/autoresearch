@@ -26,7 +26,16 @@ from state.visualize import (
 class Agent3ReportAnalyst:
     """Analyzes and aggregates reports from Agent 2 into strategic summaries."""
 
-    def __init__(self, config_path: str = "agents_config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "agents_config.yaml",
+        state_dir: Optional[str] = None,
+        reports_dir: Optional[str] = None,
+    ):
+        """state_dir/reports_dir let callers (tests, Orchestrator) redirect
+        every file this class touches instead of always hitting the repo
+        root. Defaults preserve the original cwd-relative behavior exactly.
+        """
         self.config = self._load_config(config_path)
         self.agent3_config = self.config.get("agent3", {})
         self.use_llm = self.agent3_config.get("use_llm", False)
@@ -34,10 +43,12 @@ class Agent3ReportAnalyst:
         self.preserve_history = self.agent3_config.get("preserve_history", True)
         self.generate_charts = bool(self.agent3_config.get("generate_charts", True))
 
-        self.summaries_dir = Path("reports/agent3_summaries")
-        self.reports_dir = Path("reports/agent2_reports")
-        self.visuals_dir = Path("reports/visuals")
-        self.noise_floor_path = Path("state/noise_floor.json")
+        _state = Path(state_dir) if state_dir else Path("state")
+        _reports = Path(reports_dir) if reports_dir else Path("reports")
+        self.summaries_dir = _reports / "agent3_summaries"
+        self.reports_dir = _reports / "agent2_reports"
+        self.visuals_dir = _reports / "visuals"
+        self.noise_floor_path = _state / "noise_floor.json"
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()

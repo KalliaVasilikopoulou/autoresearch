@@ -197,22 +197,31 @@ def prune_by_noise_floor(
 # ---------------------------------------------------------------------------
 
 # Params that must be integers, and (for n_embd/n_head) satisfy train.py's
-# hard assert `n_embd % n_head == 0` (CausalSelfAttention.__init__).
+# hard assert `n_embd % n_head == 0` (CausalSelfAttention.__init__) AND land
+# on an even head_dim (train.py's apply_rotary_emb splits each head into two
+# equal halves -- RoPE rotates 2D pairs, so an odd head_dim crashes; see
+# train.py's MODEL_DIM computation for the matching last-mile snap there).
 INT_PARAMS = {"n_layer", "n_head", "n_embd", "batch_size"}
 
 
 def _snap_discrete(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
-    """Rounds int-valued params and snaps n_embd to a multiple of n_head --
-    a continuous acquisition/sampling proposal must be projected back onto
-    the space train.py can actually run before it's ever returned to a
-    caller."""
+    """Rounds int-valued params and snaps n_embd so that n_embd/n_head is an
+    even integer -- a continuous acquisition/sampling proposal must be
+    projected back onto the space train.py can actually run before it's
+    ever returned to a caller. Keeping this in sync with train.py's own
+    snap matters: if the proposal train.py silently alters at run time
+    doesn't match what's recorded in results.tsv, the surrogate ends up
+    fitting against the wrong labels.
+    """
     out = dict(hyperparams)
     for p in INT_PARAMS:
         if p in out:
             out[p] = int(round(out[p]))
     if "n_embd" in out and "n_head" in out and out["n_head"] > 0:
-        snapped = round(out["n_embd"] / out["n_head"]) * out["n_head"]
-        out["n_embd"] = max(out["n_head"], snapped)
+        head_dim = max(1, round(out["n_embd"] / out["n_head"]))
+        if head_dim % 2 != 0:
+            head_dim += 1
+        out["n_embd"] = head_dim * out["n_head"]
     return out
 
 

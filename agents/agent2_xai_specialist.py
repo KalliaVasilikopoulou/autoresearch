@@ -25,15 +25,27 @@ import yaml
 class Agent2XAISpecialist:
     """Analyzes trained models using XAI methods and generates interpretability reports."""
 
-    def __init__(self, config_path: str = "agents_config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "agents_config.yaml",
+        root_dir: Optional[str] = None,
+        reports_dir: Optional[str] = None,
+    ):
+        """root_dir/reports_dir let callers (tests, Orchestrator) redirect
+        every file this class touches instead of always hitting the repo
+        root. Defaults preserve the original cwd-relative behavior exactly.
+        """
         self.config = self._load_config(config_path)
         self.agent2_config = self.config.get("agent2", {})
         self.use_llm = self.agent2_config.get("use_llm", False)
         self.xai_method = self.agent2_config.get("xai_method", "fast")
         self.generate_charts = bool(self.agent2_config.get("generate_charts", True))
-        self.reports_dir = Path("reports/agent2_reports")
+        _root = Path(root_dir) if root_dir else Path(".")
+        _reports = Path(reports_dir) if reports_dir else Path("reports")
+        self.reports_dir = _reports / "agent2_reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.visuals_dir = Path("reports/visuals")
+        self.visuals_dir = _reports / "visuals"
+        self.results_path = _root / "results.tsv"
 
         # Initialize XAI methods
         if self.xai_method == "fast":
@@ -42,7 +54,6 @@ class Agent2XAISpecialist:
             raise ValueError(f"Unknown XAI method: {self.xai_method}")
 
         self.report_counter = self._count_existing_reports()
-        self.results_path = Path("results.tsv")
         self.all_impacts = []  # Real head-ablation impacts, one dict per run that had them (for stuck detection)
 
         # Claude client (lazy loaded if needed)

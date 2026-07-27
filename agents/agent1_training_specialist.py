@@ -51,7 +51,24 @@ SEARCH_SPACE = {**LR_SAFE_RANGES, **ARCH_SAFE_RANGES, **OTHER_SAFE_RANGES}
 class Agent1TrainingSpecialist:
     """Trains models and adjusts hyperparameters based on agent feedback."""
 
-    def __init__(self, config_path: str = "agents_config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "agents_config.yaml",
+        root_dir: Optional[str] = None,
+        state_dir: Optional[str] = None,
+        reports_dir: Optional[str] = None,
+    ):
+        """
+        root_dir/state_dir/reports_dir let callers (tests, or any future
+        parallel campaign) redirect every file this class touches instead of
+        always hitting the repo root -- e.g. Orchestrator forwards its own
+        state_dir/reports_dir here. Defaults preserve the original
+        cwd-relative behavior exactly, so no existing caller needs to change.
+        model_hyperparams.yaml lives under root_dir (not state_dir): a real
+        (non-dry-run) train.py always reads it from its own directory, so
+        root_dir must stay "." for any run that actually needs train.py to
+        find it -- only dry-run/test callers should ever override it.
+        """
         self.config = self._load_config(config_path)
         self.agent1_config = self.config.get("agent1", {})
         self.use_llm = self.agent1_config.get("use_llm", False)
@@ -83,7 +100,15 @@ class Agent1TrainingSpecialist:
         self.surrogate_cycle_runs = int(self.agent1_config.get("surrogate_cycle_runs", 10))
         self.surrogate_interaction_threshold = float(self.agent1_config.get("interaction_threshold", 0.15))
 
-        self.model_config_path = Path("model_hyperparams.yaml")
+        _root = Path(root_dir) if root_dir else Path(".")
+        _state = Path(state_dir) if state_dir else Path("state")
+        _reports = Path(reports_dir) if reports_dir else Path("reports")
+        self.model_config_path = _root / "model_hyperparams.yaml"
+        self.results_path = _root / "results.tsv"
+        self._search_planner_state_path = str(_state / "search_planner_state.json")
+        self._noise_floor_path = str(_state / "noise_floor.json")
+        self._search_plan_report_dir = str(_reports / "agent1_search_plan")
+
         self.current_hyperparams = self._init_hyperparams()
         self.total_api_cost = 0.0
         self.best_val_bpb = float("inf")
@@ -231,7 +256,7 @@ class Agent1TrainingSpecialist:
         except ImportError:
             return None
         from state.results_analysis import load_results
-        rows = load_results("results.tsv")
+        rows = load_results(str(self.results_path))
         return search_planner.propose_next(
             rows=rows,
             current_best_hyperparams=self.current_hyperparams,
@@ -240,6 +265,9 @@ class Agent1TrainingSpecialist:
             cold_start_n=self.surrogate_cold_start_n,
             cycle_runs=self.surrogate_cycle_runs,
             interaction_threshold=self.surrogate_interaction_threshold,
+            state_path=self._search_planner_state_path,
+            noise_floor_path=self._noise_floor_path,
+            report_dir=self._search_plan_report_dir,
         )
 
     def _should_stop_early(

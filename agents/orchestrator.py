@@ -22,16 +22,28 @@ class Orchestrator:
         config_path: str = "agents_config.yaml",
         state_dir: str = "./state",
         reports_dir: str = "./reports",
+        root_dir: str = ".",
         dry_run: bool = False,
     ):
+        """
+        root_dir is where model_hyperparams.yaml and results.tsv live. It
+        defaults to "." (repo root) because a real (non-dry-run) train.py
+        subprocess always reads model_hyperparams.yaml from its own
+        directory -- only override it for dry-run/test runs that never
+        invoke train.py. state_dir/reports_dir were already accepted here
+        but never forwarded to Agent1/2/3 (they always hit the hardcoded
+        repo-root paths regardless) -- that's fixed below.
+        """
         print("[Orchestrator] Initializing multi-agent system...")
 
+        self.root_dir = Path(root_dir)
+        self.results_path = self.root_dir / "results.tsv"
         self.state_mgr = StateManager(state_dir)
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.agent1 = Agent1TrainingSpecialist(config_path)
-        self.agent2 = Agent2XAISpecialist(config_path)
-        self.agent3 = Agent3ReportAnalyst(config_path)
+        self.agent1 = Agent1TrainingSpecialist(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
+        self.agent2 = Agent2XAISpecialist(config_path, root_dir=root_dir, reports_dir=reports_dir)
+        self.agent3 = Agent3ReportAnalyst(config_path, state_dir=state_dir, reports_dir=reports_dir)
 
         self.config_path = config_path
         self.max_iterations = 100
@@ -92,7 +104,7 @@ class Orchestrator:
             )
             self.state_mgr.add_result(result_payload.to_dict())
             self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
-            log_result(result_payload.run_id, new_hyperparams, train_result)
+            log_result(result_payload.run_id, new_hyperparams, train_result, results_path=str(self.results_path))
             print(f"[Orchestrator] Result logged: {result_payload.run_id}")
 
             print("\n[Orchestrator] Phase 3: Analyzing result with Agent 2")

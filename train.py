@@ -529,8 +529,16 @@ try:
 except Exception as _e:
     print(f"[hyperparams] Could not load model_hyperparams.yaml: {_e} — using defaults")
 
-# Snap the target embedding size to a multiple of N_HEAD so head_dim stays an integer.
-MODEL_DIM = max(N_HEAD, round(_target_embd / N_HEAD) * N_HEAD)
+# Snap the target embedding size to a multiple of N_HEAD so head_dim stays an
+# integer, AND make sure head_dim itself is even -- apply_rotary_emb splits
+# each head into two equal halves (it rotates 2D pairs), so an odd head_dim
+# makes the halves mismatched sizes and crashes. This is a real constraint
+# of RoPE, not an arbitrary limit, so we snap up to the nearest even head_dim
+# rather than relaxing anything.
+_head_dim = max(1, round(_target_embd / N_HEAD))
+if _head_dim % 2 != 0:
+    _head_dim += 1
+MODEL_DIM = _head_dim * N_HEAD
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader

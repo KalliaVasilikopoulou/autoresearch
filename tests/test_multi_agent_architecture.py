@@ -54,6 +54,7 @@ agent3:
         config_path=str(config_path),
         state_dir=str(state_dir),
         reports_dir=str(reports_dir),
+        root_dir=str(tmp_path),
         dry_run=True,
     )
 
@@ -82,7 +83,7 @@ agent1:
 """.strip()
     )
 
-    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path), root_dir=str(tmp_path))
     result = specialist.train_model(
         {"matrix_lr": 0.04, "n_layer": 10, "n_embd": 256},
         dry_run=False,
@@ -106,7 +107,7 @@ agent1:
 """.strip()
     )
 
-    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path), root_dir=str(tmp_path))
     specialist.current_hyperparams = _base_hyperparams()
 
     # Assert on the radical-change path actually firing rather than on the
@@ -133,7 +134,7 @@ def test_importance_weight_changes_are_scaled_by_score(tmp_path):
     config_path = tmp_path / "agents_config.yaml"
     config_path.write_text("agent1:\n  use_llm: false")
 
-    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path), root_dir=str(tmp_path))
     specialist.current_hyperparams = _base_hyperparams()
 
     weak = specialist._evidence_adjustment(
@@ -159,7 +160,7 @@ def test_summary_adjustment_is_stronger_than_report_only(tmp_path):
     config_path = tmp_path / "agents_config.yaml"
     config_path.write_text("agent1:\n  use_llm: false\n  summary_strength: 2.0")
 
-    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path), root_dir=str(tmp_path))
     specialist.current_hyperparams = _base_hyperparams()
 
     report_only = specialist._evidence_adjustment(
@@ -189,7 +190,7 @@ def test_learning_rate_groups_are_always_clamped_to_safe_range(tmp_path):
         "agent1:\n  use_llm: false\n  matrix_lr_min: 0.005\n  matrix_lr_max: 0.2"
     )
 
-    specialist = Agent1TrainingSpecialist(config_path=str(config_path))
+    specialist = Agent1TrainingSpecialist(config_path=str(config_path), root_dir=str(tmp_path))
     specialist.current_hyperparams = _base_hyperparams()
     specialist.current_hyperparams["matrix_lr"] = 1.0
 
