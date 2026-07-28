@@ -42,6 +42,7 @@ class SummaryEvidence:
     conflicting_signals: List[str] = field(default_factory=list)
     recommended_hyperparams: Dict[str, Any] = field(default_factory=dict)
     reasoning: List[str] = field(default_factory=list)
+    fingerprint_clusters: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

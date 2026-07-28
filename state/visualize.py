@@ -415,3 +415,68 @@ def chart_layer_importance_distribution(
     ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     return _finalize(fig, path, title="Layer-level importance distribution")
+
+
+def chart_fingerprint_clusters(
+    cluster_result: Optional[Dict[str, Any]],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 3.1: mean val_bpb per behavioral-fingerprint cluster, n
+    annotated per bar, categorical color per cluster (fixed order, capped
+    at 8 -- see CATEGORICAL). None (not a fabricated chart) when there
+    isn't yet enough fingerprint history to cluster
+    (state/clustering.py::cluster_fingerprints returned None).
+    """
+    if not cluster_result or not cluster_result.get("clusters"):
+        return None
+    clusters = [c for c in cluster_result["clusters"] if c.get("mean_val_bpb") is not None]
+    if not clusters:
+        return None
+
+    labels = [f"Cluster {c['cluster_id']}" for c in clusters]
+    means = [c["mean_val_bpb"] for c in clusters]
+    ns = [c["n"] for c in clusters]
+    colors = [CATEGORICAL[i % len(CATEGORICAL)] for i in range(len(clusters))]
+
+    fig, ax = _new_figure(figsize=(max(6, 1.2 * len(labels) + 1.5), 4))
+    bars = ax.bar(labels, means, color=colors, zorder=3)
+    ax.set_ylabel("mean val_bpb")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    for bar, n in zip(bars, ns):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"n={n}",
+                 va="bottom", ha="center", fontsize=8, color=INK_SECONDARY)
+    k = cluster_result.get("k")
+    silhouette = cluster_result.get("silhouette")
+    subtitle = f"k={k}, silhouette={silhouette:.3f}" if k is not None else None
+    return _finalize(fig, path, title=f"Fingerprint clusters vs. val_bpb" + (f" ({subtitle})" if subtitle else ""))
+
+
+def chart_attention_trajectory_clusters(
+    cluster_result: Optional[Dict[str, Any]],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 3.2: each cluster's mean attn_distance shape (resampled onto a
+    fixed number of points over normalized depth, min-max normalized per
+    curve -- see state/clustering.py::cluster_attention_trajectories) as a
+    line, categorical colors, legend labeled by cluster id + n. None when
+    there isn't yet enough fingerprint history to cluster.
+    """
+    if not cluster_result or not cluster_result.get("clusters"):
+        return None
+    clusters = [c for c in cluster_result["clusters"] if c.get("mean_shape")]
+    if not clusters:
+        return None
+
+    n_resample = cluster_result.get("n_resample") or len(clusters[0]["mean_shape"])
+    xs = [i / (n_resample - 1) for i in range(n_resample)] if n_resample > 1 else [0.0]
+
+    fig, ax = _new_figure(figsize=(7, 4))
+    for i, c in enumerate(clusters):
+        color = CATEGORICAL[i % len(CATEGORICAL)]
+        label = f"Cluster {c['cluster_id']} (n={c['n']})"
+        ax.plot(xs, c["mean_shape"], color=color, linewidth=2, marker="o", markersize=4, zorder=3, label=label)
+    ax.set_xlabel("normalized depth (0=first layer, 1=last layer)")
+    ax.set_ylabel("attn_distance (min-max normalized per run)")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    ax.legend(loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="Attention-reach trajectory clusters")

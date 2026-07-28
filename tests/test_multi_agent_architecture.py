@@ -4,8 +4,12 @@ from pathlib import Path
 from unittest.mock import patch
 import math
 
+import random
+
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
+from agents.agent3_report_analyst import Agent3ReportAnalyst
 from agents.orchestrator import Orchestrator
+from state.clustering import POS_SALIENCY_LEN
 
 
 def _base_hyperparams():
@@ -277,3 +281,100 @@ def test_learning_rate_groups_are_always_clamped_to_safe_range(tmp_path):
         iteration=0,
     )
     assert 0.005 <= low_case["matrix_lr"] <= 0.2
+
+
+def _fake_fingerprint(group: str) -> dict:
+    """A synthetic token_fingerprint matching Agent 2's real schema (see
+    agents/xai_methods/token_methods.py::compute_behavioral_fingerprint),
+    with two clearly-separated value profiles depending on `group`."""
+    n_layer = random.choice([8, 10, 12])
+    if group == "low":
+        base_entropy, base_distance, base_dla, base_x0 = 1.0, 5.0, 0.01, 1.0
+    else:
+        base_entropy, base_distance, base_dla, base_x0 = 4.0, 50.0, 0.5, 10.0
+    # pos_saliency/attn_distance_slope/induction_score are NOT
+    # group-differentiated here (real fingerprints would vary, but this test
+    # only needs entropy/distance/dla/x0 to carry signal) -- kept at a fixed
+    # baseline with tight jitter so they don't contribute noise that could
+    # dilute the intended 2-group separation (a real, previously-hit failure
+    # mode: wide-range independent noise across many feature dimensions lets
+    # Ward+silhouette prefer spurious fine-grained splits over the two
+    # genuine groups at small n).
+    return {
+        "attn_entropy": [base_entropy + random.uniform(-0.05, 0.05) for _ in range(n_layer)],
+        "attn_distance": [base_distance + random.uniform(-0.5, 0.5) for _ in range(n_layer)],
+        "attn_distance_slope": 0.05 + random.uniform(-0.005, 0.005),
+        "pos_saliency": [0.05 + random.uniform(-0.005, 0.005) for _ in range(POS_SALIENCY_LEN)],
+        "dla": [base_dla + random.uniform(-0.005, 0.005) for _ in range(n_layer)],
+        "induction_score": 0.1 + random.uniform(-0.01, 0.01),
+        "x0_lambda": [base_x0 + random.uniform(-0.1, 0.1) for _ in range(n_layer)],
+    }
+
+
+def _write_fake_report(reports_dir: Path, report_id: str, val_bpb: float, token_fingerprint: dict) -> None:
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    structured = {
+        "model_id": report_id,
+        "report_id": report_id,
+        "stuck_signal": False,
+        "confidence": 0.9,
+        "val_bpb": val_bpb,
+        "hyperparams": {"n_layer": 8, "n_embd": 256},
+        "hyperparameter_importance": {},
+        "ablation_ran": False,
+        "head_importance": {},
+        "layer_importance_share_pct": {},
+        "layer_scalars": {},
+        "token_fingerprint": token_fingerprint,
+        "metadata": {"status": "ok"},
+    }
+    content = (
+        f"# XAI Analysis Report: {report_id}\n\n"
+        f"- Status: ok\n"
+        f"- Validation bpb: {val_bpb:.6f}\n\n"
+        "## Structured Metrics (for Agent 3)\n"
+        "```json\n"
+        f"{json.dumps(structured, indent=2, sort_keys=True)}\n"
+        "```\n"
+    )
+    (reports_dir / f"{report_id}.md").write_text(content)
+
+
+def test_agent3_cluster_section_absent_below_min_observations(tmp_path):
+    random.seed(3)
+    reports_dir = tmp_path / "reports"
+    for i in range(3):  # well below the default min_cluster_observations=8
+        report_id = f"report_{i:04d}"
+        _write_fake_report(reports_dir / "agent2_reports", report_id, 1.0 + i * 0.01, _fake_fingerprint("low"))
+
+    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    summary = analyst.analyze_and_summarize([f"report_{i:04d}" for i in range(3)])
+
+    assert summary.fingerprint_clusters == {}
+    summary_text = (reports_dir / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
+    assert "Not enough historical fingerprints yet" in summary_text
+
+
+def test_agent3_cluster_section_present_with_enough_separable_data(tmp_path):
+    random.seed(4)
+    reports_dir = tmp_path / "reports"
+    report_ids = []
+    for i in range(6):
+        report_id = f"report_{i:04d}"
+        _write_fake_report(reports_dir / "agent2_reports", report_id, 0.90 + random.uniform(-0.01, 0.01), _fake_fingerprint("low"))
+        report_ids.append(report_id)
+    for i in range(6, 12):
+        report_id = f"report_{i:04d}"
+        _write_fake_report(reports_dir / "agent2_reports", report_id, 1.30 + random.uniform(-0.01, 0.01), _fake_fingerprint("high"))
+        report_ids.append(report_id)
+
+    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    summary = analyst.analyze_and_summarize(report_ids)
+
+    assert summary.fingerprint_clusters != {}
+    assert summary.fingerprint_clusters.get("overall") is not None
+    assert summary.fingerprint_clusters["overall"]["k"] == 2
+
+    summary_text = (reports_dir / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
+    assert "Behavioral Fingerprint Clusters" in summary_text
+    assert "Overall fingerprint clusters" in summary_text

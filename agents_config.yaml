@@ -97,6 +97,15 @@ agent3:
   # markdown. See state/visualize.py.
   generate_charts: true
 
+  # Tier 3 (see state/clustering.py, dev/INNOVATION_PLAN.md): minimum number
+  # of historical token-fingerprint-bearing reports before clustering runs
+  # at all -- below this, the summary honestly reports "not enough data yet"
+  # rather than fabricating a cluster. Silhouette-based cluster selection
+  # needs enough points to be meaningful; 8 is a considered starting floor,
+  # adjustable once real fingerprint history accumulates via Tier 2's
+  # token_xai_interval cadence trigger (agents/orchestrator.py).
+  min_cluster_observations: 8
+
 # ORCHESTRATOR
 orchestrator:
   # Enable parallel execution (agents don't wait for each other)

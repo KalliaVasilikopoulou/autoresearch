@@ -15,7 +15,10 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents.protocols import SummaryEvidence
 from agents.agent1_training_specialist import LR_KEYS
+from state.clustering import cluster_attention_trajectories, cluster_fingerprints
 from state.visualize import (
+    chart_attention_trajectory_clusters,
+    chart_fingerprint_clusters,
     chart_hyperparameter_importance_evolution,
     chart_layer_importance_distribution,
     chart_status_distribution,
@@ -42,6 +45,7 @@ class Agent3ReportAnalyst:
         self.batch_size = self.agent3_config.get("batch_size", 3)
         self.preserve_history = self.agent3_config.get("preserve_history", True)
         self.generate_charts = bool(self.agent3_config.get("generate_charts", True))
+        self.min_cluster_n = int(self.agent3_config.get("min_cluster_observations", 8))
 
         _state = Path(state_dir) if state_dir else Path("state")
         _reports = Path(reports_dir) if reports_dir else Path("reports")
@@ -134,6 +138,7 @@ class Agent3ReportAnalyst:
             conflicting_signals=aggregate.get("conflicting_signals", []),
             recommended_hyperparams=aggregate.get("recommended_hyperparams", {}),
             reasoning=aggregate.get("reasoning", []),
+            fingerprint_clusters=aggregate.get("fingerprint_clusters", {}),
         )
         self._latest_summary_evidence = summary
 
@@ -163,6 +168,17 @@ class Agent3ReportAnalyst:
                 summary += f"\n\n## Strategic Narrative\n{narrative}\n"
             except Exception as e:
                 summary += f"\n\n## Strategic Narrative\nFailed to generate: {e}\n"
+
+        # OPTIONAL: If LLM enabled AND there's real cluster data (Tier 3.3)
+        # -- not invoked when clustering hasn't found anything yet, so a
+        # missing-data run never costs an API call.
+        if self.use_llm and aggregate.get("fingerprint_clusters"):
+            try:
+                self._init_claude()
+                hypotheses = self._get_cluster_hypotheses(aggregate["fingerprint_clusters"])
+                summary += f"\n\n## Cluster Hypotheses (Claude)\n{hypotheses}\n"
+            except Exception as e:
+                summary += f"\n\n## Cluster Hypotheses (Claude)\nFailed to generate: {e}\n"
 
         return summary, aggregate
 
@@ -260,6 +276,22 @@ class Agent3ReportAnalyst:
         all_reports = self._load_all_reports()
         all_metrics = [self._extract_structured_metrics(content) for _, content in all_reports]
         batch_metrics = [self._extract_structured_metrics(content) for _, content in new_reports]
+
+        # Tier 3: cluster token-level behavioral fingerprints across runs
+        # (see state/clustering.py). token_fingerprint is only non-empty
+        # when token_xai_enabled was on for that run (Tier 2 cadence
+        # trigger), so this is usually a strict subset of all_metrics.
+        fingerprint_rows = [
+            {**(item.get("token_fingerprint") or {}), "val_bpb": item.get("val_bpb")}
+            for item in all_metrics
+            if item.get("token_fingerprint")
+        ]
+        overall_clusters = cluster_fingerprints(fingerprint_rows, min_n=self.min_cluster_n)
+        trajectory_clusters = cluster_attention_trajectories(fingerprint_rows, min_n=self.min_cluster_n)
+        fingerprint_clusters = (
+            {"overall": overall_clusters, "trajectory": trajectory_clusters}
+            if (overall_clusters or trajectory_clusters) else {}
+        )
 
         finite_bpbs = [
             float(item.get("val_bpb"))
@@ -480,6 +512,59 @@ class Agent3ReportAnalyst:
 
         summary_lines.extend([
             "",
+            "## Behavioral Fingerprint Clusters (Tier 3)",
+        ])
+        if not fingerprint_rows:
+            summary_lines.append("- No token-level fingerprints available yet (token_xai_enabled has not run on any historical run)")
+        else:
+            summary_lines.append(f"- Fingerprint-bearing runs available: {len(fingerprint_rows)} (need >= {self.min_cluster_n} to cluster)")
+            if overall_clusters:
+                summary_lines.extend([
+                    "",
+                    f"### Overall fingerprint clusters (k={overall_clusters['k']}, silhouette={overall_clusters['silhouette']:.3f})",
+                    "| Cluster | n | Mean val_bpb |",
+                    "|--------:|--:|-------------:|",
+                ])
+                for c in overall_clusters["clusters"]:
+                    mean_str = f"{c['mean_val_bpb']:.6f}" if c["mean_val_bpb"] is not None else "N/A"
+                    summary_lines.append(f"| {c['cluster_id']} | {c['n']} | {mean_str} |")
+            else:
+                summary_lines.append(f"- Not enough historical fingerprints yet to cluster overall (need >= {self.min_cluster_n}, have {len(fingerprint_rows)})")
+
+            if trajectory_clusters:
+                summary_lines.extend([
+                    "",
+                    f"### Attention-reach trajectory clusters (k={trajectory_clusters['k']}, silhouette={trajectory_clusters['silhouette']:.3f})",
+                    "| Cluster | n | Mean val_bpb | Shape (normalized depth, first -> last) |",
+                    "|--------:|--:|-------------:|:-----------------------------------------|",
+                ])
+                for c in trajectory_clusters["clusters"]:
+                    mean_str = f"{c['mean_val_bpb']:.6f}" if c["mean_val_bpb"] is not None else "N/A"
+                    shape_str = " -> ".join(f"{v:.2f}" for v in c["mean_shape"])
+                    summary_lines.append(f"| {c['cluster_id']} | {c['n']} | {mean_str} | {shape_str} |")
+            else:
+                summary_lines.append(f"- Not enough historical fingerprints yet to cluster trajectory shapes (need >= {self.min_cluster_n}, have {len(fingerprint_rows)})")
+
+        if self.generate_charts:
+            try:
+                chart_path = chart_fingerprint_clusters(
+                    overall_clusters, self.visuals_dir / f"summary_{self.summary_counter:04d}_clusters.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Fingerprint clusters vs. val_bpb](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (fingerprint clusters) failed: {_e}")
+            try:
+                chart_path = chart_attention_trajectory_clusters(
+                    trajectory_clusters, self.visuals_dir / f"summary_{self.summary_counter:04d}_trajectories.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Attention-reach trajectory clusters](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (trajectory clusters) failed: {_e}")
+
+        summary_lines.extend([
+            "",
             "## Recommendations for Agent 1 (Data-Backed)",
             f"- Recommendation sample size (elite runs): {len(elite)}",
         ])
@@ -523,6 +608,7 @@ class Agent3ReportAnalyst:
                 f"Elite recommendation subset size: {len(elite)}",
                 "Importance/non-importance split uses threshold 0.50",
             ],
+            "fingerprint_clusters": fingerprint_clusters,
         }
 
         return "\n".join(summary_lines) + "\n", aggregate
@@ -564,3 +650,30 @@ Be concise (under 250 words)."""
             return message.content[0].text
         except Exception as e:
             return f"Error getting Claude narrative: {e}"
+
+    def _get_cluster_hypotheses(self, fingerprint_clusters: Dict[str, Any]) -> str:
+        """Tier 3.3: feed the cluster table to Claude for hypotheses only --
+        never treated as a finding on its own, just candidate explanations
+        for Agent 1 to actually test as real runs."""
+        prompt = f"""Below is a table of behavioral-fingerprint clusters found across recent
+training runs (from hierarchical clustering of attention/attribution
+statistics), each with its mean validation bpb (lower is better).
+
+1. What distinguishes the best-performing cluster from the others?
+2. What is the most testable hypothesis for why that distinction might matter?
+3. Frame this as a hypothesis to test with a real run, not a conclusion.
+
+Cluster data:
+{json.dumps(fingerprint_clusters, indent=2)}
+
+Be concise (under 200 words)."""
+
+        try:
+            message = self.claude.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=350,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return message.content[0].text
+        except Exception as e:
+            return f"Error getting cluster hypotheses: {e}"
