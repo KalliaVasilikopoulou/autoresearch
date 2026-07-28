@@ -39,12 +39,22 @@ agent1:
   interaction_threshold: 0.15      # reserved for interaction-aware blocking (not used yet)
 
   # Tier 2 token-level XAI (see agents/xai_methods/token_methods.py and
-  # dev/INNOVATION_PLAN.md). Documented here for discoverability but
-  # actually read by train.py directly from model_hyperparams.yaml at
-  # training time, same as ablation_k below -- these keys are not consumed
-  # from this file. Off by default: unlike the free interpretable scalars,
-  # this runs real extra forward/backward passes on GPU.
-  # token_xai_enabled: false
+  # dev/INNOVATION_PLAN.md). Costs real extra GPU time (roughly doubled
+  # wall-clock time in testing), so it isn't on for every run.
+  #
+  # token_xai_enabled is NOT set here -- Orchestrator decides it fresh each
+  # iteration (agents/orchestrator.py) and writes it into that iteration's
+  # hyperparams: on at a fixed interval (token_xai_interval, a floor so
+  # history keeps accumulating during a losing streak) OR for the run right
+  # after a new best val_bpb is found (the closest approximation to
+  # "fingerprint the best model" possible today -- train.py fuses training
+  # and fingerprinting into one process with no checkpoint save/reload, so
+  # the actual best run can't be retroactively fingerprinted).
+  token_xai_interval: 5
+
+  # token_xai_seq_len/token_xai_n_batches ARE read by train.py directly from
+  # model_hyperparams.yaml (same as ablation_k below), not from this file --
+  # documented here for discoverability only.
   # token_xai_seq_len: 384      # tokens per probe slice (short, not the full training context -- VRAM discipline)
   # token_xai_n_batches: 4      # number of probe slices to average the fingerprint over
 

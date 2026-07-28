@@ -71,6 +71,73 @@ agent3:
     assert payload["latest_summary"] is not None
 
 
+def test_orchestrator_token_xai_cadence_interval_and_new_best(tmp_path):
+    """token_xai_enabled should be True on: iteration 0 (interval floor),
+    any iteration whose incoming val_bpb just set a new best, and every
+    Nth iteration thereafter -- and False otherwise. Isolates the two
+    trigger conditions from each other via a controlled val_bpb sequence
+    (dry_run's own formula always improves every iteration, which would
+    make the "new best" trigger fire on literally every run and mask the
+    interval-only and neither-condition cases).
+    """
+    state_dir = tmp_path / "state"
+    reports_dir = tmp_path / "reports"
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text(
+        """
+agent1:
+  use_llm: false
+  accuracy_threshold: 0.01
+  cost_limit_usd: 50.0
+  training_budget_seconds: 300
+  token_xai_interval: 4
+
+agent2:
+  xai_method: fast
+  use_llm: false
+  ablation_k: 3
+
+agent3:
+  batch_size: 100
+  use_llm: false
+""".strip()
+    )
+
+    orchestrator = Orchestrator(
+        config_path=str(config_path),
+        state_dir=str(state_dir),
+        reports_dir=str(reports_dir),
+        root_dir=str(tmp_path),
+        dry_run=True,
+    )
+    assert orchestrator.token_xai_interval == 4
+
+    # val_bpb per iteration: iter0=1.0 (best->1.0), iter1=1.2 (worse),
+    # iter2=1.3 (worse), iter3=1.4 (worse), iter4=0.9 (new best), iter5=1.5 (worse)
+    val_bpb_sequence = [1.0, 1.2, 1.3, 1.4, 0.9, 1.5]
+    observed_token_xai: list = []
+
+    def fake_train_model(hyperparams, dry_run=False, iteration=0):
+        observed_token_xai.append(hyperparams.get("token_xai_enabled"))
+        return {
+            "val_bpb": val_bpb_sequence[iteration],
+            "training_time": 0.0,
+            "checkpoint_path": None,
+            "status": "dry_run",
+        }
+
+    with patch.object(orchestrator.agent1, "train_model", side_effect=fake_train_model):
+        orchestrator.run(max_iterations=len(val_bpb_sequence))
+
+    # iter0: interval (0%4==0) -> True
+    # iter1: latest=1.0 sets a new best (best started at inf) -> True
+    # iter2: latest=1.2, not a new best (best=1.0); 2%4!=0 -> False
+    # iter3: latest=1.3, not a new best; 3%4!=0 -> False
+    # iter4: latest=1.4, not a new best; 4%4==0 -> True (interval)
+    # iter5: latest=0.9, new best (best=1.0); 5%4!=0 -> True (new best)
+    assert observed_token_xai == [True, True, False, False, True, True]
+
+
 def test_training_falls_back_to_simulated_run_when_real_training_is_unavailable(tmp_path):
     config_path = tmp_path / "agents_config.yaml"
     config_path.write_text(

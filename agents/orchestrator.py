@@ -59,6 +59,13 @@ class Orchestrator:
         self.dry_run = dry_run
         self.interactive = interactive
 
+        # Tier 2 token-level XAI (see agents/xai_methods/token_methods.py)
+        # costs real extra GPU time (roughly doubled wall-clock in testing),
+        # so it isn't on for every run -- decided here each iteration, not
+        # by Agent 1 or train.py, since it's an orchestration-level
+        # sampling policy, not a hyperparameter search decision.
+        self.token_xai_interval = int(self.agent1.agent1_config.get("token_xai_interval", 5))
+
         # Deterministic pipeline validation (agents/pipeline_validator.py):
         # timestamped run directories, never cleared on startup -- that
         # history is exactly what catches intermittent bugs -- pruned to the
@@ -90,6 +97,7 @@ class Orchestrator:
             if recent_results:
                 latest_result = recent_results[-1]
                 latest_val_bpb = latest_result.get("val_bpb")
+            best_before_decision = self.agent1.best_val_bpb
             new_hyperparams = self.agent1.decide_next_hyperparams(
                 latest_summary=latest_summary,
                 evidence=recent_evidence,
@@ -101,6 +109,25 @@ class Orchestrator:
             if new_hyperparams is None:
                 print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")
                 break
+
+            # token_xai_enabled: fixed interval (a floor, so fingerprint
+            # history keeps accumulating even during a losing streak) OR
+            # the run that just completed set a new best -- train.py fuses
+            # training and fingerprinting into one process (no checkpoint
+            # save/reload exists), so "fingerprint the best model" isn't
+            # possible; this fingerprints the NEXT run after a new best is
+            # found, as the closest available approximation.
+            # new_hyperparams is the same dict object as
+            # self.agent1.current_hyperparams (decide_next_hyperparams sets
+            # that reference directly), so mutating it here is what makes
+            # train_model's own _save_hyperparams() call persist this flag —
+            # decide_next_hyperparams already wrote the file once, without
+            # this key; train_model's save overwrites it with this included.
+            new_best_just_set = latest_val_bpb is not None and latest_val_bpb < best_before_decision
+            token_xai_due = (iteration % self.token_xai_interval == 0) or new_best_just_set
+            new_hyperparams["token_xai_enabled"] = token_xai_due
+            print(f"[Orchestrator] token_xai_enabled={token_xai_due} "
+                  f"(interval={self.token_xai_interval}, new_best_just_set={new_best_just_set})")
 
             issues = pipeline_validator.validate_agent1_decision(
                 self.agent1.last_decision_log, recent_evidence, latest_summary,
