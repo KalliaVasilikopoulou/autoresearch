@@ -18,6 +18,7 @@ from state.visualize import (
     chart_head_importance_heatmap,
     chart_hyperparameter_importance,
     chart_layer_scalars,
+    chart_token_fingerprint,
 )
 import yaml
 
@@ -193,6 +194,13 @@ class Agent2XAISpecialist:
         # itself failed, in which case it's absent, not invented).
         layer_scalars = run_metrics.get("interpretable_scalars") or {}
 
+        # Real, token-level signal from an analysis-only forward pass (see
+        # agents/xai_methods/token_methods.py) -- only present when
+        # token_xai_enabled was on for this run (it costs real GPU time,
+        # unlike layer_scalars above). Absent, not fabricated, otherwise.
+        token_fingerprint = run_metrics.get("token_fingerprint") or {}
+        evidence.token_fingerprint = token_fingerprint
+
         evidence.important_heads = [
             {"head": head, "impact": impact}
             for head, impact in sorted(
@@ -242,6 +250,7 @@ class Agent2XAISpecialist:
                 str(layer_idx): round(layer_share[layer_idx], 4) for layer_idx in layer_share
             },
             "layer_scalars": layer_scalars,
+            "token_fingerprint": token_fingerprint,
             "metadata": metadata,
         }
 
@@ -321,6 +330,43 @@ class Agent2XAISpecialist:
                     lines.extend(["", f"![Per-layer interpretable scalars](../visuals/{chart_path.name})"])
             except Exception as _e:
                 print(f"[Agent 2] Chart generation (layers) failed: {_e}")
+
+        lines.extend([
+            "",
+            "## Token-Level Behavioral Fingerprint (Tier 2, analysis-only forward pass)",
+        ])
+        if token_fingerprint:
+            entropy = token_fingerprint.get("attn_entropy", [])
+            distance = token_fingerprint.get("attn_distance", [])
+            dla = token_fingerprint.get("dla", [])
+            lines.append(f"- attn_distance_slope: {token_fingerprint.get('attn_distance_slope', float('nan')):.6f} "
+                         "(does attention reach grow with depth?)")
+            lines.append(f"- induction_score: {token_fingerprint.get('induction_score', float('nan')):.6f} "
+                         "(near-zero is expected on short runs -- induction heads emerge late in training)")
+            lines.append("| Layer | attn_entropy | attn_distance | dla |")
+            lines.append("|------:|-------------:|--------------:|----:|")
+            for layer_idx in range(n_layer):
+                e = entropy[layer_idx] if layer_idx < len(entropy) else float("nan")
+                d = distance[layer_idx] if layer_idx < len(distance) else float("nan")
+                a = dla[layer_idx] if layer_idx < len(dla) else float("nan")
+                lines.append(f"| L{layer_idx} | {e:.6f} | {d:.6f} | {a:.6f} |")
+            pos_saliency = token_fingerprint.get("pos_saliency", [])
+            if pos_saliency:
+                lines.append("")
+                lines.append("pos_saliency (mean |grad x input|, by distance-back from the predicted position): "
+                             + ", ".join(f"{v:.6f}" for v in pos_saliency))
+        else:
+            lines.append("- Unavailable (token_xai_enabled was off for this run, or extraction failed)")
+
+        if self.generate_charts and token_fingerprint:
+            try:
+                chart_path = chart_token_fingerprint(
+                    token_fingerprint, n_layer, self.visuals_dir / f"{evidence.report_id}_token_fingerprint.png",
+                )
+                if chart_path:
+                    lines.extend(["", f"![Token-level behavioral fingerprint](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 2] Chart generation (token fingerprint) failed: {_e}")
 
         if ablation_ran:
             lines.extend([

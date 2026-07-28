@@ -857,7 +857,7 @@ class Agent1TrainingSpecialist:
     # carry real per-run evidence (see train.py) as a JSON blob rather than a
     # single scalar; keyed generically so any future `<name>: {json}` line is
     # picked up without another parser change.
-    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps"}
+    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps", "token_fingerprint"}
 
     def _parse_training_output(self, stdout: str) -> Dict[str, Any]:
         """Parse all metrics from train.py's final summary block."""

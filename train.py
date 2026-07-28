@@ -847,3 +847,29 @@ try:
 except Exception as _e:
     print(f"[head_ablation] Could not run ablation study: {_e}")
 sys.stdout.flush()
+
+try:
+    _token_xai_hp = {}
+    if os.path.exists(_hp_path):
+        try:
+            with open(_hp_path) as _f:
+                _token_xai_hp = _yaml.safe_load(_f) or {}
+        except Exception:
+            pass
+
+    if bool(_token_xai_hp.get("token_xai_enabled", False)):
+        from agents.xai_methods.token_methods import compute_behavioral_fingerprint
+
+        _token_xai_seq_len = min(int(_token_xai_hp.get("token_xai_seq_len", 384)), MAX_SEQ_LEN)
+        _token_xai_n_batches = max(1, min(int(_token_xai_hp.get("token_xai_n_batches", 4)), 20))
+
+        with autocast_ctx:
+            fingerprint = compute_behavioral_fingerprint(
+                model, tokenizer, DEVICE_BATCH_SIZE,
+                seq_len=_token_xai_seq_len, n_batches=_token_xai_n_batches,
+            )
+        fingerprint["x0_lambda"] = x0_lambdas  # reuse the Tier 0 scalar, don't recompute
+        print("token_fingerprint: " + json.dumps(fingerprint))
+except Exception as _e:
+    print(f"[token_fingerprint] Could not compute: {_e}")
+sys.stdout.flush()

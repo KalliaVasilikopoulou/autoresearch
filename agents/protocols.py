@@ -28,6 +28,7 @@ class AnalysisEvidence:
     stuck_signal: bool
     confidence: float
     notes: List[str] = field(default_factory=list)
+    token_fingerprint: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

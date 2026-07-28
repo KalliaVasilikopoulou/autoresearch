@@ -202,6 +202,64 @@ def chart_layer_scalars(
     return _finalize(fig, path, title="Per-layer interpretable scalars")
 
 
+def chart_token_fingerprint(
+    token_fingerprint: Dict[str, Any],
+    n_layer: int,
+    path: Path,
+) -> Optional[Path]:
+    """Small multiples for the Tier 2 token-level behavioral fingerprint:
+    attn_entropy, attn_distance, dla vs layer index, plus a bar for
+    pos_saliency by distance-back bucket. Called whenever token_fingerprint
+    is non-empty -- only true when token_xai_enabled was on for that run
+    (absent, not fabricated, otherwise, same convention as layer_scalars).
+    """
+    if not token_fingerprint:
+        return None
+    entropy = token_fingerprint.get("attn_entropy") or []
+    distance = token_fingerprint.get("attn_distance") or []
+    dla = token_fingerprint.get("dla") or []
+    pos_saliency = token_fingerprint.get("pos_saliency") or []
+    if not entropy and not distance and not dla and not pos_saliency:
+        return None
+
+    fig, axes = plt.subplots(1, 4, figsize=(14, 3), dpi=150)
+    fig.patch.set_facecolor(SURFACE)
+    line_panels = [("attn_entropy", entropy), ("attn_distance", distance), ("dla", dla)]
+    for ax, (label, values) in zip(axes[:3], line_panels):
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color(BASELINE)
+        ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+        ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+        if values:
+            ax.plot(list(range(len(values))), values, color=SEQUENTIAL_BLUE, marker="o", markersize=4,
+                    linewidth=1.5, zorder=3)
+            if label == "dla":
+                ax.axhline(0, color=BASELINE, linewidth=0.8, zorder=1)
+        ax.set_title(label, color=INK_PRIMARY, fontsize=9, loc="left")
+        ax.set_xlabel("layer", fontsize=8, color=INK_SECONDARY)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    ax = axes[3]
+    ax.set_facecolor(SURFACE)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color(BASELINE)
+    ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    if pos_saliency:
+        bucket_labels = list(range(1, len(pos_saliency) + 1))
+        ax.bar(bucket_labels, pos_saliency, color=SEQUENTIAL_BLUE, width=0.7, zorder=3)
+    ax.set_title("pos_saliency", color=INK_PRIMARY, fontsize=9, loc="left")
+    ax.set_xlabel("distance back", fontsize=8, color=INK_SECONDARY)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    return _finalize(fig, path, title="Token-level behavioral fingerprint")
+
+
 # ---------------------------------------------------------------------------
 # Part B -- Agent 3 summary charts
 # ---------------------------------------------------------------------------

@@ -38,6 +38,16 @@ agent1:
   surrogate_cycle_runs: 10         # runs per block-rotation cycle (used once interaction blocking lands)
   interaction_threshold: 0.15      # reserved for interaction-aware blocking (not used yet)
 
+  # Tier 2 token-level XAI (see agents/xai_methods/token_methods.py and
+  # dev/INNOVATION_PLAN.md). Documented here for discoverability but
+  # actually read by train.py directly from model_hyperparams.yaml at
+  # training time, same as ablation_k below -- these keys are not consumed
+  # from this file. Off by default: unlike the free interpretable scalars,
+  # this runs real extra forward/backward passes on GPU.
+  # token_xai_enabled: false
+  # token_xai_seq_len: 384      # tokens per probe slice (short, not the full training context -- VRAM discipline)
+  # token_xai_n_batches: 4      # number of probe slices to average the fingerprint over
+
 # AGENT 2: XAI Specialist
 agent2:
   # Which XAI method to use: "fast" or "thorough"
