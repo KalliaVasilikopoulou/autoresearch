@@ -6,7 +6,7 @@ import random
 import subprocess
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import json
 
 try:
@@ -43,9 +43,33 @@ LR_SAFE_RANGES = {
 # Tier 1 even though state/results_analysis.HYPERPARAM_COLUMNS already
 # tracks them -- these are new exploration ranges, narrower than train.py's
 # own hard safety clamps (which remain the outer safety net regardless).
-ARCH_SAFE_RANGES = {"n_layer": (4, 24), "n_embd": (128, 1024), "n_head": (1, 16)}
+ARCH_SAFE_RANGES = {
+    "n_layer": (4, 24), "n_embd": (128, 1024), "n_head": (1, 16),
+    # Tier 4: fraction of layers using the short attention window (see
+    # train.py's _build_window_pattern, which turns this into an actual S/L
+    # pattern string). Continuous so the Sobol/EI surrogate can search it
+    # like any other dimension. Replaces the old hardcoded
+    # WINDOW_PATTERN = "SSSL" constant, which train.py never read from
+    # model_hyperparams.yaml at all.
+    "window_s_fraction": (0.0, 1.0),
+}
 OTHER_SAFE_RANGES = {"weight_decay": (0.0, 0.5), "warmup_ratio": (0.0, 0.2), "batch_size": (2048, 32768)}
 SEARCH_SPACE = {**LR_SAFE_RANGES, **ARCH_SAFE_RANGES, **OTHER_SAFE_RANGES}
+
+# Tier 4 (see dev/INNOVATION_PLAN.md): thresholds for turning a token-level
+# behavioral fingerprint (agents/xai_methods/token_methods.py) into
+# directional nudges on the architecture search. Starting points, not
+# calibrated against real data yet -- there's essentially no real fingerprint
+# history at the time these were written. All comparisons are relative to
+# the fingerprint's own scale (a fraction of its own peak), never an
+# absolute magic number tied to one model's magnitude.
+FINGERPRINT_LATE_LAYER_FRACTION = 0.25      # "late layers" = last 25% of the run's own n_layer (>=1)
+FINGERPRINT_DEAD_LAYER_RATIO = 0.10         # late-layer peak < 10% of the array's own overall peak -> "~=0"
+FINGERPRINT_LOW_ENTROPY_NATS = math.log(4)  # attention effectively focused on <=4 positions on average
+FINGERPRINT_HIGH_INDUCTION = 0.5            # a real, mature induction signal (baseline observed on one real run: ~0.12)
+FINGERPRINT_SATURATION_LAYER_IDX = 2        # "by layer 3" (1-indexed) = index 2
+FINGERPRINT_SATURATION_RATIO = 0.85         # attn_distance already >=85% of its own peak by that layer
+FINGERPRINT_MAX_STEP = 2                    # cap on |sum of votes| applied to n_layer/n_head per iteration
 
 
 class Agent1TrainingSpecialist:
@@ -124,6 +148,7 @@ class Agent1TrainingSpecialist:
         self._last_surrogate_phase: Optional[str] = None
         self._last_surrogate_frozen: list = []
         self._last_surrogate_active_block: list = []
+        self._last_fingerprint_adjustments: List[Dict[str, Any]] = []
 
         self.claude = None
 
@@ -150,6 +175,7 @@ class Agent1TrainingSpecialist:
             "n_layer": 8,  # Number of layers
             "n_head": 4,  # Number of attention heads
             "n_embd": 512,  # Embedding dimension
+            "window_s_fraction": 0.75,  # matches the old hardcoded WINDOW_PATTERN="SSSL" (3-of-4 = 75% S)
             "embedding_lr": LR_DEFAULTS["embedding_lr"],
             "unembedding_lr": LR_DEFAULTS["unembedding_lr"],
             "matrix_lr": LR_DEFAULTS["matrix_lr"],
@@ -208,6 +234,7 @@ class Agent1TrainingSpecialist:
         # methods below need to change.
         before_hyperparams = dict(self.current_hyperparams)
         self._last_lr_clamps = {}
+        self._last_fingerprint_adjustments = []
 
         detected_stagnation = self._detect_stagnation(recent_results, latest_val_bpb)
         effective_stuck_signal = stuck_signal or detected_stagnation
@@ -256,6 +283,15 @@ class Agent1TrainingSpecialist:
                 self.total_api_cost += 0.03  # Estimate
             except Exception as e:
                 print(f"[Agent 1] Claude suggestion failed: {e}")
+
+        # Tier 4: nudge architecture params using the most recent
+        # fingerprint-bearing evidence entry, if any -- a final,
+        # path-independent pass applied regardless of which branch above
+        # produced new_hyperparams (including a Claude override), since the
+        # surrogate path dominates once enough data exists and would
+        # otherwise make a fingerprint hook inside _evidence_adjustment
+        # alone get bypassed most of the time in a mature search.
+        new_hyperparams = self._fingerprint_adjustment(new_hyperparams, evidence)
 
         # Claude's suggestion is free-form JSON — re-clamp every LR group
         # before it's ever saved, since that path can otherwise bypass the
@@ -331,6 +367,7 @@ class Agent1TrainingSpecialist:
             "summary_considered": bool(latest_summary),
             "params": params_log,
             "lr_clamps": dict(self._last_lr_clamps),
+            "fingerprint_adjustments": list(self._last_fingerprint_adjustments),
         }
 
     def _write_decision_log(self, decision_log: Dict[str, Any]) -> None:
@@ -486,6 +523,119 @@ class Agent1TrainingSpecialist:
         current = float(new_params.get(key, LR_DEFAULTS[key]))
         target = self._clamp_lr(key, target)
         new_params[key] = self._clamp_lr(key, current * (1.0 - pull) + target * pull)
+
+    def _fingerprint_late_slice(self, values: List[float]) -> List[float]:
+        """Last FINGERPRINT_LATE_LAYER_FRACTION of a per-layer array (>=1
+        element), used by the dla/x0_lambda rules below."""
+        n = len(values)
+        k = max(1, int(round(n * FINGERPRINT_LATE_LAYER_FRACTION)))
+        return values[-k:]
+
+    def _fingerprint_votes(self, fingerprint: Dict[str, Any]) -> Dict[str, List[int]]:
+        """The 5 Tier 4 rules (see dev/INNOVATION_PLAN.md), each casting a
+        simple +-1 vote on one param when its threshold trips. Every
+        comparison is relative to the fingerprint's own peak for that
+        array -- never an absolute number tied to one run's scale, since
+        model magnitude varies a lot across the search.
+        """
+        votes: Dict[str, List[int]] = {}
+
+        def vote(param: str, direction: int) -> None:
+            votes.setdefault(param, []).append(direction)
+
+        dla = [float(v) for v in (fingerprint.get("dla") or [])]
+        if dla:
+            peak = max(abs(v) for v in dla)
+            if peak > 1e-9 and max(abs(v) for v in self._fingerprint_late_slice(dla)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
+                vote("n_layer", -1)  # late layers aren't writing to the output
+
+        x0_lambda = [float(v) for v in (fingerprint.get("x0_lambda") or [])]
+        if x0_lambda:
+            peak = max(x0_lambda)
+            if peak > 1e-9 and max(self._fingerprint_late_slice(x0_lambda)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
+                vote("n_layer", 1)  # depth is being used, not just echoing the embedding shortcut
+
+        attn_entropy = [float(v) for v in (fingerprint.get("attn_entropy") or [])]
+        if attn_entropy:
+            mean_entropy = sum(attn_entropy) / len(attn_entropy)
+            if mean_entropy < FINGERPRINT_LOW_ENTROPY_NATS:
+                vote("n_head", -1)
+                vote("n_embd", 1)
+
+        induction_score = fingerprint.get("induction_score")
+        if isinstance(induction_score, (int, float)) and induction_score > FINGERPRINT_HIGH_INDUCTION:
+            vote("n_layer", 1)  # found the easy structure fast -> raise the difficulty
+
+        attn_distance = [float(v) for v in (fingerprint.get("attn_distance") or [])]
+        if attn_distance:
+            peak = max(attn_distance)
+            idx = min(FINGERPRINT_SATURATION_LAYER_IDX, len(attn_distance) - 1)
+            if peak > 1e-9 and attn_distance[idx] >= FINGERPRINT_SATURATION_RATIO * peak:
+                vote("window_s_fraction", 1)  # reach stopped growing early -> more short-window layers are safe
+
+        return votes
+
+    def _fingerprint_adjustment(self, new_params: Dict[str, Any], evidence: Optional[list]) -> Dict[str, Any]:
+        """Tier 4: nudge new_params using the most recent fingerprint-bearing
+        evidence entry, if any -- a final, path-independent pass (see
+        decide_next_hyperparams) applied on top of whichever path
+        (surrogate/evidence/heuristic/radical_change) already proposed
+        new_params. No-op, returning new_params unchanged, when no evidence
+        entry has a fingerprint yet (this is the common case early in a
+        search, or whenever token_xai_enabled hasn't fired recently).
+        """
+        fingerprint = None
+        for item in reversed(evidence or []):
+            candidate = item.get("token_fingerprint") if isinstance(item, dict) else None
+            if candidate:
+                fingerprint = candidate
+                break
+        if not fingerprint:
+            return new_params
+
+        votes = self._fingerprint_votes(fingerprint)
+        applied: List[Dict[str, Any]] = []
+
+        if "n_layer" in votes:
+            delta = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_layer"])))
+            if delta != 0:
+                lo, hi = ARCH_SAFE_RANGES["n_layer"]
+                current = int(new_params.get("n_layer", 8))
+                new_value = max(int(lo), min(current + delta, int(hi)))
+                new_params["n_layer"] = new_value
+                applied.append({"param": "n_layer", "votes": votes["n_layer"], "delta": delta, "new_value": new_value})
+
+        if "n_head" in votes:
+            delta = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_head"])))
+            if delta != 0:
+                lo, hi = ARCH_SAFE_RANGES["n_head"]
+                current = int(new_params.get("n_head", 4))
+                new_value = max(int(lo), min(current + delta, int(hi)))
+                new_params["n_head"] = new_value
+                applied.append({"param": "n_head", "votes": votes["n_head"], "delta": delta, "new_value": new_value})
+
+        if "n_embd" in votes:
+            vote_sum = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_embd"])))
+            delta = vote_sum * 64
+            if delta != 0:
+                lo, hi = ARCH_SAFE_RANGES["n_embd"]
+                current = int(new_params.get("n_embd", 512))
+                new_value = max(int(lo), min(current + delta, int(hi)))
+                new_params["n_embd"] = new_value
+                applied.append({"param": "n_embd", "votes": votes["n_embd"], "delta": delta, "new_value": new_value})
+
+        if "window_s_fraction" in votes:
+            vote_sum = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["window_s_fraction"])))
+            delta = vote_sum * 0.1
+            if delta != 0:
+                lo, hi = ARCH_SAFE_RANGES["window_s_fraction"]
+                current = float(new_params.get("window_s_fraction", 0.75))
+                new_value = max(lo, min(current + delta, hi))
+                new_params["window_s_fraction"] = new_value
+                applied.append({"param": "window_s_fraction", "votes": votes["window_s_fraction"], "delta": delta, "new_value": new_value})
+
+        self._last_fingerprint_adjustments = applied
+        return new_params
 
     def _evidence_adjustment(
         self,

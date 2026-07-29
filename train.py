@@ -498,6 +498,34 @@ def _clamp(name, value, lo, hi):
         _clamp_records[name] = {"requested": value, "clamped": clamped, "bounds": [lo, hi]}
     return clamped
 
+
+def _build_window_pattern(n_layer, s_fraction):
+    """Tier 4 (see dev/INNOVATION_PLAN.md): turn a continuous window_s_fraction
+    in [0,1] -- the tunable Agent 1 actually searches -- into an actual S/L
+    pattern string, one character per layer. Evenly interleaves the S layers
+    among the L layers (a Bresenham-style even distribution) rather than
+    blocking them at the start or end, to avoid an untested asymmetry.
+    _compute_window_sizes already force-overrides the last layer to "L"
+    regardless of this string, so no special-casing needed for that here.
+    """
+    if n_layer <= 0:
+        return "L"
+    n_s = max(0, min(n_layer, round(n_layer * s_fraction)))
+    # Integer-arithmetic Bresenham (not floating-point accumulation of
+    # n_s/n_layer per step): a float step can drift below the 1.0 trigger by
+    # the last iteration (e.g. n_layer=7 sums 1/7 seven times to
+    # 0.9999999999999998, silently dropping the last S) -- this is exact.
+    pattern = []
+    remainder = 0
+    for _ in range(n_layer):
+        remainder += n_s
+        if remainder >= n_layer:
+            pattern.append("S")
+            remainder -= n_layer
+        else:
+            pattern.append("L")
+    return "".join(pattern)
+
 _target_embd = DEPTH * ASPECT_RATIO
 _hp = {}
 try:
@@ -529,9 +557,14 @@ try:
             _tokens_per_fwdbwd = DEVICE_BATCH_SIZE * MAX_SEQ_LEN
             _raw_batch = _clamp("batch_size", int(_hp["batch_size"]), _tokens_per_fwdbwd, 2**20)
             TOTAL_BATCH_SIZE = max(_tokens_per_fwdbwd, round(_raw_batch / _tokens_per_fwdbwd) * _tokens_per_fwdbwd)
+        _window_s_fraction = 0.75  # matches the old hardcoded WINDOW_PATTERN="SSSL" (3-of-4 = 75% S)
+        if "window_s_fraction" in _hp:
+            _window_s_fraction = _clamp("window_s_fraction", float(_hp["window_s_fraction"]), 0.0, 1.0)
+        WINDOW_PATTERN = _build_window_pattern(DEPTH, _window_s_fraction)
         print(f"[hyperparams] DEPTH={DEPTH} N_HEAD={N_HEAD} target_n_embd={_target_embd} "
               f"EMBEDDING_LR={EMBEDDING_LR} UNEMBEDDING_LR={UNEMBEDDING_LR} MATRIX_LR={MATRIX_LR} SCALAR_LR={SCALAR_LR} "
-              f"WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO} TOTAL_BATCH_SIZE={TOTAL_BATCH_SIZE}")
+              f"WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO} TOTAL_BATCH_SIZE={TOTAL_BATCH_SIZE} "
+              f"WINDOW_PATTERN={WINDOW_PATTERN} (window_s_fraction={_window_s_fraction})")
 except Exception as _e:
     print(f"[hyperparams] Could not load model_hyperparams.yaml: {_e} — using defaults")
 

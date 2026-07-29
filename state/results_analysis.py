@@ -32,7 +32,7 @@ LEGACY_DROP_FIELDS = {"learning_rate"}
 # Hyperparameter columns worth correlating against val_bpb (excludes
 # identifiers, timestamps, and outcome/runtime metrics).
 HYPERPARAM_COLUMNS = (
-    "n_layer", "n_embd", "n_head",
+    "n_layer", "n_embd", "n_head", "window_s_fraction",
     "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr",
     "weight_decay", "warmup_ratio", "batch_size",
 )
