@@ -401,6 +401,12 @@ class Orchestrator:
                     remote_runner.run_training_remote,
                     hyperparams_local_path=str(hp_path),
                     gpu_index=gpu_index,
+                    # Distinct per-run remote filename -- without this, every
+                    # concurrent slot in the wave uploads to the same shared
+                    # default (model_hyperparams.yaml) and their SFTP writes
+                    # race, corrupting each other (paramiko's post-upload
+                    # size check then fails with "size mismatch in put!").
+                    hp_remote_name=f"model_hyperparams_run{it:04d}.yaml",
                     run_label=f"GPU{gpu_index}",
                     timeout=self.agent1.training_budget + 120,
                     skip_sync=True,

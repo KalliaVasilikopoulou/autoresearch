@@ -103,7 +103,10 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, run_label=None, timeout=600, skip_sync=False):
+    seen_remote_names = []
+
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False):
+        seen_remote_names.append(hp_remote_name)
         return {
             "val_bpb": 1.0 if gpu_index == 3 else 1.1,
             "training_time": 1.0,
@@ -122,6 +125,15 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
     run_ids = {r["run_id"] for r in rows}
     assert run_ids == {"run_0000", "run_0001"}
 
+    # Regression guard: every concurrent slot must upload to its own remote
+    # filename -- reusing the shared default races two SFTP uploads against
+    # each other (this exact bug shipped once: paramiko's post-upload size
+    # check failed with "size mismatch in put!" when two GPU slots both
+    # uploaded to the plain model_hyperparams.yaml at the same time).
+    assert len(seen_remote_names) == 2
+    assert all(name for name in seen_remote_names)
+    assert len(set(seen_remote_names)) == 2
+
 
 def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
@@ -131,7 +143,7 @@ def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monke
 
     dispatched_gpus = []
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, run_label=None, timeout=600, skip_sync=False):
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False):
         dispatched_gpus.append(gpu_index)
         return {"val_bpb": 1.0, "training_time": 1.0, "status": "remote_ok", "device": gpu_index}
 
