@@ -218,9 +218,15 @@ class Agent1TrainingSpecialist:
         latest_val_bpb: Optional[float] = None,
         iteration: int = 0,
         recent_results: Optional[list] = None,
+        fresh_summary: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Decide next hyperparameters using heuristics (+ optional Claude).
+
+        fresh_summary: True only on the one call right after Agent 3 just
+        created a new summary (agents/orchestrator.py tracks this) -- the
+        Claude review below is gated on this, not just "a summary exists,"
+        so it fires once per new summary instead of every iteration.
 
         Returns:
             New hyperparams dict, or None to STOP
@@ -288,8 +294,12 @@ class Agent1TrainingSpecialist:
                 )
                 path_taken = "heuristic"
 
-        # OPTIONAL: If LLM enabled, get Claude suggestions
-        if self.use_llm and latest_summary:
+        # OPTIONAL: If LLM enabled AND this is a fresh summary -- gating on
+        # freshness (not just "a summary exists") is what keeps this from
+        # firing every iteration once any summary exists at all, which was
+        # burning the shared campaign LLM budget far faster than intended.
+        if self.use_llm and latest_summary and fresh_summary:
+            print(f"[Agent 1] Fresh summary available -- reading it with LLM reasoning...")
             try:
                 claude_suggestion = self._get_claude_suggestion(
                     new_hyperparams, latest_summary
@@ -1061,20 +1071,29 @@ class Agent1TrainingSpecialist:
     ) -> Optional[Dict[str, Any]]:
         """Ask the Claude Code CLI (agents/claude_cli.py -- your subscription,
         not a separately-billed API key) to review the heuristic suggestion.
-        Returns None (falling back to heuristic_params unchanged, exactly as
-        before this feature existed) whenever the CLI is unavailable, the
-        campaign budget is exhausted, or the response isn't usable JSON --
-        never fabricated, never raises.
+        Only ever called with a *fresh* summary (see decide_next_hyperparams's
+        fresh_summary gate) -- reads the complete summary (not a short
+        excerpt) since this fires once per new summary rather than every
+        iteration, including Agent 3's own LLM narrative/cluster-hypotheses
+        sections when present. Returns None (falling back to
+        heuristic_params unchanged, exactly as before this feature existed)
+        whenever the CLI is unavailable, the campaign budget is exhausted,
+        or the response isn't usable JSON -- never fabricated, never raises.
         """
-        prompt = f"""Based on this summary, review our heuristic hyperparameter suggestion:
+        prompt = f"""You are reviewing a complete strategic summary from a neural network
+hyperparameter search campaign (including any strategic narrative and
+cluster hypotheses it already contains). Think through what it implies,
+then decide whether our heuristic next-step suggestion below should change.
 
-Summary insights:
-{summary[:500]}
+Complete summary:
+{summary[:6000]}
 
-Our heuristic suggestion:
+Our heuristic suggestion for the next run:
 {heuristic_params}
 
-Should we adjust this? Provide JSON with adjustments (or empty {{}} if heuristic is good).
+Reason about the summary's stable patterns, conflicting signals, and any
+strategic narrative/cluster hypotheses -- then provide JSON with
+adjustments (or empty {{}} if the heuristic suggestion already looks right).
 Example: {{"n_layer": 14, "matrix_lr": 0.03}}"""
 
         response_text = claude_cli.call_with_budget(

@@ -48,8 +48,72 @@ def test_agent1_use_llm_false_never_calls_claude_cli(tmp_path):
     unconditionally when called) -- so this exercises the real gate."""
     agent1 = _make_agent1(tmp_path, use_llm=False)
     with patch.object(claude_cli, "call_with_budget") as mock_call:
+        agent1.decide_next_hyperparams(latest_summary="some summary", iteration=0, fresh_summary=True)
+    mock_call.assert_not_called()
+
+
+def test_agent1_use_llm_true_but_summary_not_fresh_never_calls_claude_cli(tmp_path):
+    """The budget fix: use_llm=True alone must NOT be enough once a summary
+    exists -- only the one call right after a NEW summary (fresh_summary=True)
+    should ever reach Claude. fresh_summary defaults to False, matching every
+    iteration except the one right after Agent 3 creates a summary."""
+    agent1 = _make_agent1(tmp_path, use_llm=True)
+    with patch.object(claude_cli, "call_with_budget") as mock_call:
         agent1.decide_next_hyperparams(latest_summary="some summary", iteration=0)
     mock_call.assert_not_called()
+
+
+def test_agent1_use_llm_true_and_fresh_summary_calls_claude_cli(tmp_path):
+    agent1 = _make_agent1(tmp_path, use_llm=True)
+    with patch.object(claude_cli, "call_with_budget", return_value='{"n_layer": 20}') as mock_call:
+        result = agent1.decide_next_hyperparams(latest_summary="some summary", iteration=0, fresh_summary=True)
+    mock_call.assert_called_once()
+    assert result["n_layer"] == 20
+
+
+def test_fresh_summary_flag_gates_agent1_llm_to_one_iteration_after_new_summary(tmp_path):
+    """End-to-end budget-saving behavior: agent3 (batch_size=2, use_llm=True)
+    creates a summary at the end of iteration 1 (2nd report); agent1
+    (use_llm=True) must call Claude exactly once across the whole run --
+    on iteration 2, right after that summary landed -- never on iterations
+    0-1 (no summary existed yet) and never again on iteration 3+ even
+    though the same summary is still "latest" by then.
+    """
+    from agents.orchestrator import Orchestrator
+
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text("""
+agent1:
+  use_llm: true
+  use_surrogate: false
+  accuracy_threshold: 0.01
+agent2:
+  xai_method: fast
+  use_llm: false
+agent3:
+  batch_size: 2
+  use_llm: true
+llm:
+  campaign_budget_usd: 5.0
+  max_call_budget_usd: 0.20
+""".strip())
+
+    orch = Orchestrator(
+        config_path=str(config_path), state_dir=str(tmp_path / "state"),
+        reports_dir=str(tmp_path / "reports"), root_dir=str(tmp_path), dry_run=True,
+    )
+
+    call_sites_seen = []
+
+    def fake_call_with_budget(prompt, call_site, **kwargs):
+        call_sites_seen.append(call_site)
+        return None
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call_with_budget):
+        orch.run(max_iterations=4)
+
+    assert "agent3_strategic_narrative" in call_sites_seen
+    assert call_sites_seen.count("agent1_hyperparameter_review") == 1
 
 
 def test_agent1_use_llm_true_applies_claude_json_adjustment(tmp_path):

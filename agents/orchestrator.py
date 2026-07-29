@@ -61,6 +61,14 @@ class Orchestrator:
         self.agent2 = Agent2XAISpecialist(config_path, root_dir=root_dir, reports_dir=reports_dir)
         self.agent3 = Agent3ReportAnalyst(config_path, state_dir=state_dir, reports_dir=reports_dir)
 
+        # Set the moment Agent 3 creates a new LLM-backed summary
+        # (_process_training_result), consumed by whichever hyperparameter
+        # decision comes next (sequential Phase 1, or the first slot of the
+        # next parallel wave) and reset immediately -- so Agent 1's LLM
+        # review fires once per new summary, not on every iteration
+        # afterward that happens to still see it as "the latest."
+        self._new_summary_ready = False
+
         self.config_path = config_path
         self.max_iterations = 100
         self.poll_interval = 5
@@ -146,6 +154,10 @@ class Orchestrator:
 
             print("\n[Orchestrator] Phase 1: Agent 1 proposes a new configuration")
             latest_summary = self._load_latest_summary()
+            fresh_summary = self._new_summary_ready
+            self._new_summary_ready = False
+            if fresh_summary:
+                print(f"[Orchestrator] *** Fresh summary available -- Agent 1 will use LLM-informed reasoning this iteration ***")
             recent_evidence = self.state_mgr.get_recent_evidence(limit=5)
             recent_results = self.state_mgr.get_all_results()[-3:]
             latest_val_bpb = None
@@ -159,6 +171,7 @@ class Orchestrator:
                 iteration=iteration,
                 latest_val_bpb=latest_val_bpb,
                 recent_results=recent_results,
+                fresh_summary=fresh_summary,
             )
 
             if new_hyperparams is None:
@@ -315,7 +328,12 @@ class Orchestrator:
             self.state_mgr.add_summary(summary.to_dict())
             self.state_mgr.set_latest_summary(summary.summary_id, iteration)
             report_batch = []
-            print(f"[Orchestrator] Summary created: {summary.summary_id}")
+            if self.agent3.use_llm:
+                self._new_summary_ready = True
+                print(f"[Orchestrator] *** NEW SUMMARY CREATED (LLM): {summary.summary_id} -- "
+                      f"Agent 1 will read it with LLM reasoning next ***")
+            else:
+                print(f"[Orchestrator] Summary created: {summary.summary_id}")
 
             issues = pipeline_validator.validate_agent3_summary(summary.to_dict(), total_reports=self.agent2.report_counter)
             if self._handle_issues(iteration, issues):
@@ -381,12 +399,22 @@ class Orchestrator:
         decision_halt = False
         for i in range(wave_size):
             iteration_for_slot = iteration + i
+            # Only the first decision in the wave can ever consume a
+            # pending fresh-summary flag (it's reset the instant it's
+            # read) -- keeps LLM usage to once per new summary even when
+            # a whole wave of slots gets decided back-to-back.
+            fresh_summary = self._new_summary_ready
+            self._new_summary_ready = False
+            if fresh_summary:
+                print(f"[Orchestrator] *** Fresh summary available -- Agent 1 will use LLM-informed "
+                      f"reasoning for iteration {iteration_for_slot} ***")
             new_hyperparams = self.agent1.decide_next_hyperparams(
                 latest_summary=latest_summary,
                 evidence=recent_evidence,
                 iteration=iteration_for_slot,
                 latest_val_bpb=latest_val_bpb,
                 recent_results=recent_results,
+                fresh_summary=fresh_summary,
             )
             if new_hyperparams is None:
                 print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")

@@ -6,6 +6,10 @@ agent1:
   # Whether to use Claude for hyperparameter suggestions (via the Claude
   # Code CLI -- your subscription, not a separately-billed API key, see the
   # llm: section below). Shares one campaign-wide budget with agent2/agent3.
+  # Only actually calls Claude on the iteration right after Agent 3 creates
+  # a fresh summary (agents/orchestrator.py tracks this) -- not every
+  # iteration -- so it reads one complete, batch-informed summary per call
+  # instead of firing on every single run.
   use_llm: true
 
   # Stop when accuracy reaches this threshold (val_bpb lower is better)
@@ -67,8 +71,10 @@ agent2:
 
   # Whether to use Claude for prose report interpretation (via the Claude
   # Code CLI, see the llm: section below). Adds a short "LLM Interpretation"
-  # section to every per-run report.
-  use_llm: true
+  # section to every per-run report. OFF by default: this fires on EVERY
+  # iteration (unlike agent3, which only fires every batch_size reports),
+  # so it was the single fastest drain on the shared campaign_budget_usd.
+  use_llm: false
 
   # Fast methods
   fast_methods:
