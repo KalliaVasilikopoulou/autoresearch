@@ -96,6 +96,28 @@ def test_fit_surrogate_skips_rows_missing_features_or_val_bpb():
     assert sm.n_train == 20  # the 3 malformed rows never counted
 
 
+def test_fit_surrogate_populates_reasonably_accurate_oob_predictions():
+    rows = _linear_rows(300, seed=9, noise=0.005, coef_a=0.1, coef_b=0.05)
+    sm = fit_surrogate(rows, feature_columns=["a", "b"], min_n=15)
+    assert sm is not None
+    assert len(sm.oob_actual) > 0
+    assert len(sm.oob_actual) == len(sm.oob_predicted)
+    # OOB predictions are a real held-out-style check (each row scored only
+    # by trees that never saw it) -- should track actual values reasonably,
+    # not just memorize them.
+    mean_abs_error = sum(abs(a - p) for a, p in zip(sm.oob_actual, sm.oob_predicted)) / len(sm.oob_actual)
+    assert mean_abs_error < 0.05
+
+
+def test_surrogate_model_defaults_to_empty_oob_when_hand_constructed():
+    # A SurrogateModel built directly (not via fit_surrogate, e.g. in a test
+    # or a future caller) must not require the new fields.
+    from state.surrogate import SurrogateModel
+    sm = SurrogateModel(model=None, feature_names=("a",), bounds={"a": (0.0, 1.0)}, n_train=0)
+    assert sm.oob_actual == ()
+    assert sm.oob_predicted == ()
+
+
 # ---------------------------------------------------------------------------
 # normalized_value / _denormalize
 # ---------------------------------------------------------------------------
@@ -247,6 +269,48 @@ def test_propose_via_ei_gravitates_toward_the_true_optimum(linear_surrogate):
     a_lo, a_hi = bounds["a"]
     midpoint = (a_lo + a_hi) / 2
     assert candidate["a"] < midpoint  # meaningfully closer to the true optimum (a_lo) than a random midpoint draw
+
+
+def test_propose_via_ei_return_diagnostics_false_is_unchanged_from_before(linear_surrogate):
+    # Regression check: adding return_diagnostics must not alter the
+    # existing (default) return shape any caller already depends on.
+    bounds = linear_surrogate.bounds
+    result = propose_via_ei(
+        linear_surrogate, f_best=0.0, bounds=bounds,
+        free_params=["a", "b"], fixed_values={}, n_candidates=200, seed=0,
+    )
+    assert isinstance(result, dict)
+    assert "a" in result and "b" in result
+
+
+def test_propose_via_ei_return_diagnostics_true_matches_the_chosen_candidate(linear_surrogate):
+    bounds = linear_surrogate.bounds
+    winner, diagnostics = propose_via_ei(
+        linear_surrogate, f_best=0.0, bounds=bounds,
+        free_params=["a", "b"], fixed_values={}, n_candidates=200, seed=0,
+        return_diagnostics=True,
+    )
+    assert isinstance(winner, dict)
+    assert diagnostics["free_params"] == ["a", "b"]
+    assert len(diagnostics["mus"]) == 200
+    assert len(diagnostics["sigmas"]) == 200
+    assert len(diagnostics["eis"]) == 200
+    assert len(diagnostics["candidate_values"]["a"]) == 200
+    best_idx = diagnostics["best_idx"]
+    # The winning candidate's free-param values must match the diagnostics'
+    # own record of that same candidate -- same underlying draw, not two
+    # different samples.
+    assert winner["a"] == pytest.approx(diagnostics["candidate_values"]["a"][best_idx])
+    assert winner["b"] == pytest.approx(diagnostics["candidate_values"]["b"][best_idx])
+
+
+def test_propose_via_ei_return_diagnostics_true_without_deps(monkeypatch):
+    monkeypatch.setattr(surrogate_module, "SURROGATE_DEPS_AVAILABLE", False)
+    winner, diagnostics = propose_via_ei(
+        None, f_best=1.0, bounds={}, free_params=[], fixed_values={"x": 1}, return_diagnostics=True,
+    )
+    assert winner == {"x": 1}
+    assert diagnostics == {}
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -60,14 +61,31 @@ def main():
     print(f"[noise_floor] val_bpb: mean={stats['mean']:.6f} std={stats['std']:.6f} (n={stats['n']})")
     print("[noise_floor] Treat any future results.tsv delta smaller than ~std as noise, not signal.")
 
-    NOISE_FLOOR_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-    NOISE_FLOOR_JSON_PATH.write_text(json.dumps({
+    # Top-level mean/std/n/hyperparams stay the LATEST measurement (unchanged
+    # shape -- _load_sigma in agents/search_planner.py and
+    # scripts/surrogate_report.py both read state["std"] directly and must
+    # keep working untouched). "history" is additive: every measurement ever
+    # taken, oldest first, for the noise-floor trend chart -- previously this
+    # file just got silently overwritten each run, discarding that history.
+    history = []
+    if NOISE_FLOOR_JSON_PATH.exists():
+        try:
+            history = json.loads(NOISE_FLOOR_JSON_PATH.read_text()).get("history", [])
+        except (json.JSONDecodeError, OSError):
+            history = []
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "mean": stats["mean"],
         "std": stats["std"],
         "n": stats["n"],
         "hyperparams": fixed_hyperparams,
-    }, indent=2))
-    print(f"[noise_floor] Persisted to {NOISE_FLOOR_JSON_PATH} for programmatic use (e.g. surrogate pruning).")
+    }
+    history.append(entry)
+
+    NOISE_FLOOR_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
+    NOISE_FLOOR_JSON_PATH.write_text(json.dumps({**entry, "history": history}, indent=2))
+    print(f"[noise_floor] Persisted to {NOISE_FLOOR_JSON_PATH} for programmatic use (e.g. surrogate pruning). "
+          f"History now has {len(history)} measurement(s).")
 
 
 if __name__ == "__main__":

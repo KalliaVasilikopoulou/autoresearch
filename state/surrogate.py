@@ -38,6 +38,14 @@ class SurrogateModel:
     feature_names: Tuple[str, ...]
     bounds: Dict[str, Tuple[float, float]]
     n_train: int
+    # Out-of-bag predictions: each row's prediction using only the trees
+    # that didn't see it during bootstrap sampling -- a free, real
+    # held-out-style accuracy check with no separate train/test split
+    # needed. Empty tuples for a SurrogateModel built before this field
+    # existed (e.g. hand-constructed in a test), so every prior
+    # construction call site keeps working unchanged.
+    oob_actual: Tuple[float, ...] = ()
+    oob_predicted: Tuple[float, ...] = ()
 
     def predict(self, hyperparams: Dict[str, Any]) -> Tuple[float, float]:
         """Returns (mean, std-across-trees) for one hyperparameter dict."""
@@ -78,9 +86,22 @@ def fit_surrogate(
         name: (float(x[:, i].min()), float(x[:, i].max()))
         for i, name in enumerate(feature_columns)
     }
-    model = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state, n_jobs=-1)
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state, n_jobs=-1, oob_score=True)
     model.fit(x, y)
-    return SurrogateModel(model=model, feature_names=tuple(feature_columns), bounds=bounds, n_train=len(y))
+
+    # oob_prediction_ is NaN for any row that happened to appear in every
+    # single tree's bootstrap sample (astronomically rare at n_estimators=200,
+    # but not impossible for very small n_train) -- excluded rather than
+    # coerced to 0, since that would fabricate a data point.
+    oob_pred = np.asarray(model.oob_prediction_)
+    valid = ~np.isnan(oob_pred)
+    oob_actual = tuple(float(v) for v in y[valid])
+    oob_predicted = tuple(float(v) for v in oob_pred[valid])
+
+    return SurrogateModel(
+        model=model, feature_names=tuple(feature_columns), bounds=bounds, n_train=len(y),
+        oob_actual=oob_actual, oob_predicted=oob_predicted,
+    )
 
 
 def normalized_value(param: str, value: float, bounds: Dict[str, Tuple[float, float]]) -> float:
@@ -248,7 +269,8 @@ def propose_via_ei(
     fixed_values: Dict[str, Any],
     n_candidates: int = 2000,
     seed: Optional[int] = None,
-) -> Dict[str, Any]:
+    return_diagnostics: bool = False,
+) -> Any:
     """Random-search EI maximization: draws `n_candidates` points uniformly
     (in normalized space) over `free_params`, holds everything else at
     `fixed_values` (frozen params, or params outside the currently-active
@@ -263,9 +285,19 @@ def propose_via_ei(
     (n_estimators tree.predict() calls total), not one SurrogateModel.predict()
     call per candidate -- the latter is n_candidates*n_estimators individual
     calls, which is slow enough at n_candidates=2000 to matter.
+
+    return_diagnostics=False (default, every existing caller): returns just
+    the winning candidate dict, unchanged from before this parameter
+    existed. return_diagnostics=True: returns (winning_candidate,
+    diagnostics), where diagnostics holds free_params, each free param's
+    sampled values across all n_candidates, and the mus/sigmas/eis arrays --
+    enough to chart what the search actually considered, without persisting
+    every candidate's full (mostly-redundant, since only free_params vary)
+    hyperparameter dict.
     """
     if not SURROGATE_DEPS_AVAILABLE:
-        return dict(fixed_values)
+        empty = dict(fixed_values)
+        return (empty, {}) if return_diagnostics else empty
     rng = np.random.default_rng(seed)
     candidates: List[Dict[str, Any]] = []
     for _ in range(n_candidates):
@@ -282,7 +314,19 @@ def propose_via_ei(
 
     eis = [expected_improvement(float(mu), float(sigma), f_best) for mu, sigma in zip(mus, sigmas)]
     best_idx = int(np.argmax(eis))
-    return candidates[best_idx]
+    winner = candidates[best_idx]
+    if not return_diagnostics:
+        return winner
+
+    diagnostics = {
+        "free_params": list(free_params),
+        "candidate_values": {p: [c[p] for c in candidates] for p in free_params},
+        "mus": [float(v) for v in mus],
+        "sigmas": [float(v) for v in sigmas],
+        "eis": [float(v) for v in eis],
+        "best_idx": best_idx,
+    }
+    return winner, diagnostics
 
 
 def sobol_cold_start(

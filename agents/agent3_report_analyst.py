@@ -18,10 +18,14 @@ from agents.agent1_training_specialist import LR_KEYS
 from state.clustering import cluster_attention_trajectories, cluster_fingerprints
 from state.visualize import (
     chart_attention_trajectory_clusters,
+    chart_fingerprint_adjustments_trend,
     chart_fingerprint_clusters,
     chart_hyperparameter_importance_evolution,
     chart_layer_importance_distribution,
+    chart_noise_floor_trend,
+    chart_pipeline_issues_trend,
     chart_status_distribution,
+    chart_token_fingerprint_scalars_evolution,
     chart_val_bpb_trend,
 )
 
@@ -53,6 +57,12 @@ class Agent3ReportAnalyst:
         self.reports_dir = _reports / "agent2_reports"
         self.visuals_dir = _reports / "visuals"
         self.noise_floor_path = _state / "noise_floor.json"
+        # Sibling directories this class didn't read before (dev/checks.txt
+        # visualization-gaps pass): Agent 1's per-iteration decision logs
+        # (for the Tier 4 fingerprint_adjustments trend) and
+        # agents/pipeline_validator.py's per-run issue logs.
+        self.decisions_dir = _reports / "agent1_decisions"
+        self.validation_dir = _reports / "pipeline_validation"
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()
@@ -251,6 +261,46 @@ class Agent3ReportAnalyst:
                 continue
         return reports
 
+    def _load_all_decision_logs(self) -> List[Dict[str, Any]]:
+        """All of Agent 1's per-iteration decision logs
+        (reports/agent1_decisions/decision_*.json), sorted by iteration --
+        the Tier 4 fingerprint_adjustments trend needs the full history,
+        same "read everything, not a sliding window" convention
+        _load_all_reports already uses.
+        """
+        if not self.decisions_dir.exists():
+            return []
+        logs = []
+        for path in sorted(self.decisions_dir.glob("decision_*.json")):
+            try:
+                logs.append(json.loads(path.read_text()))
+            except (json.JSONDecodeError, OSError):
+                continue
+        return sorted(logs, key=lambda log: log.get("iteration", 0))
+
+    def _load_latest_run_issues(self) -> List[Dict[str, Any]]:
+        """agents/pipeline_validator.py's per-iteration issue logs for the
+        most recent orchestrator run only (reports/pipeline_validation/run_*/
+        directory naming is chronological by construction -- new_run_dir
+        timestamps it -- so the lexicographically-last run_* dir is the
+        current session, matching what "this run" should mean here rather
+        than mixing issue counts across restarts with their own iteration
+        numbering starting back at 0).
+        """
+        if not self.validation_dir.exists():
+            return []
+        run_dirs = sorted(p for p in self.validation_dir.iterdir() if p.is_dir() and p.name.startswith("run_"))
+        if not run_dirs:
+            return []
+        latest_run_dir = run_dirs[-1]
+        logs = []
+        for path in sorted(latest_run_dir.glob("iteration_*.json")):
+            try:
+                logs.append(json.loads(path.read_text()))
+            except (json.JSONDecodeError, OSError):
+                continue
+        return sorted(logs, key=lambda log: log.get("iteration", 0))
+
     def _safe_mean(self, values: List[float]) -> float:
         return sum(values) / len(values) if values else 0.0
 
@@ -442,6 +492,17 @@ class Agent3ReportAnalyst:
             except Exception as _e:
                 print(f"[Agent 3] Chart generation (trend) failed: {_e}")
             try:
+                noise_floor_history = []
+                if self.noise_floor_path.exists():
+                    noise_floor_history = (json.loads(self.noise_floor_path.read_text()) or {}).get("history", [])
+                chart_path = chart_noise_floor_trend(
+                    noise_floor_history, self.visuals_dir / f"summary_{self.summary_counter:04d}_noise_floor.png",
+                )
+                if chart_path:
+                    summary_lines.extend(["", f"![Noise floor over time](../visuals/{chart_path.name})"])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (noise floor trend) failed: {_e}")
+            try:
                 chart_path = chart_status_distribution(
                     statuses, self.visuals_dir / f"summary_{self.summary_counter:04d}_status.png",
                 )
@@ -562,6 +623,69 @@ class Agent3ReportAnalyst:
                     summary_lines.extend(["", f"![Attention-reach trajectory clusters](../visuals/{chart_path.name})"])
             except Exception as _e:
                 print(f"[Agent 3] Chart generation (trajectory clusters) failed: {_e}")
+
+        # Tier 2 scalar fields (attn_distance_slope/induction_score) never
+        # got a trend-over-history chart before -- chart_token_fingerprint
+        # (Agent 2's per-run report) only ever showed one run's snapshot.
+        summary_lines.extend(["", "## Tier 2 Scalar Fingerprint Fields Over Time"])
+        if self.generate_charts:
+            try:
+                chart_path = chart_token_fingerprint_scalars_evolution(
+                    all_metrics, self.visuals_dir / f"summary_{self.summary_counter:04d}_token_scalars.png",
+                )
+                if chart_path:
+                    summary_lines.append(f"![Tier 2 scalar fingerprint fields](../visuals/{chart_path.name})")
+                else:
+                    summary_lines.append("- No token_fingerprint data yet (token_xai_enabled has not run on any historical run)")
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (Tier 2 scalar evolution) failed: {_e}")
+        else:
+            summary_lines.append("- Chart generation disabled")
+
+        # Tier 4 fingerprint_adjustments: which architecture rules fired,
+        # what deltas, over the campaign -- previously JSON decision logs
+        # only (reports/agent1_decisions/), zero visualization.
+        decision_logs = self._load_all_decision_logs()
+        summary_lines.extend(["", "## Tier 4 Fingerprint-Driven Architecture Adjustments"])
+        total_adjustments = sum(len(log.get("fingerprint_adjustments", [])) for log in decision_logs)
+        if total_adjustments == 0:
+            summary_lines.append("- No fingerprint-driven adjustments fired yet")
+        else:
+            summary_lines.append(f"- {total_adjustments} fingerprint-driven adjustment(s) across {len(decision_logs)} decision(s) on record")
+            if self.generate_charts:
+                try:
+                    chart_path = chart_fingerprint_adjustments_trend(
+                        decision_logs, self.visuals_dir / f"summary_{self.summary_counter:04d}_fingerprint_adjustments.png",
+                    )
+                    if chart_path:
+                        summary_lines.append(f"![Tier 4 fingerprint-driven adjustments](../visuals/{chart_path.name})")
+                except Exception as _e:
+                    print(f"[Agent 3] Chart generation (fingerprint adjustments) failed: {_e}")
+
+        # pipeline_validator issues for the current run -- previously
+        # console text + per-iteration JSON only, no trend visualization.
+        issue_logs = self._load_latest_run_issues()
+        summary_lines.extend(["", "## Pipeline Validation Issues (This Run)"])
+        total_issues = sum(len(log.get("issues", [])) for log in issue_logs)
+        if total_issues == 0:
+            summary_lines.append("- No pipeline_validator issues recorded for this run")
+        else:
+            severity_counts = Counter(
+                issue.get("severity") for log in issue_logs for issue in log.get("issues", [])
+            )
+            summary_lines.append(
+                f"- {total_issues} issue(s) across {len(issue_logs)} iteration(s): "
+                + ", ".join(f"{sev}={count}" for sev, count in sorted(severity_counts.items()))
+            )
+            if self.generate_charts:
+                try:
+                    chart_path = chart_pipeline_issues_trend(
+                        issue_logs, self.visuals_dir / f"summary_{self.summary_counter:04d}_pipeline_issues.png",
+                    )
+                    if chart_path:
+                        summary_lines.append(f"![Pipeline validation issues](../visuals/{chart_path.name})")
+                except Exception as _e:
+                    print(f"[Agent 3] Chart generation (pipeline issues) failed: {_e}")
 
         summary_lines.extend([
             "",

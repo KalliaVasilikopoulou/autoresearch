@@ -378,3 +378,47 @@ def test_agent3_cluster_section_present_with_enough_separable_data(tmp_path):
     summary_text = (reports_dir / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
     assert "Behavioral Fingerprint Clusters" in summary_text
     assert "Overall fingerprint clusters" in summary_text
+
+
+def test_agent3_new_sections_absent_without_data_present_with_data(tmp_path):
+    """dev/checks.txt visualization-gaps pass: the two new Agent 3 sections
+    (Tier 4 fingerprint_adjustments trend, pipeline_validator issue trend)
+    must be honestly absent when reports/agent1_decisions and
+    reports/pipeline_validation don't exist/have nothing, and show real
+    content once they do -- not fabricated either way.
+    """
+    reports_dir = tmp_path / "reports"
+    _write_fake_report(reports_dir / "agent2_reports", "report_0000", 1.0, {})
+
+    # --- Case 1: neither directory has any data yet ---
+    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    summary = analyst.analyze_and_summarize(["report_0000"])
+    text = (reports_dir / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
+    assert "No fingerprint-driven adjustments fired yet" in text
+    assert "No pipeline_validator issues recorded for this run" in text
+
+    # --- Case 2: real decision logs (with fingerprint_adjustments) and a
+    # real pipeline_validation run dir (with issues) now exist ---
+    decisions_dir = reports_dir / "agent1_decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+    for i, delta in enumerate([1, -1]):
+        (decisions_dir / f"decision_{i:04d}.json").write_text(json.dumps({
+            "iteration": i,
+            "fingerprint_adjustments": [{"param": "n_layer", "votes": [1 if delta > 0 else -1], "delta": delta, "new_value": 10}],
+        }))
+
+    run_dir = reports_dir / "pipeline_validation" / "run_20260101_000000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "iteration_0000.json").write_text(json.dumps({
+        "iteration": 0,
+        "issues": [{"severity": "WARN", "source": "agent2", "message": "test issue", "context": {}}],
+        "suspect": True,
+    }))
+
+    _write_fake_report(reports_dir / "agent2_reports", "report_0001", 0.95, {})
+    analyst2 = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    summary2 = analyst2.analyze_and_summarize(["report_0001"])
+    text2 = (reports_dir / "agent3_summaries" / f"{summary2.summary_id}.md").read_text()
+    assert "2 fingerprint-driven adjustment(s)" in text2
+    assert "1 issue(s)" in text2
+    assert "WARN=1" in text2

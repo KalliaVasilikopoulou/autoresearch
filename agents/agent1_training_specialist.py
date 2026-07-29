@@ -124,6 +124,11 @@ class Agent1TrainingSpecialist:
         self.surrogate_cycle_runs = int(self.agent1_config.get("surrogate_cycle_runs", 10))
         self.surrogate_interaction_threshold = float(self.agent1_config.get("interaction_threshold", 0.15))
 
+        # Search-plan diagnostic charts (predicted-vs-actual, sensitivity,
+        # interaction matrix, EI candidates, Sobol coverage) -- same config
+        # key name/convention as agent2/agent3's generate_charts.
+        self.generate_charts = bool(self.agent1_config.get("generate_charts", True))
+
         _root = Path(root_dir) if root_dir else Path(".")
         _state = Path(state_dir) if state_dir else Path("state")
         _reports = Path(reports_dir) if reports_dir else Path("reports")
@@ -407,6 +412,7 @@ class Agent1TrainingSpecialist:
             state_path=self._search_planner_state_path,
             noise_floor_path=self._noise_floor_path,
             report_dir=self._search_plan_report_dir,
+            generate_charts=self.generate_charts,
         )
         if result is None:
             return None

@@ -232,6 +232,12 @@ class Agent2XAISpecialist:
             "mfu_percent": run_metrics.get("mfu_percent"),
             "num_params_M": run_metrics.get("num_params_M"),
             "num_steps": run_metrics.get("num_steps"),
+            # Only present when holdout_eval was requested for this run (see
+            # scripts/holdout_eval.py) -- already parsed out of train.py's
+            # stdout by both the local and remote paths, just never surfaced
+            # into this structured block before, which is the only reason
+            # Agent 3's history-based charts never saw it.
+            "holdout_val_bpb": run_metrics.get("holdout_val_bpb"),
         }
         structured = {
             "model_id": evidence.model_id,

@@ -117,6 +117,7 @@ def propose_next(
     state_path: str = STATE_PATH_DEFAULT,
     noise_floor_path: str = NOISE_FLOOR_PATH_DEFAULT,
     report_dir: str = REPORT_DIR_DEFAULT,
+    generate_charts: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Returns a full hyperparams dict (pass-through keys like `ablation_k`
     from current_best_hyperparams are preserved), or None when scipy/
@@ -131,12 +132,20 @@ def propose_next(
     from agents.agent1_training_specialist import SEARCH_SPACE
     params = list(HYPERPARAM_COLUMNS)
     state = SearchPlannerState.load(state_path)
+    report_dir_path = Path(report_dir)
 
     # -- Cold start: Sobol until cold_start_n usable rows exist. --
     n_usable = sum(1 for r in rows if "val_bpb" in r and all(c in r for c in params))
     if n_usable < cold_start_n:
         if not state.cold_start_points:
             state.cold_start_points = surrogate.sobol_cold_start(SEARCH_SPACE, params, cold_start_n, seed=0)
+            if generate_charts:
+                try:
+                    from state.visualize import chart_sobol_coverage
+                    report_dir_path.mkdir(parents=True, exist_ok=True)
+                    chart_sobol_coverage(state.cold_start_points, params, report_dir_path / "cold_start_coverage.png")
+                except Exception as _e:
+                    print(f"[search_planner] Chart generation (Sobol coverage) failed: {_e}")
         if state.cold_start_used < len(state.cold_start_points):
             point = state.cold_start_points[state.cold_start_used]
             state.cold_start_used += 1
@@ -220,9 +229,10 @@ def propose_next(
     print(f"[search_planner] Blocks: {blocks} — active this cycle: {active_block} "
           f"({state.budget_used_in_block + 1}/{budget})")
 
-    proposal = surrogate.propose_via_ei(
+    proposal, ei_diagnostics = surrogate.propose_via_ei(
         sm, f_best=current_best_val_bpb, bounds=sm.bounds,
         free_params=active_block, fixed_values=center, n_candidates=2000, seed=iteration,
+        return_diagnostics=True,
     )
     full = dict(current_best_hyperparams)
     full.update(proposal)
@@ -231,13 +241,32 @@ def propose_next(
     state.save(state_path)
 
     report = render_report(iteration, sm, main_effect, blocks, variance_share, frozen, active_block, full)
-    report_dir_path = Path(report_dir)
     report_dir_path.mkdir(parents=True, exist_ok=True)
     (report_dir_path / f"plan_{iteration:04d}.md").write_text(report)
     (report_dir_path / f"plan_{iteration:04d}.json").write_text(json.dumps({
         "iteration": iteration, "main_effect": main_effect, "blocks": blocks,
         "variance_share": {"|".join(k): v for k, v in variance_share.items()},
         "frozen": frozen, "active_block": active_block, "proposal": full,
+        "interaction_matrix": {"|".join(k): v for k, v in interactions.items()},
+        "ei_diagnostics": ei_diagnostics,
+        "oob_actual": list(sm.oob_actual),
+        "oob_predicted": list(sm.oob_predicted),
     }, indent=2))
+
+    if generate_charts:
+        try:
+            from state.visualize import (
+                chart_ei_candidates,
+                chart_interaction_matrix,
+                chart_predicted_vs_actual,
+                chart_surrogate_sensitivity,
+            )
+            chart_predicted_vs_actual(sm.oob_actual, sm.oob_predicted, report_dir_path / f"plan_{iteration:04d}_predicted_vs_actual.png")
+            ranked = sorted(main_effect.items(), key=lambda kv: -kv[1])  # main_effect already came from rank_by_sensitivity -- avoid recomputing it
+            chart_surrogate_sensitivity(ranked, frozen, report_dir_path / f"plan_{iteration:04d}_sensitivity.png")
+            chart_interaction_matrix(interactions, kept, report_dir_path / f"plan_{iteration:04d}_interactions.png")
+            chart_ei_candidates(ei_diagnostics, report_dir_path / f"plan_{iteration:04d}_ei_candidates.png")
+        except Exception as _e:
+            print(f"[search_planner] Chart generation (surrogate diagnostics) failed: {_e}")
 
     return full

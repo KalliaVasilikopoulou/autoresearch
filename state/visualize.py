@@ -274,15 +274,23 @@ def chart_val_bpb_trend(
     (emphasis form -- the frontier is the point, individual runs are
     context). Shades a +/-2*sigma band around the frontier's latest value
     when noise_floor_path exists, so a viewer can see at a glance whether a
-    drop is inside or outside the measured noise floor. None if there are no
-    finite val_bpb entries yet.
+    drop is inside or outside the measured noise floor. Overlays holdout_val_bpb
+    as a distinct marker wherever present (sparse -- only computed for a
+    handful of final top-K candidates, see scripts/holdout_eval.py -- so a
+    few extra points on this chart, not a chart of its own). None if there
+    are no finite val_bpb entries yet.
     """
     xs, ys = [], []
+    holdout_xs, holdout_ys = [], []
     for i, item in enumerate(all_metrics):
         val = item.get("val_bpb")
         if isinstance(val, (int, float)) and math.isfinite(val):
             xs.append(i)
             ys.append(float(val))
+        holdout = (item.get("metadata") or {}).get("holdout_val_bpb")
+        if isinstance(holdout, (int, float)) and math.isfinite(holdout):
+            holdout_xs.append(i)
+            holdout_ys.append(float(holdout))
     if not ys:
         return None
 
@@ -295,6 +303,9 @@ def chart_val_bpb_trend(
     fig, ax = _new_figure(figsize=(8, 4))
     ax.scatter(xs, ys, color=INK_MUTED, s=18, alpha=0.6, zorder=2, label="run")
     ax.plot(frontier_x, frontier_y, color=SEQUENTIAL_BLUE, linewidth=2, zorder=4, label="best so far")
+    if holdout_xs:
+        ax.scatter(holdout_xs, holdout_ys, color=DIVERGING_POS, marker="D", s=36, zorder=5,
+                   edgecolors=SURFACE, linewidths=0.8, label="holdout_val_bpb")
 
     sigma = None
     if Path(noise_floor_path).exists():
@@ -480,3 +491,326 @@ def chart_attention_trajectory_clusters(
     ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
     ax.legend(loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
     return _finalize(fig, path, title="Attention-reach trajectory clusters")
+
+
+# ---------------------------------------------------------------------------
+# Part C -- Tier 1 surrogate diagnostics (agents/search_planner.py)
+# ---------------------------------------------------------------------------
+
+def chart_predicted_vs_actual(
+    oob_actual: Sequence[float],
+    oob_predicted: Sequence[float],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 1 surrogate diagnostic: out-of-bag predicted vs. actual val_bpb
+    (state/surrogate.py::fit_surrogate's oob_actual/oob_predicted) -- each
+    point's prediction used only trees that didn't see it during training, a
+    free held-out-style accuracy check with no separate split needed. Points
+    near the y=x reference line mean the surrogate tracks real outcomes, not
+    just memorizes them.
+    """
+    if not oob_actual or not oob_predicted:
+        return None
+    fig, ax = _new_figure(figsize=(5, 5))
+    ax.scatter(oob_actual, oob_predicted, color=SEQUENTIAL_BLUE, s=18, alpha=0.6, zorder=3)
+    lo = min(min(oob_actual), min(oob_predicted))
+    hi = max(max(oob_actual), max(oob_predicted))
+    ax.plot([lo, hi], [lo, hi], color=BASELINE, linewidth=1.5, linestyle="--", zorder=2, label="y = x")
+    ax.set_xlabel("actual val_bpb")
+    ax.set_ylabel("out-of-bag predicted val_bpb")
+    ax.grid(color=GRIDLINE, linewidth=0.8, zorder=0)
+    ax.legend(loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="Surrogate: predicted vs. actual (out-of-bag)")
+
+
+def chart_surrogate_sensitivity(
+    ranked: List[Tuple[str, float]],
+    frozen: List[str],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 1 surrogate diagnostic: S_perf per parameter (coordinate-slice
+    sensitivity), frozen/active shown via color -- frozen means measured
+    below the noise floor (state/surrogate.py::prune_by_noise_floor), not
+    "unimportant."
+    """
+    if not ranked:
+        return None
+    frozen_set = set(frozen)
+    labels = [p for p, _ in ranked]
+    values = [s for _, s in ranked]
+    colors = [BASELINE if p in frozen_set else SEQUENTIAL_BLUE for p in labels]
+
+    fig, ax = _new_figure(figsize=(max(6, 0.5 * len(labels) + 1.5), 4))
+    ax.bar(labels, values, color=colors, zorder=3)
+    ax.set_ylabel("S_perf (coordinate-slice sensitivity)")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
+    from matplotlib.patches import Patch
+    handles = [Patch(color=SEQUENTIAL_BLUE, label="active"), Patch(color=BASELINE, label="frozen (< 2σ)")]
+    ax.legend(handles=handles, loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="Surrogate sensitivity ranking")
+
+
+def chart_interaction_matrix(
+    interaction_scores: Dict[Tuple[str, str], float],
+    params: Sequence[str],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 1 surrogate diagnostic: params x params interaction-strength
+    heatmap (state/surrogate.py::interaction_matrix's cheap-fANOVA product-
+    term importances -- see that function's docstring for what this is a
+    substitute for). Sequential, not diverging: these are RF feature
+    importances, always >= 0, a magnitude job not a polarity one. Diagonal
+    and any missing pair are masked (no self-interaction is computed).
+    """
+    if not interaction_scores or len(params) < 2:
+        return None
+    import numpy as np
+    n = len(params)
+    idx = {p: i for i, p in enumerate(params)}
+    grid = np.full((n, n), float("nan"))
+    for (a, b), score in interaction_scores.items():
+        if a in idx and b in idx:
+            grid[idx[a], idx[b]] = score
+            grid[idx[b], idx[a]] = score
+    finite = grid[~np.isnan(grid)]
+    if finite.size == 0:
+        return None
+
+    cmap = LinearSegmentedColormap.from_list("sequential", [SURFACE, SEQUENTIAL_BLUE])
+    cmap.set_bad(color=GRIDLINE)
+
+    fig, ax = _new_figure(figsize=(max(4, 0.5 * n + 1.5), max(4, 0.5 * n + 1.5)))
+    im = ax.imshow(grid, cmap=cmap, vmin=0.0, vmax=max(float(finite.max()), 1e-9), aspect="auto")
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(list(params), rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(list(params), fontsize=8)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("interaction strength (product-term importance)", color=INK_SECONDARY, fontsize=8)
+    cbar.ax.tick_params(colors=INK_SECONDARY, labelsize=7)
+    return _finalize(fig, path, title="Parameter interaction matrix")
+
+
+def chart_ei_candidates(diagnostics: Dict[str, Any], path: Path) -> Optional[Path]:
+    """Tier 1 surrogate diagnostic: the candidates Expected Improvement
+    actually considered this cycle (state/surrogate.py::propose_via_ei's
+    return_diagnostics=True output) -- one panel per free parameter, each
+    sampled candidate's value on the x-axis vs. its EI score on the y-axis,
+    the chosen candidate highlighted. Shows whether EI is concentrating on a
+    clear region or scattered (no strong signal yet).
+    """
+    if not diagnostics or not diagnostics.get("free_params"):
+        return None
+    free_params = diagnostics["free_params"]
+    candidate_values = diagnostics.get("candidate_values") or {}
+    eis = diagnostics.get("eis") or []
+    best_idx = diagnostics.get("best_idx")
+    if not eis or not candidate_values:
+        return None
+
+    fig, axes = plt.subplots(1, len(free_params), figsize=(max(5, 4 * len(free_params)), 4), dpi=150, squeeze=False)
+    fig.patch.set_facecolor(SURFACE)
+    axes = axes[0]
+    for ax, param in zip(axes, free_params):
+        values = candidate_values.get(param) or []
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color(BASELINE)
+        ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+        ax.grid(color=GRIDLINE, linewidth=0.8, zorder=0)
+        if values and len(values) == len(eis):
+            ax.scatter(values, eis, color=INK_MUTED, s=10, alpha=0.5, zorder=2, label="candidate")
+            if isinstance(best_idx, int) and 0 <= best_idx < len(values):
+                ax.scatter([values[best_idx]], [eis[best_idx]], color=DIVERGING_POS, s=60, zorder=4,
+                           marker="*", label="chosen")
+        ax.set_title(param, color=INK_PRIMARY, fontsize=9, loc="left")
+        ax.set_xlabel(param, fontsize=8, color=INK_SECONDARY)
+        if ax is axes[0]:
+            ax.set_ylabel("Expected Improvement", fontsize=8, color=INK_SECONDARY)
+    axes[-1].legend(loc="best", frameon=False, fontsize=7, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="EI acquisition: candidates considered this cycle")
+
+
+def chart_sobol_coverage(
+    cold_start_points: List[Dict[str, Any]],
+    params: Sequence[str],
+    path: Path,
+) -> Optional[Path]:
+    """Tier 1 cold-start diagnostic: one 1D rug of sampled values per
+    parameter (small multiples, mirrors chart_layer_scalars' layout),
+    confirming the Sobol design (state/surrogate.py::sobol_cold_start)
+    actually spreads evenly across each dimension rather than clumping.
+    """
+    if not cold_start_points:
+        return None
+    n_cols = min(len(params), 6)
+    n_rows = math.ceil(len(params) / n_cols) if n_cols else 1
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(max(6, 2.2 * n_cols), 2.2 * n_rows), dpi=150, squeeze=False)
+    fig.patch.set_facecolor(SURFACE)
+    flat_axes = [ax for row in axes for ax in row]
+    for ax, param in zip(flat_axes, params):
+        values = [p.get(param) for p in cold_start_points if isinstance(p.get(param), (int, float))]
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(BASELINE)
+        ax.tick_params(colors=INK_SECONDARY, labelsize=7)
+        ax.set_yticks([])
+        if values:
+            ax.scatter(values, [0.0] * len(values), color=SEQUENTIAL_BLUE, s=20, alpha=0.7, zorder=3)
+        ax.set_title(param, color=INK_PRIMARY, fontsize=8, loc="left")
+    for ax in flat_axes[len(params):]:
+        ax.set_visible(False)
+    return _finalize(fig, path, title="Sobol cold-start design coverage")
+
+
+def chart_fingerprint_adjustments_trend(decision_logs: List[Dict[str, Any]], path: Path) -> Optional[Path]:
+    """Tier 4 diagnostic: which fingerprint-driven rule fired on which
+    param, and what delta, over the campaign (agents/agent1_training_specialist.py's
+    _fingerprint_adjustment, recorded per decision log). One line per param
+    that ever received a fingerprint-driven vote -- most params will never
+    appear here, which is itself informative (the rules aren't touching
+    everything).
+    """
+    if not decision_logs:
+        return None
+    series: Dict[str, List[Tuple[int, float]]] = {}
+    for log in decision_logs:
+        iteration = log.get("iteration")
+        if not isinstance(iteration, int):
+            continue
+        for entry in log.get("fingerprint_adjustments") or []:
+            param, delta = entry.get("param"), entry.get("delta")
+            if param and isinstance(delta, (int, float)):
+                series.setdefault(param, []).append((iteration, float(delta)))
+    if not series:
+        return None
+
+    fig, ax = _new_figure(figsize=(8, 4))
+    for i, (param, points) in enumerate(sorted(series.items())):
+        points.sort(key=lambda p: p[0])
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        color = CATEGORICAL[i % len(CATEGORICAL)]
+        ax.plot(xs, ys, color=color, marker="o", markersize=4, linewidth=1.5, zorder=3, label=param)
+    ax.axhline(0, color=BASELINE, linewidth=0.8, zorder=1)
+    ax.set_xlabel("iteration")
+    ax.set_ylabel("fingerprint-driven delta")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.legend(loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="Tier 4: fingerprint-driven architecture adjustments")
+
+
+def chart_pipeline_issues_trend(issue_logs: List[Dict[str, Any]], path: Path) -> Optional[Path]:
+    """agents/pipeline_validator.py diagnostic: FATAL/ERROR/WARN issue
+    counts per iteration for the current run (agents/agent3_report_analyst.py's
+    _load_latest_run_issues), stacked bar, fixed status-style severity
+    colors -- a spike or a rising baseline is a workflow-health signal on
+    its own, independent of what any individual issue says.
+    """
+    if not issue_logs:
+        return None
+    by_iteration: Dict[int, Counter] = {}
+    for log in issue_logs:
+        iteration = log.get("iteration")
+        if not isinstance(iteration, int):
+            continue
+        counts = by_iteration.setdefault(iteration, Counter())
+        for issue in log.get("issues") or []:
+            severity = issue.get("severity")
+            if severity:
+                counts[severity] += 1
+    if not by_iteration:
+        return None
+
+    iterations = sorted(by_iteration.keys())
+    severities = [("FATAL", "critical"), ("ERROR", "serious"), ("WARN", "warning")]
+    fig, ax = _new_figure(figsize=(8, 4))
+    bottom = [0] * len(iterations)
+    for severity, status_key in severities:
+        values = [by_iteration[i].get(severity, 0) for i in iterations]
+        if any(values):
+            ax.bar(iterations, values, bottom=bottom, color=STATUS_COLORS[status_key], label=severity, zorder=3)
+            bottom = [b + v for b, v in zip(bottom, values)]
+    ax.set_xlabel("iteration")
+    ax.set_ylabel("issue count")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.legend(loc="best", frameon=False, fontsize=8, labelcolor=INK_SECONDARY)
+    return _finalize(fig, path, title="Pipeline validation issues (this run)")
+
+
+def chart_token_fingerprint_scalars_evolution(all_metrics: List[Dict[str, Any]], path: Path) -> Optional[Path]:
+    """Tier 2 diagnostic: attn_distance_slope and induction_score (the two
+    scalar, not per-layer, fingerprint fields) over report history -- same
+    "evolution over the campaign" style as chart_hyperparameter_importance_evolution,
+    which every other Tier 2 quantity lacked before this (chart_token_fingerprint
+    only ever showed one run's snapshot).
+    """
+    slope_xs, slope_ys = [], []
+    induction_xs, induction_ys = [], []
+    for i, item in enumerate(all_metrics):
+        fp = item.get("token_fingerprint") or {}
+        slope = fp.get("attn_distance_slope")
+        if isinstance(slope, (int, float)) and math.isfinite(slope):
+            slope_xs.append(i)
+            slope_ys.append(float(slope))
+        induction = fp.get("induction_score")
+        if isinstance(induction, (int, float)) and math.isfinite(induction):
+            induction_xs.append(i)
+            induction_ys.append(float(induction))
+    if not slope_ys and not induction_ys:
+        return None
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.5), dpi=150)
+    fig.patch.set_facecolor(SURFACE)
+    panels = [("attn_distance_slope", slope_xs, slope_ys), ("induction_score", induction_xs, induction_ys)]
+    for ax, (label, xs, ys) in zip(axes, panels):
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color(BASELINE)
+        ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+        ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+        if ys:
+            ax.plot(xs, ys, color=SEQUENTIAL_BLUE, marker="o", markersize=4, linewidth=1.5, zorder=3)
+            if label == "attn_distance_slope":
+                ax.axhline(0, color=BASELINE, linewidth=0.8, zorder=1)
+        ax.set_title(label, color=INK_PRIMARY, fontsize=9, loc="left")
+        ax.set_xlabel("report index (chronological)", fontsize=8, color=INK_SECONDARY)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    return _finalize(fig, path, title="Tier 2 scalar fingerprint fields over the campaign")
+
+
+def chart_noise_floor_trend(history: List[Dict[str, Any]], path: Path) -> Optional[Path]:
+    """scripts/noise_floor.py diagnostic: mean +/- std per measurement over
+    time, now that noise_floor.json tracks a real history instead of a
+    single overwritten snapshot. A single point is a valid (if sparse)
+    chart -- still worth seeing on its own rather than only as a passive
+    band on the val_bpb trend.
+    """
+    if not history:
+        return None
+    xs = list(range(len(history)))
+    means = [h.get("mean") for h in history]
+    stds = [h.get("std") for h in history]
+    if not all(isinstance(m, (int, float)) for m in means) or not all(isinstance(s, (int, float)) for s in stds):
+        return None
+
+    fig, ax = _new_figure(figsize=(7, 4))
+    ax.errorbar(xs, means, yerr=stds, color=SEQUENTIAL_BLUE, marker="o", markersize=5, linewidth=1.5,
+                capsize=4, ecolor=INK_SECONDARY, zorder=3)
+    ax.set_xlabel("measurement # (chronological)")
+    ax.set_ylabel("val_bpb (mean ± std across repeats)")
+    ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    return _finalize(fig, path, title="Noise floor over time")

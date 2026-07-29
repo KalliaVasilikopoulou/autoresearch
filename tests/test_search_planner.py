@@ -256,6 +256,40 @@ def test_propose_next_writes_report_files_with_expected_structure(tmp_path):
         assert key in payload
 
 
+def test_propose_next_generate_charts_false_produces_no_chart_files(tmp_path):
+    rows = _synthetic_rows(200, seed=6, effect_param="n_layer", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    report_dir = tmp_path / "reports"
+    result = propose_next(
+        rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
+        iteration=7, cold_start_n=15, state_path=str(tmp_path / "state.json"),
+        noise_floor_path=noise_floor_path, report_dir=str(report_dir), generate_charts=False,
+    )
+    assert result is not None
+    assert not list(report_dir.glob("*.png"))
+    assert (report_dir / "plan_0007.md").exists()  # the non-chart report artifacts are unaffected
+
+
+def test_propose_next_generate_charts_true_produces_expected_chart_files(tmp_path):
+    rows = _synthetic_rows(200, seed=8, effect_param="n_layer", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    report_dir = tmp_path / "reports"
+    result = propose_next(
+        rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
+        iteration=9, cold_start_n=15, state_path=str(tmp_path / "state.json"),
+        noise_floor_path=noise_floor_path, report_dir=str(report_dir), generate_charts=True,
+    )
+    assert result is not None
+    assert (report_dir / "plan_0009_predicted_vs_actual.png").exists()
+    assert (report_dir / "plan_0009_sensitivity.png").exists()
+    assert (report_dir / "plan_0009_ei_candidates.png").exists()
+
+    payload = json.loads((report_dir / "plan_0009.json").read_text())
+    assert "interaction_matrix" in payload
+    assert "ei_diagnostics" in payload
+    assert payload["ei_diagnostics"]["free_params"]
+
+
 def test_render_report_contains_expected_sections():
     class _FakeSurrogate:
         n_train = 42
