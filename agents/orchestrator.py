@@ -176,6 +176,19 @@ class Orchestrator:
                     break
             else:
                 print(f"[Orchestrator] Agent 2: no analysis available")
+                # Should not currently happen (analyze_result never returns
+                # None in the present implementation) -- a canary in case a
+                # future change introduces a real None-return path, same
+                # "structurally impossible, so flag it loudly if it ever
+                # occurs" pattern used elsewhere in this file.
+                issues = [pipeline_validator.Issue(
+                    pipeline_validator.WARN, "agent2",
+                    "Agent 2 produced no analysis for this run (evidence is None) -- unexpected given the "
+                    "current implementation, investigate if this occurs",
+                    {"run_id": result_payload.run_id},
+                )]
+                if self._handle_issues(iteration, issues):
+                    break
 
             print("\n[Orchestrator] Phase 4: Aggregating evidence with Agent 3")
             print(f"[Orchestrator] Batch size: {len(report_batch)} reports")
@@ -192,6 +205,9 @@ class Orchestrator:
                     break
             else:
                 print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.batch_size}, have {len(report_batch)})")
+                issues = pipeline_validator.validate_batch_accumulation(len(report_batch), self.agent3.batch_size)
+                if self._handle_issues(iteration, issues):
+                    break
 
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")

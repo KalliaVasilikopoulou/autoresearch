@@ -151,3 +151,165 @@ def test_render_issues_includes_severity_and_source():
     issue = pipeline_validator.Issue(pipeline_validator.ERROR, "train", "something broke")
     text = pipeline_validator.render_issues([issue])
     assert "ERROR" in text and "train" in text and "something broke" in text
+
+
+def test_render_issues_includes_context_inline():
+    issue = pipeline_validator.Issue(pipeline_validator.WARN, "agent2", "something odd",
+                                      {"field": "attn_entropy", "index": 3})
+    text = pipeline_validator.render_issues([issue])
+    assert "field=attn_entropy" in text
+    assert "index=3" in text
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: token_fingerprint validation (via validate_agent2_report)
+# ---------------------------------------------------------------------------
+
+def _clean_fingerprint(n_layer=4):
+    return {
+        "attn_entropy": [1.0] * n_layer,
+        "attn_distance": [5.0] * n_layer,
+        "dla": [0.1] * n_layer,
+        "x0_lambda": [2.0] * n_layer,
+        "pos_saliency": [0.05] * 16,
+        "induction_score": 0.2,
+        "attn_distance_slope": 0.1,
+    }
+
+
+def test_validate_agent2_report_clean_fingerprint_has_no_issues():
+    evidence = {"token_fingerprint": _clean_fingerprint()}
+    assert pipeline_validator.validate_agent2_report(evidence) == []
+
+
+def test_validate_agent2_report_absent_fingerprint_has_no_issues():
+    assert pipeline_validator.validate_agent2_report({}) == []
+    assert pipeline_validator.validate_agent2_report({"token_fingerprint": {}}) == []
+
+
+def test_validate_agent2_report_flags_nan_in_fingerprint_array():
+    fp = _clean_fingerprint()
+    fp["attn_entropy"][2] = float("nan")
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert any(i.severity == pipeline_validator.ERROR and "attn_entropy" in i.message for i in issues)
+
+
+def test_validate_agent2_report_flags_negative_entropy():
+    fp = _clean_fingerprint()
+    fp["attn_entropy"][0] = -0.5  # entropy can never be negative
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert any(i.severity == pipeline_validator.ERROR and "negative" in i.message for i in issues)
+
+
+def test_validate_agent2_report_allows_negative_dla():
+    # dla is a signed logit contribution -- negative is legitimate, unlike entropy/distance/pos_saliency.
+    fp = _clean_fingerprint()
+    fp["dla"][0] = -0.9
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert issues == []
+
+
+def test_validate_agent2_report_flags_empty_array_present():
+    fp = _clean_fingerprint()
+    fp["dla"] = []
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert any(i.severity == pipeline_validator.WARN and "dla" in i.message and "empty" in i.message for i in issues)
+
+
+def test_validate_agent2_report_flags_induction_score_out_of_range():
+    fp = _clean_fingerprint()
+    fp["induction_score"] = 1.5
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert any(i.severity == pipeline_validator.ERROR and "induction_score" in i.message for i in issues)
+
+
+def test_validate_agent2_report_flags_nan_attn_distance_slope():
+    fp = _clean_fingerprint()
+    fp["attn_distance_slope"] = float("nan")
+    issues = pipeline_validator.validate_agent2_report({"token_fingerprint": fp})
+    assert any(i.severity == pipeline_validator.ERROR and "attn_distance_slope" in i.message for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Tier 3: fingerprint_clusters validation (via validate_agent3_summary)
+# ---------------------------------------------------------------------------
+
+def test_validate_agent3_summary_clean_clusters_have_no_issues():
+    summary = {"fingerprint_clusters": {
+        "overall": {"k": 2, "silhouette": 0.6, "clusters": [{"cluster_id": 1, "n": 10}, {"cluster_id": 2, "n": 8}]},
+    }}
+    assert pipeline_validator.validate_agent3_summary(summary) == []
+
+
+def test_validate_agent3_summary_absent_clusters_have_no_issues():
+    assert pipeline_validator.validate_agent3_summary({}) == []
+    assert pipeline_validator.validate_agent3_summary({"fingerprint_clusters": {}}) == []
+
+
+def test_validate_agent3_summary_warns_on_nonpositive_silhouette():
+    summary = {"fingerprint_clusters": {"overall": {"k": 2, "silhouette": -0.1, "clusters": [{"cluster_id": 1, "n": 5}]}}}
+    issues = pipeline_validator.validate_agent3_summary(summary)
+    assert any(i.severity == pipeline_validator.WARN and "no better than a random split" in i.message for i in issues)
+
+
+def test_validate_agent3_summary_warns_on_weak_silhouette():
+    summary = {"fingerprint_clusters": {"trajectory": {"k": 2, "silhouette": 0.1, "clusters": [{"cluster_id": 1, "n": 5}]}}}
+    issues = pipeline_validator.validate_agent3_summary(summary)
+    assert any(i.severity == pipeline_validator.WARN and "weak" in i.message for i in issues)
+
+
+def test_validate_agent3_summary_warns_on_degenerate_cluster_size():
+    summary = {"fingerprint_clusters": {"overall": {"k": 2, "silhouette": 0.6, "clusters": [{"cluster_id": 1, "n": 1}, {"cluster_id": 2, "n": 9}]}}}
+    issues = pipeline_validator.validate_agent3_summary(summary)
+    assert any(i.severity == pipeline_validator.WARN and "only 1 member" in i.message for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Tier 4: fingerprint_adjustments thrashing detection (via validate_agent1_decision)
+# ---------------------------------------------------------------------------
+
+def _write_decision_with_fingerprint_adjustment(decisions_dir, iteration, param, delta):
+    log = _clean_decision_log(iteration=iteration)
+    log["fingerprint_adjustments"] = [{"param": param, "votes": [1 if delta > 0 else -1], "delta": delta, "new_value": 10}]
+    (decisions_dir / f"decision_{iteration:04d}.json").write_text(json.dumps(log))
+
+
+def test_validate_agent1_decision_flags_thrashing_fingerprint_adjustments(tmp_path):
+    for i, delta in enumerate([1, -1, 1, -1]):
+        _write_decision_with_fingerprint_adjustment(tmp_path, i, "n_layer", delta)
+    current = _clean_decision_log(iteration=3)
+    issues = pipeline_validator.validate_agent1_decision(current, evidence=None, latest_summary=None, decisions_dir=tmp_path)
+    assert any(i.severity == pipeline_validator.WARN and "n_layer" in i.message and "alternating" in i.message for i in issues)
+
+
+def test_validate_agent1_decision_no_thrashing_warning_for_consistent_direction(tmp_path):
+    for i, delta in enumerate([1, 1, 1, 1]):
+        _write_decision_with_fingerprint_adjustment(tmp_path, i, "n_layer", delta)
+    current = _clean_decision_log(iteration=3)
+    issues = pipeline_validator.validate_agent1_decision(current, evidence=None, latest_summary=None, decisions_dir=tmp_path)
+    assert not any("alternating" in i.message for i in issues)
+
+
+def test_validate_agent1_decision_no_thrashing_warning_below_min_occurrences(tmp_path):
+    for i, delta in enumerate([1, -1]):  # only 2 occurrences, need >=3
+        _write_decision_with_fingerprint_adjustment(tmp_path, i, "n_layer", delta)
+    current = _clean_decision_log(iteration=1)
+    issues = pipeline_validator.validate_agent1_decision(current, evidence=None, latest_summary=None, decisions_dir=tmp_path)
+    assert not any("alternating" in i.message for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# validate_batch_accumulation
+# ---------------------------------------------------------------------------
+
+def test_validate_batch_accumulation_warns_when_stalled():
+    issues = pipeline_validator.validate_batch_accumulation(report_batch_size=10, configured_batch_size=3)
+    assert any(i.severity == pipeline_validator.WARN and "stuck" in i.message for i in issues)
+
+
+def test_validate_batch_accumulation_clean_within_threshold():
+    assert pipeline_validator.validate_batch_accumulation(report_batch_size=2, configured_batch_size=3) == []
+
+
+def test_validate_batch_accumulation_noop_when_configured_size_not_positive():
+    assert pipeline_validator.validate_batch_accumulation(report_batch_size=100, configured_batch_size=0) == []
