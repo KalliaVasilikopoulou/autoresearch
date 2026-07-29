@@ -108,8 +108,18 @@ agent3:
 
 # ORCHESTRATOR
 orchestrator:
-  # Enable parallel execution (agents don't wait for each other)
+  # Multi-GPU parallel search (dev/checks.txt item 1): when true, each
+  # iteration first tries to discover multiple live-free GPUs on the
+  # configured remote server (see agents/remote_runner.py::discover_available_gpus)
+  # and dispatch that many training runs concurrently. Falls back to the
+  # existing single-run sequential path whenever remote isn't configured,
+  # fewer than 2 GPUs are currently free, or this is false.
   parallel: true
+
+  # Upper cap on concurrent GPUs/SSH sessions per wave, even if more are
+  # discovered "available" -- conservative default so an unattended run
+  # doesn't try to claim an entire shared server other people also use.
+  max_parallel_runs: 4
 
   # Polling interval (seconds) - how often to check for work
   poll_interval_seconds: 5

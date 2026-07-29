@@ -29,6 +29,7 @@ COLUMNS = [
     "depth",
     "status",
     "holdout_val_bpb",
+    "device",
 ]
 
 # Karpathy's published baseline for DEPTH=8 on the same dataset/budget.
@@ -93,6 +94,12 @@ def log_result(
         "depth": metrics.get("depth", hyperparams.get("n_layer", "")),
         "status": metrics.get("status", ""),
         "holdout_val_bpb": metrics.get("holdout_val_bpb", ""),
+        # Multi-GPU parallel search: which remote GPU index produced this
+        # run (see agents/remote_runner.py::run_training_remote). Blank for
+        # local/dry-run/simulated runs, which have no such concept. Logged
+        # for observability now, not used for filtering -- the DGX's GPUs
+        # are homogeneous.
+        "device": metrics.get("device", ""),
     }
 
     with open(path, "a", newline="") as f:

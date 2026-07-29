@@ -530,7 +530,12 @@ _target_embd = DEPTH * ASPECT_RATIO
 _hp = {}
 try:
     import yaml as _yaml
-    _hp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_hyperparams.yaml")
+    # AUTORESEARCH_HP_PATH lets a caller point this process at a per-run
+    # hyperparams file instead of the shared default -- needed so multiple
+    # concurrent train.py processes (one per GPU) never race on one file.
+    _hp_path = os.environ.get("AUTORESEARCH_HP_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "model_hyperparams.yaml"
+    )
     if os.path.exists(_hp_path):
         with open(_hp_path) as _f:
             _hp = _yaml.safe_load(_f) or {}

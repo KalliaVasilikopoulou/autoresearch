@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    yaml = None
 
 from agents import pipeline_validator
+from agents import remote_runner
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst
@@ -59,6 +66,16 @@ class Orchestrator:
         self.dry_run = dry_run
         self.interactive = interactive
 
+        # Multi-GPU parallel search (dev/checks.txt item 1): orchestrator.*
+        # in agents_config.yaml was previously dead config (never read) --
+        # now wired up for real. parallel_enabled gates whether each
+        # iteration even attempts GPU discovery; max_parallel_runs caps how
+        # many concurrent GPUs/SSH sessions one wave may claim.
+        orchestrator_config = self._load_orchestrator_config(config_path)
+        self.parallel_enabled = bool(orchestrator_config.get("parallel", True))
+        self.max_parallel_runs = int(orchestrator_config.get("max_parallel_runs", 4))
+        self.parallel_hp_dir = Path(state_dir) / "parallel_hyperparams"
+
         # Tier 2 token-level XAI (see agents/xai_methods/token_methods.py)
         # costs real extra GPU time (roughly doubled wall-clock in testing),
         # so it isn't on for every run -- decided here each iteration, not
@@ -76,6 +93,13 @@ class Orchestrator:
 
         print("[Orchestrator] Initialization complete")
 
+    def _load_orchestrator_config(self, config_path: str) -> Dict[str, Any]:
+        if yaml is None or not Path(config_path).exists():
+            return {}
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f) or {}
+        return config.get("orchestrator", {})
+
     def run(self, max_iterations: Optional[int] = None):
         """Main orchestration loop with structured evidence flow."""
         print("[Orchestrator] Starting autonomous multi-agent loop...\n")
@@ -88,6 +112,13 @@ class Orchestrator:
             print(f"\n{'='*60}")
             print(f"[Orchestrator] Iteration {iteration + 1}")
             print(f"{'='*60}")
+
+            wave_result = self._run_parallel_wave(iteration, report_batch, max_iterations)
+            if wave_result is not None:
+                iteration, report_batch, halted = wave_result
+                if halted:
+                    break
+                continue
 
             print("\n[Orchestrator] Phase 1: Agent 1 proposes a new configuration")
             latest_summary = self._load_latest_summary()
@@ -143,71 +174,10 @@ class Orchestrator:
                 dry_run=self.dry_run,
                 iteration=iteration,
             )
-            print(f"[Orchestrator] Training result: val_bpb={train_result.get('val_bpb', 'N/A')}, status={train_result.get('status', 'unknown')}")
-            result_payload = TrainingResult(
-                run_id=f"run_{iteration:04d}",
-                hyperparams=new_hyperparams,
-                val_bpb=train_result.get("val_bpb", float("inf")),
-                training_time=train_result.get("training_time", 0.0),
-                checkpoint_path=train_result.get("checkpoint_path"),
-                status=train_result.get("status", "ok"),
-                metadata=train_result,
-            )
-            self.state_mgr.add_result(result_payload.to_dict())
-            self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
-            log_result(result_payload.run_id, new_hyperparams, train_result, results_path=str(self.results_path))
-            print(f"[Orchestrator] Result logged: {result_payload.run_id}")
 
-            issues = pipeline_validator.validate_training_result(train_result, new_hyperparams)
-            if self._handle_issues(iteration, issues):
+            halted, report_batch = self._process_training_result(iteration, new_hyperparams, train_result, report_batch)
+            if halted:
                 break
-
-            print("\n[Orchestrator] Phase 3: Analyzing result with Agent 2")
-            evidence = self.agent2.analyze_result(result_payload.to_dict())
-            if evidence is not None:
-                evidence_payload = evidence.to_dict()
-                self.state_mgr.add_evidence(evidence_payload)
-                report_batch.append(evidence_payload["report_id"])
-                self.state_mgr.link_model_to_report(result_payload.run_id, evidence_payload["report_id"])
-                print(f"[Orchestrator] Agent 2 analysis complete: {evidence_payload['report_id']}")
-
-                issues = pipeline_validator.validate_agent2_report(evidence_payload)
-                if self._handle_issues(iteration, issues):
-                    break
-            else:
-                print(f"[Orchestrator] Agent 2: no analysis available")
-                # Should not currently happen (analyze_result never returns
-                # None in the present implementation) -- a canary in case a
-                # future change introduces a real None-return path, same
-                # "structurally impossible, so flag it loudly if it ever
-                # occurs" pattern used elsewhere in this file.
-                issues = [pipeline_validator.Issue(
-                    pipeline_validator.WARN, "agent2",
-                    "Agent 2 produced no analysis for this run (evidence is None) -- unexpected given the "
-                    "current implementation, investigate if this occurs",
-                    {"run_id": result_payload.run_id},
-                )]
-                if self._handle_issues(iteration, issues):
-                    break
-
-            print("\n[Orchestrator] Phase 4: Aggregating evidence with Agent 3")
-            print(f"[Orchestrator] Batch size: {len(report_batch)} reports")
-            if self.agent3.should_create_summary(len(report_batch)):
-                print(f"[Orchestrator] Creating summary from {len(report_batch)} reports...")
-                summary = self.agent3.analyze_and_summarize(report_batch)
-                self.state_mgr.add_summary(summary.to_dict())
-                self.state_mgr.set_latest_summary(summary.summary_id, iteration)
-                report_batch = []
-                print(f"[Orchestrator] Summary created: {summary.summary_id}")
-
-                issues = pipeline_validator.validate_agent3_summary(summary.to_dict(), total_reports=self.agent2.report_counter)
-                if self._handle_issues(iteration, issues):
-                    break
-            else:
-                print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.batch_size}, have {len(report_batch)})")
-                issues = pipeline_validator.validate_batch_accumulation(len(report_batch), self.agent3.batch_size)
-                if self._handle_issues(iteration, issues):
-                    break
 
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
@@ -246,6 +216,224 @@ class Orchestrator:
                 print("[Orchestrator] User chose to stop.")
                 return True
         return False
+
+    def _process_training_result(
+        self,
+        iteration: int,
+        hyperparams: Dict[str, Any],
+        train_result: Dict[str, Any],
+        report_batch: List[str],
+    ) -> Tuple[bool, List[str]]:
+        """Everything that happens after one training run completes: log to
+        results.tsv/state, Agent 2 XAI analysis, Agent 3 batch
+        summarization, and pipeline_validator checks after each phase.
+        Shared verbatim by the sequential single-run path and the parallel
+        wave dispatcher (_run_parallel_wave) so a result is handled
+        identically regardless of which GPU/thread produced it -- extracted
+        from what used to be inline Phase 2/3/4 body, no behavior change
+        for the sequential caller. Returns (halt, updated report_batch);
+        halt True means the caller should stop the whole campaign (a FATAL
+        issue, or the user declining to continue past an ERROR in
+        --interactive mode).
+        """
+        print(f"[Orchestrator] Training result: val_bpb={train_result.get('val_bpb', 'N/A')}, status={train_result.get('status', 'unknown')}")
+        result_payload = TrainingResult(
+            run_id=f"run_{iteration:04d}",
+            hyperparams=hyperparams,
+            val_bpb=train_result.get("val_bpb", float("inf")),
+            training_time=train_result.get("training_time", 0.0),
+            checkpoint_path=train_result.get("checkpoint_path"),
+            status=train_result.get("status", "ok"),
+            metadata=train_result,
+        )
+        self.state_mgr.add_result(result_payload.to_dict())
+        self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
+        log_result(result_payload.run_id, hyperparams, train_result, results_path=str(self.results_path))
+        print(f"[Orchestrator] Result logged: {result_payload.run_id}")
+
+        issues = pipeline_validator.validate_training_result(train_result, hyperparams)
+        if self._handle_issues(iteration, issues):
+            return True, report_batch
+
+        print("\n[Orchestrator] Phase 3: Analyzing result with Agent 2")
+        evidence = self.agent2.analyze_result(result_payload.to_dict())
+        if evidence is not None:
+            evidence_payload = evidence.to_dict()
+            self.state_mgr.add_evidence(evidence_payload)
+            report_batch = report_batch + [evidence_payload["report_id"]]
+            self.state_mgr.link_model_to_report(result_payload.run_id, evidence_payload["report_id"])
+            print(f"[Orchestrator] Agent 2 analysis complete: {evidence_payload['report_id']}")
+
+            issues = pipeline_validator.validate_agent2_report(evidence_payload)
+            if self._handle_issues(iteration, issues):
+                return True, report_batch
+        else:
+            print(f"[Orchestrator] Agent 2: no analysis available")
+            # Should not currently happen (analyze_result never returns
+            # None in the present implementation) -- a canary in case a
+            # future change introduces a real None-return path, same
+            # "structurally impossible, so flag it loudly if it ever
+            # occurs" pattern used elsewhere in this file.
+            issues = [pipeline_validator.Issue(
+                pipeline_validator.WARN, "agent2",
+                "Agent 2 produced no analysis for this run (evidence is None) -- unexpected given the "
+                "current implementation, investigate if this occurs",
+                {"run_id": result_payload.run_id},
+            )]
+            if self._handle_issues(iteration, issues):
+                return True, report_batch
+
+        print("\n[Orchestrator] Phase 4: Aggregating evidence with Agent 3")
+        print(f"[Orchestrator] Batch size: {len(report_batch)} reports")
+        if self.agent3.should_create_summary(len(report_batch)):
+            print(f"[Orchestrator] Creating summary from {len(report_batch)} reports...")
+            summary = self.agent3.analyze_and_summarize(report_batch)
+            self.state_mgr.add_summary(summary.to_dict())
+            self.state_mgr.set_latest_summary(summary.summary_id, iteration)
+            report_batch = []
+            print(f"[Orchestrator] Summary created: {summary.summary_id}")
+
+            issues = pipeline_validator.validate_agent3_summary(summary.to_dict(), total_reports=self.agent2.report_counter)
+            if self._handle_issues(iteration, issues):
+                return True, report_batch
+        else:
+            print(f"[Orchestrator] Summary threshold not reached (need {self.agent3.batch_size}, have {len(report_batch)})")
+            issues = pipeline_validator.validate_batch_accumulation(len(report_batch), self.agent3.batch_size)
+            if self._handle_issues(iteration, issues):
+                return True, report_batch
+
+        return False, report_batch
+
+    def _write_temp_hyperparams(self, hyperparams: Dict[str, Any], path: Path) -> None:
+        if yaml is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            yaml.dump(hyperparams, f)
+
+    def _run_parallel_wave(
+        self, iteration: int, report_batch: List[str], max_iterations: int,
+    ) -> Optional[Tuple[int, List[str], bool]]:
+        """Multi-GPU parallel search (dev/checks.txt item 1): when the
+        remote server currently has 2+ live-free GPUs (discovered fresh
+        every call -- no static exclusion list), decide N hyperparameter
+        proposals and train them concurrently, one per GPU, instead of the
+        default one-run-at-a-time loop. Returns None whenever parallel
+        dispatch isn't applicable this round (dry run, parallel disabled,
+        remote not configured, or fewer than 2 GPUs currently free) -- the
+        caller then falls through to the untouched single-run sequential
+        path, so local/dry-run/single-GPU users see zero behavior change.
+
+        Each slot's hyperparameter decision reuses the exact same
+        latest_summary/recent_evidence/recent_results/latest_val_bpb inputs
+        (no new results exist mid-wave -- they only land in state once
+        training completes), so diversity across slots comes from each
+        call's own randomized search (Sobol cold start, or a different EI
+        random seed per slot) rather than sequential feedback -- a known,
+        deliberate simplification of true batch Bayesian optimization.
+        """
+        if self.dry_run or not self.parallel_enabled:
+            return None
+        if not remote_runner.is_remote_configured():
+            return None
+
+        candidates = remote_runner.discover_available_gpus()[: self.max_parallel_runs]
+        if len(candidates) < 2:
+            return None
+
+        wave_size = min(len(candidates), max_iterations - iteration)
+        print(f"[Orchestrator] Parallel wave: {len(candidates)} GPU(s) available -- "
+              f"dispatching {wave_size} concurrent run(s) on GPUs {[c['index'] for c in candidates[:wave_size]]}")
+
+        latest_summary = self._load_latest_summary()
+        recent_evidence = self.state_mgr.get_recent_evidence(limit=5)
+        recent_results = self.state_mgr.get_all_results()[-3:]
+        latest_val_bpb = None
+        if recent_results:
+            latest_val_bpb = recent_results[-1].get("val_bpb")
+        best_before_decision = self.agent1.best_val_bpb
+
+        slots: List[Tuple[int, Dict[str, Any], int, Path]] = []
+        decision_halt = False
+        for i in range(wave_size):
+            iteration_for_slot = iteration + i
+            new_hyperparams = self.agent1.decide_next_hyperparams(
+                latest_summary=latest_summary,
+                evidence=recent_evidence,
+                iteration=iteration_for_slot,
+                latest_val_bpb=latest_val_bpb,
+                recent_results=recent_results,
+            )
+            if new_hyperparams is None:
+                print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")
+                decision_halt = True
+                break
+
+            new_best_just_set = latest_val_bpb is not None and latest_val_bpb < best_before_decision
+            token_xai_due = (iteration_for_slot % self.token_xai_interval == 0) or new_best_just_set
+            new_hyperparams["token_xai_enabled"] = token_xai_due
+
+            issues = pipeline_validator.validate_agent1_decision(
+                self.agent1.last_decision_log, recent_evidence, latest_summary,
+                decisions_dir=self.agent1.decisions_dir,
+            )
+            if self._handle_issues(iteration_for_slot, issues):
+                decision_halt = True
+                break
+
+            gpu_index = candidates[i]["index"]
+            hp_path = self.parallel_hp_dir / f"run_{iteration_for_slot:04d}.yaml"
+            self._write_temp_hyperparams(new_hyperparams, hp_path)
+            print(f"[Orchestrator] Wave dispatch: GPU {gpu_index} <- iteration {iteration_for_slot} "
+                  f"(n_layer={new_hyperparams.get('n_layer')}, matrix_lr={new_hyperparams.get('matrix_lr')})")
+            slots.append((gpu_index, new_hyperparams, iteration_for_slot, hp_path))
+
+        if not slots:
+            return (iteration, report_batch, True) if decision_halt else None
+
+        remote_runner.sync_remote_code()
+
+        results_by_iteration: Dict[int, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+        with ThreadPoolExecutor(max_workers=len(slots)) as executor:
+            future_map = {}
+            for gpu_index, hp, it, hp_path in slots:
+                future = executor.submit(
+                    remote_runner.run_training_remote,
+                    hyperparams_local_path=str(hp_path),
+                    gpu_index=gpu_index,
+                    run_label=f"GPU{gpu_index}",
+                    timeout=self.agent1.training_budget + 120,
+                    skip_sync=True,
+                )
+                future_map[future] = (gpu_index, hp, it)
+
+            for future in as_completed(future_map):
+                gpu_index, hp, it = future_map[future]
+                try:
+                    train_result = future.result()
+                except Exception as e:
+                    print(f"[Orchestrator] Wave slot GPU {gpu_index} (iteration {it}) failed: {e}")
+                    train_result = {
+                        "val_bpb": float("inf"), "error": str(e),
+                        "status": "remote_error", "device": gpu_index,
+                    }
+                print(f"[Orchestrator] Wave slot GPU {gpu_index} complete: "
+                      f"val_bpb={train_result.get('val_bpb', 'N/A')} status={train_result.get('status', 'unknown')} "
+                      f"(iteration {it})")
+                results_by_iteration[it] = (hp, train_result)
+
+        # Process in iteration order (not completion order) so results.tsv,
+        # decision logs, and Agent 2/3 report numbering stay monotonically
+        # ordered -- every "most recent" lookup elsewhere in this codebase
+        # assumes that.
+        halt = decision_halt
+        for it in sorted(results_by_iteration.keys()):
+            hp, train_result = results_by_iteration[it]
+            slot_halt, report_batch = self._process_training_result(it, hp, train_result, report_batch)
+            halt = halt or slot_halt
+
+        next_iteration = iteration + len(slots)
+        return next_iteration, report_batch, halt
 
     def _load_latest_summary(self) -> Optional[str]:
         """Load latest summary report for Agent 1 to read."""
