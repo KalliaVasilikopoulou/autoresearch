@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents import pipeline_validator
 from agents import remote_runner
+from agents.live_progress import MultiGpuProgressDisplay
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst
@@ -100,9 +101,32 @@ class Orchestrator:
             config = yaml.safe_load(f) or {}
         return config.get("orchestrator", {})
 
+    def _kill_stale_remote_training(self) -> None:
+        """Once, at the start of a campaign: clean up any leftover train.py
+        process from a previous, not-cleanly-stopped run on the remote
+        server -- see remote_runner.kill_stale_training_processes for the
+        5-condition identification (owned by us, running train.py, from
+        our repo, carrying our own marker env var) that keeps this from
+        ever touching another user's or another project's process. Not
+        repeated per-iteration: nothing new can go stale mid-campaign since
+        this orchestrator is the only thing dispatching trainings.
+        """
+        if self.dry_run or not remote_runner.is_remote_configured():
+            return
+        print("[Orchestrator] Checking the remote server for stale training processes from a previous run...")
+        killed = remote_runner.kill_stale_training_processes()
+        if not killed:
+            print("[Orchestrator]   None found.")
+            return
+        for entry in killed:
+            escalation = " (SIGTERM didn't stop it in time -- escalated to SIGKILL)" if entry["escalated_to_sigkill"] else " (stopped cleanly with SIGTERM)"
+            print(f"[Orchestrator]   Killed stale process PID {entry['pid']}: {entry['cmd']}{escalation}")
+
     def run(self, max_iterations: Optional[int] = None):
         """Main orchestration loop with structured evidence flow."""
         print("[Orchestrator] Starting autonomous multi-agent loop...\n")
+
+        self._kill_stale_remote_training()
 
         iteration = 0
         report_batch: List[str] = []
@@ -393,40 +417,50 @@ class Orchestrator:
 
         remote_runner.sync_remote_code()
 
+        # Each GPU gets its own pinned terminal line for the duration of the
+        # wave (see agents/live_progress.py) -- without this, every thread's
+        # old \r-based in-place progress update fights the others for the
+        # same cursor position and garbles the output once 2+ GPUs print
+        # concurrently.
+        gpu_labels = [f"GPU{gpu_index}" for gpu_index, _hp, _it, _hp_path in slots]
         results_by_iteration: Dict[int, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
-        with ThreadPoolExecutor(max_workers=len(slots)) as executor:
-            future_map = {}
-            for gpu_index, hp, it, hp_path in slots:
-                future = executor.submit(
-                    remote_runner.run_training_remote,
-                    hyperparams_local_path=str(hp_path),
-                    gpu_index=gpu_index,
-                    # Distinct per-run remote filename -- without this, every
-                    # concurrent slot in the wave uploads to the same shared
-                    # default (model_hyperparams.yaml) and their SFTP writes
-                    # race, corrupting each other (paramiko's post-upload
-                    # size check then fails with "size mismatch in put!").
-                    hp_remote_name=f"model_hyperparams_run{it:04d}.yaml",
-                    run_label=f"GPU{gpu_index}",
-                    timeout=self.agent1.training_budget + 120,
-                    skip_sync=True,
-                )
-                future_map[future] = (gpu_index, hp, it)
+        with MultiGpuProgressDisplay(gpu_labels) as display:
+            with ThreadPoolExecutor(max_workers=len(slots)) as executor:
+                future_map = {}
+                for gpu_index, hp, it, hp_path in slots:
+                    future = executor.submit(
+                        remote_runner.run_training_remote,
+                        hyperparams_local_path=str(hp_path),
+                        gpu_index=gpu_index,
+                        # Distinct per-run remote filename -- without this, every
+                        # concurrent slot in the wave uploads to the same shared
+                        # default (model_hyperparams.yaml) and their SFTP writes
+                        # race, corrupting each other (paramiko's post-upload
+                        # size check then fails with "size mismatch in put!").
+                        hp_remote_name=f"model_hyperparams_run{it:04d}.yaml",
+                        run_label=f"GPU{gpu_index}",
+                        timeout=self.agent1.training_budget + 120,
+                        skip_sync=True,
+                        display=display,
+                    )
+                    future_map[future] = (gpu_index, hp, it)
 
-            for future in as_completed(future_map):
-                gpu_index, hp, it = future_map[future]
-                try:
-                    train_result = future.result()
-                except Exception as e:
-                    print(f"[Orchestrator] Wave slot GPU {gpu_index} (iteration {it}) failed: {e}")
-                    train_result = {
-                        "val_bpb": float("inf"), "error": str(e),
-                        "status": "remote_error", "device": gpu_index,
-                    }
-                print(f"[Orchestrator] Wave slot GPU {gpu_index} complete: "
-                      f"val_bpb={train_result.get('val_bpb', 'N/A')} status={train_result.get('status', 'unknown')} "
-                      f"(iteration {it})")
-                results_by_iteration[it] = (hp, train_result)
+                for future in as_completed(future_map):
+                    gpu_index, hp, it = future_map[future]
+                    try:
+                        train_result = future.result()
+                    except Exception as e:
+                        display.print_line(f"[Orchestrator] Wave slot GPU {gpu_index} (iteration {it}) failed: {e}")
+                        train_result = {
+                            "val_bpb": float("inf"), "error": str(e),
+                            "status": "remote_error", "device": gpu_index,
+                        }
+                    display.print_line(
+                        f"[Orchestrator] Wave slot GPU {gpu_index} complete: "
+                        f"val_bpb={train_result.get('val_bpb', 'N/A')} status={train_result.get('status', 'unknown')} "
+                        f"(iteration {it})"
+                    )
+                    results_by_iteration[it] = (hp, train_result)
 
         # Process in iteration order (not completion order) so results.tsv,
         # decision logs, and Agent 2/3 report numbering stay monotonically

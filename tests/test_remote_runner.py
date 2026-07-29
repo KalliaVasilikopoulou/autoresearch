@@ -218,6 +218,11 @@ def test_run_training_remote_defaults_match_pre_multi_gpu_behavior(monkeypatch, 
     assert any("CUDA_VISIBLE_DEVICES=4" in c for c in shared_commands)
     assert any(f"{FAKE_CFG['repo']}/model_hyperparams.yaml" in c for c in shared_commands)
     assert any("git pull" in c for c in shared_commands)  # skip_sync=False by default
+    # Every train.py invocation carries this marker -- it's what lets
+    # kill_stale_training_processes() identify a leftover process as ours
+    # (see test_kill_stale_training_processes_* below) without ever
+    # touching another user's/project's process.
+    assert any("AUTORESEARCH_MANAGED=1" in c for c in shared_commands)
 
 
 def test_run_training_remote_uses_explicit_gpu_index_and_hp_name_and_skips_sync(monkeypatch, tmp_path):
@@ -247,6 +252,57 @@ def test_run_training_remote_uses_explicit_gpu_index_and_hp_name_and_skips_sync(
     assert any("CUDA_VISIBLE_DEVICES=7" in c for c in shared_commands)
 
 
+class FakeDisplay:
+    """Stand-in for agents.live_progress.MultiGpuProgressDisplay -- records
+    what run_training_remote routes to each method, without any real
+    terminal/rich dependency."""
+
+    def __init__(self):
+        self.progress_calls = []
+        self.printed_lines = []
+
+    def update_progress(self, label, line):
+        self.progress_calls.append((label, line))
+
+    def print_line(self, text):
+        self.printed_lines.append(text)
+
+
+def test_run_training_remote_routes_progress_lines_to_display_when_provided(monkeypatch, tmp_path):
+    def client_factory():
+        return FakeSSHClient(responses=[
+            (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
+            ("python -u train.py", [(
+                "[--------------------]   0.0% | loss: 9.0 | remaining: 300.0s\n"
+                "Time budget: 300s\n"
+                "[==========----------]  50.0% | loss: 5.0 | remaining: 150.0s\n"
+                "val_bpb:          0.9\n"
+                "status:           remote_ok\n", 0,
+            )]),
+        ])
+
+    _patch_paramiko(monkeypatch, client_factory)
+    hp_file = tmp_path / "hp.yaml"
+    hp_file.write_text("n_layer: 8\n")
+    display = FakeDisplay()
+
+    metrics = remote_runner.run_training_remote(
+        str(hp_file), timeout=60, gpu_index=1, run_label="GPU1", skip_sync=True, display=display,
+    )
+
+    assert metrics["status"] == "remote_ok"
+    progress_lines = [line for _label, line in display.progress_calls]
+    assert any("0.0%" in line for line in progress_lines)
+    assert any("50.0%" in line for line in progress_lines)
+    assert all(label == "GPU1" for label, _line in display.progress_calls)
+    assert any("Time budget: 300s" in text for text in display.printed_lines)
+    # Non-progress status lines (connect/upload/execute/parsed metrics) also
+    # go through the display, not a bare print(), so they can't clobber the
+    # live-updating progress table.
+    assert any("Connecting to" in text for text in display.printed_lines)
+    assert any("Parsed metrics" in text for text in display.printed_lines)
+
+
 def test_run_training_remote_reports_error_status_on_nonzero_exit(monkeypatch, tmp_path):
     def client_factory():
         return FakeSSHClient(responses=[
@@ -273,3 +329,138 @@ def test_sync_remote_code_issues_stash_then_pull(monkeypatch):
 
     assert any("git stash" in c for c in shared_commands)
     assert any("git pull" in c for c in shared_commands)
+
+
+# --- kill_stale_training_processes ---------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """kill_stale_training_processes sleeps a few real seconds between
+    SIGTERM and its liveness check -- never let that actually happen in
+    the test suite."""
+    monkeypatch.setattr(remote_runner.time, "sleep", lambda seconds: None)
+
+
+def test_kill_stale_training_processes_returns_empty_when_paramiko_unavailable(monkeypatch):
+    monkeypatch.setattr(remote_runner, "_PARAMIKO_AVAILABLE", False)
+    assert remote_runner.kill_stale_training_processes() == []
+
+
+def test_kill_stale_training_processes_returns_empty_when_remote_not_configured(monkeypatch):
+    monkeypatch.setattr(remote_runner, "_PARAMIKO_AVAILABLE", True)
+    monkeypatch.setattr(remote_runner, "_load_cfg", lambda: {"host": "", "user": "", "repo": "", "password": ""})
+    assert remote_runner.kill_stale_training_processes() == []
+
+
+def test_kill_stale_training_processes_returns_empty_when_no_gpu_processes(monkeypatch):
+    client = FakeSSHClient(responses=[("nvidia-smi --query-compute-apps", [("", 0)])])
+    _patch_paramiko(monkeypatch, lambda: client)
+    assert remote_runner.kill_stale_training_processes() == []
+
+
+def test_kill_stale_training_processes_kills_only_the_matching_process(monkeypatch):
+    """Two PIDs show up as GPU-attached: PID 111 is ours (owner, cmdline,
+    cwd, and marker all match); PID 222 belongs to a different user and
+    must never be touched -- not even inspected past the ownership check.
+    """
+    shared_commands = []
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[
+                ("nvidia-smi --query-compute-apps", [("111\n222\n", 0)]),
+                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("ps -o ruser=,args= -p 222", [("some-other-user some_other_process.py", 0)]),
+                ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
+                ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("1", 0)]),
+                ("kill -0 111", [("DEAD\n", 0)]),
+            ],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
+
+    killed = remote_runner.kill_stale_training_processes()
+
+    assert len(killed) == 1
+    assert killed[0]["pid"] == "111"
+    assert killed[0]["escalated_to_sigkill"] is False
+    assert any("kill -TERM 111" in c for c in shared_commands)
+    assert not any("kill -TERM 222" in c for c in shared_commands)
+    assert not any("/proc/222/cwd" in c for c in shared_commands)  # never got past the ownership check
+
+
+def test_kill_stale_training_processes_skips_process_missing_the_marker(monkeypatch):
+    shared_commands = []
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[
+                ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
+                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
+                ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("0", 0)]),
+            ],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
+
+    assert remote_runner.kill_stale_training_processes() == []
+    assert not any("kill -TERM" in c for c in shared_commands)
+
+
+def test_kill_stale_training_processes_skips_process_with_different_cwd(monkeypatch):
+    """Same owner, same 'train.py' in the cmdline, but running from a
+    different project entirely -- must not be treated as ours."""
+    shared_commands = []
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[
+                ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
+                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("readlink -f /proc/111/cwd", [("/home/fake-user/some_other_project", 0)]),
+            ],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
+
+    assert remote_runner.kill_stale_training_processes() == []
+    assert not any("environ" in c for c in shared_commands)  # never even checked the marker
+
+
+def test_kill_stale_training_processes_escalates_to_sigkill_when_still_alive(monkeypatch):
+    shared_commands = []
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[
+                ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
+                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
+                ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("1", 0)]),
+                ("kill -0 111", [("ALIVE\n", 0)]),
+            ],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
+
+    killed = remote_runner.kill_stale_training_processes()
+
+    assert killed[0]["escalated_to_sigkill"] is True
+    assert any("kill -TERM 111" in c for c in shared_commands)
+    assert any("kill -KILL 111" in c for c in shared_commands)
+
+
+def test_kill_stale_training_processes_skips_pid_that_already_exited(monkeypatch):
+    """The ps lookup for a PID that's already gone (raced with its own
+    natural exit) returns an empty line -- must be skipped, not crash."""
+    client = FakeSSHClient(responses=[
+        ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
+        ("ps -o ruser=,args= -p 111", [("", 0)]),
+    ])
+    _patch_paramiko(monkeypatch, lambda: client)
+    assert remote_runner.kill_stale_training_processes() == []

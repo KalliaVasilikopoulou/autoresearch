@@ -102,10 +102,14 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
+    # orch.run() below now also does a startup stale-process check -- must
+    # never make a real SSH call in tests (this repo's real .env has real
+    # credentials, so an unmocked call here would actually reach the DGX).
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
 
     seen_remote_names = []
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False):
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None):
         seen_remote_names.append(hp_remote_name)
         return {
             "val_bpb": 1.0 if gpu_index == 3 else 1.1,
@@ -143,7 +147,7 @@ def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monke
 
     dispatched_gpus = []
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False):
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None):
         dispatched_gpus.append(gpu_index)
         return {"val_bpb": 1.0, "training_time": 1.0, "status": "remote_ok", "device": gpu_index}
 
@@ -165,3 +169,51 @@ def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monke
     _, _, halted = result
     assert halted is True
     assert dispatched_gpus == [3]  # only the first (already-decided) slot was trained
+
+
+# --- _kill_stale_remote_training (startup cleanup) -----------------------
+
+def test_kill_stale_remote_training_skipped_when_dry_run(tmp_path, monkeypatch):
+    orch = _make_orchestrator(tmp_path)
+    orch.dry_run = True
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("kill_stale_training_processes must not run in dry_run mode")
+
+    monkeypatch.setattr(remote_runner, "is_remote_configured", fail_if_called)
+    orch._kill_stale_remote_training()  # must return before ever checking remote config
+
+
+def test_kill_stale_remote_training_skipped_when_remote_not_configured(tmp_path, monkeypatch):
+    orch = _make_orchestrator(tmp_path)
+    monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: False)
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("kill_stale_training_processes must not run when remote isn't configured")
+
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", fail_if_called)
+    orch._kill_stale_remote_training()
+
+
+def test_kill_stale_remote_training_calls_cleanup_when_remote_configured(tmp_path, monkeypatch, capsys):
+    orch = _make_orchestrator(tmp_path)
+    monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [
+        {"pid": "111", "cmd": "python -u train.py", "escalated_to_sigkill": False},
+    ])
+
+    orch._kill_stale_remote_training()
+
+    out = capsys.readouterr().out
+    assert "Killed stale process PID 111" in out
+    assert "stopped cleanly with SIGTERM" in out
+
+
+def test_kill_stale_remote_training_reports_none_found(tmp_path, monkeypatch, capsys):
+    orch = _make_orchestrator(tmp_path)
+    monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
+
+    orch._kill_stale_remote_training()
+
+    assert "None found." in capsys.readouterr().out

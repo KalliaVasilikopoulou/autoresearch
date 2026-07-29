@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agents.live_progress import MultiGpuProgressDisplay
+
 try:
     import paramiko
     _PARAMIKO_AVAILABLE = True
@@ -119,13 +121,20 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[s
     return available
 
 
-def _acquire_gpu_lock(client, gpu_index: int, remote_repo: str, stale_after_seconds: float) -> bool:
+def _acquire_gpu_lock(
+    client, gpu_index: int, remote_repo: str, stale_after_seconds: float,
+    display: Optional[MultiGpuProgressDisplay] = None, label: str = "",
+) -> bool:
     """mkdir is atomic over SSH (POSIX guarantee: fails if the dir already
     exists), so this is a real mutex with no extra dependency. A lock older
     than stale_after_seconds is assumed to belong to a crashed process and
     is reclaimed -- otherwise a single dead run would permanently strand a
     GPU. Best-effort: caller treats a failed acquire as "unavailable this
     round," never blocks waiting for it.
+
+    display/label: when this runs as part of a concurrent multi-GPU wave,
+    its one log line must go through the shared live display too, or it
+    can clobber the live-updating progress table (see agents/live_progress.py).
     """
     lock_dir = f"{remote_repo}/.autoresearch_gpu_locks/gpu_{gpu_index}"
     parent = f"{remote_repo}/.autoresearch_gpu_locks"
@@ -149,7 +158,11 @@ def _acquire_gpu_lock(client, gpu_index: int, remote_repo: str, stale_after_seco
     except ValueError:
         age = 0.0
     if age > stale_after_seconds:
-        print(f"[RemoteRunner] GPU {gpu_index} lock stale ({age:.0f}s old) -- reclaiming")
+        message = f"GPU {gpu_index} lock stale ({age:.0f}s old) -- reclaiming"
+        if display is not None:
+            display.print_line(f"[{label}] {message}")
+        else:
+            print(f"[RemoteRunner] {message}")
         client.exec_command(f'rm -rf {lock_dir}')[1].read()
         return _try_mkdir()
 
@@ -162,6 +175,99 @@ def _release_gpu_lock(client, gpu_index: int, remote_repo: str) -> None:
         client.exec_command(f'rm -rf {lock_dir}')[1].read()
     except Exception:
         pass
+
+
+def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout: int = 30) -> List[Dict[str, Any]]:
+    """Find and clean up any leftover train.py process from a previous,
+    not-cleanly-stopped run of this project on the remote server, before a
+    new campaign starts. Called once at Orchestrator startup, never
+    per-iteration -- nothing new can go stale mid-campaign since this
+    orchestrator process is the only thing dispatching trainings.
+
+    A process is only ever touched when ALL of these hold:
+      1. It's currently attached to a GPU (nvidia-smi --query-compute-apps).
+      2. Its Linux owner is exactly the configured remote SSH user (`ps
+         ruser`) -- and this isn't just an application-level filter: a
+         non-root `kill` is refused by the kernel for any PID you don't
+         own, so another user's process can never actually be signalled
+         here even if this check had a bug.
+      3. Its command line contains "train.py" (`ps args`).
+      4. Its cwd is exactly this project's remote repo
+         (`readlink /proc/<pid>/cwd`) -- rules out an unrelated train.py
+         elsewhere on the same account.
+      5. It carries the AUTORESEARCH_MANAGED=1 marker this project sets on
+         every train.py invocation it launches (`/proc/<pid>/environ`) --
+         the most specific signal; a coincidental match on 1-4 alone still
+         wouldn't be enough.
+
+    Sends SIGTERM first (lets it release its CUDA context cleanly), and
+    only escalates to SIGKILL if it's still alive a few seconds later.
+    Returns [] on any SSH/parse failure or when nothing matches all five
+    checks -- never guesses, never touches anything ambiguous.
+    """
+    if not _PARAMIKO_AVAILABLE:
+        return []
+    cfg = cfg or _load_cfg()
+    if not (cfg["host"] and cfg["user"] and cfg["repo"]):
+        return []
+    remote_repo = cfg["repo"].rstrip("/")
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
+            password=cfg["password"] or None, timeout=30,
+        )
+
+        _, stdout, _ = client.exec_command(
+            "nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits", timeout=timeout,
+        )
+        gpu_pids = [p.strip() for p in stdout.read().decode("utf-8", errors="replace").splitlines() if p.strip().isdigit()]
+        if not gpu_pids:
+            return []
+
+        killed: List[Dict[str, Any]] = []
+        for pid in gpu_pids:
+            _, stdout, _ = client.exec_command(f'ps -o ruser=,args= -p {pid} 2>/dev/null', timeout=timeout)
+            ps_line = stdout.read().decode("utf-8", errors="replace").strip()
+            if not ps_line:
+                continue  # PID already gone, or not visible to us (not ours)
+            parts = ps_line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            ruser, args = parts
+            if ruser != cfg["user"] or "train.py" not in args:
+                continue
+
+            _, stdout, _ = client.exec_command(f'readlink -f /proc/{pid}/cwd 2>/dev/null', timeout=timeout)
+            cwd = stdout.read().decode("utf-8", errors="replace").strip()
+            if cwd != remote_repo:
+                continue
+
+            _, stdout, _ = client.exec_command(
+                f'grep -zc "AUTORESEARCH_MANAGED=1" /proc/{pid}/environ 2>/dev/null', timeout=timeout,
+            )
+            marker_count = stdout.read().decode("utf-8", errors="replace").strip()
+            if marker_count != "1":
+                continue
+
+            # All 5 checks passed -- unambiguously our own leftover process.
+            client.exec_command(f'kill -TERM {pid} 2>/dev/null', timeout=timeout)
+            time.sleep(3)
+            _, stdout, _ = client.exec_command(f'kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD', timeout=timeout)
+            still_alive = stdout.read().decode("utf-8", errors="replace").strip() == "ALIVE"
+            if still_alive:
+                client.exec_command(f'kill -KILL {pid} 2>/dev/null', timeout=timeout)
+
+            killed.append({"pid": pid, "cmd": args.strip(), "escalated_to_sigkill": still_alive})
+
+        return killed
+    except Exception as e:
+        print(f"[RemoteRunner] Stale-process check failed: {e}")
+        return []
+    finally:
+        client.close()
 
 
 def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> None:
@@ -204,9 +310,18 @@ def run_training_remote(
     hp_remote_name: str = "model_hyperparams.yaml",
     run_label: Optional[str] = None,
     skip_sync: bool = False,
+    display: Optional[MultiGpuProgressDisplay] = None,
 ) -> Dict[str, Any]:
     """
     Upload hyperparams YAML to the remote server and run train.py there.
+
+    display: when this call is one of several running concurrently (the
+    multi-GPU wave dispatcher in agents/orchestrator.py), pass a shared
+    MultiGpuProgressDisplay so this GPU's progress-bar lines land on their
+    own pinned terminal line instead of every thread's old `\\r`-based
+    update fighting over the same cursor position (see
+    agents/live_progress.py). None (the default, single-GPU sequential
+    path) keeps today's exact `\\r`-based in-place update, unchanged.
 
     gpu_index=None (the default) auto-discovers the best live-available GPU
     via discover_available_gpus(), falling back to REMOTE_DEFAULT_GPU (or 4,
@@ -265,6 +380,12 @@ def run_training_remote(
     remote_hyperparams = f"{remote_repo}/{hp_remote_name}"
     stale_after = float(os.getenv("REMOTE_GPU_LOCK_STALE_SECONDS", str(timeout + 600)))
 
+    def _print(message: str) -> None:
+        if display is not None:
+            display.print_line(f"[{label}] {message}")
+        else:
+            print(f"[{label}] {message}")
+
     if not skip_sync:
         sync_remote_code(cfg)
 
@@ -273,7 +394,7 @@ def run_training_remote(
     lock_acquired = False
 
     try:
-        print(f"[{label}] Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} ...")
+        _print(f"Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} ...")
         client.connect(
             hostname=cfg["host"],
             port=cfg["port"],
@@ -282,13 +403,13 @@ def run_training_remote(
             timeout=30,
         )
 
-        lock_acquired = _acquire_gpu_lock(client, gpu_index, remote_repo, stale_after)
+        lock_acquired = _acquire_gpu_lock(client, gpu_index, remote_repo, stale_after, display=display, label=label)
         if not lock_acquired:
-            print(f"[{label}] GPU {gpu_index}'s lock is held by another run -- proceeding anyway "
-                  f"(best-effort lock, not a hard reservation)")
+            _print(f"GPU {gpu_index}'s lock is held by another run -- proceeding anyway "
+                   f"(best-effort lock, not a hard reservation)")
 
         # --- Upload hyperparameters ---
-        print(f"[{label}] Uploading hyperparams -> {remote_hyperparams}")
+        _print(f"Uploading hyperparams -> {remote_hyperparams}")
         sftp = client.open_sftp()
         sftp.put(hyperparams_local_path, remote_hyperparams)
         sftp.close()
@@ -296,9 +417,15 @@ def run_training_remote(
         # --- Run training on the selected GPU ---
         remote_cmd = (
             f'bash -lc "{activate} {env} && cd {remote_repo} && '
-            f'CUDA_VISIBLE_DEVICES={gpu_index} AUTORESEARCH_HP_PATH={remote_hyperparams} python -u train.py"'
+            f'CUDA_VISIBLE_DEVICES={gpu_index} AUTORESEARCH_HP_PATH={remote_hyperparams} '
+            # AUTORESEARCH_MANAGED=1 marks this process as one this project
+            # launched -- kill_stale_training_processes() requires it (along
+            # with owner/cmdline/cwd matches) before ever signalling a PID,
+            # so a leftover process from a previous run can be identified
+            # unambiguously and other users'/projects' processes never can.
+            f'AUTORESEARCH_MANAGED=1 python -u train.py"'
         )
-        print(f"[{label}] Executing on GPU {gpu_index}: {remote_cmd}")
+        _print(f"Executing on GPU {gpu_index}: {remote_cmd}")
         _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
 
         output_lines = []
@@ -306,27 +433,37 @@ def run_training_remote(
         for line in iter(stdout.readline, ""):
             line = line.rstrip("\n")
             output_lines.append(line)
-            # Progress bar lines: update in-place locally with \r
-            if line.startswith('[') and ']' in line and '%' in line:
-                last_progress_bar = line
-                print(f"\r  [{label}] {line}", end="", flush=True)
-            # Other non-empty lines: print normally with newline
-            elif line.strip():
-                if last_progress_bar:
-                    print()  # newline to finish the progress bar line
-                    last_progress_bar = None
-                print(f"  [{label}] {line}", flush=True)
+            is_progress = line.startswith('[') and ']' in line and '%' in line
+            if display is not None:
+                # Concurrent multi-GPU wave: this GPU's own pinned line
+                # (see agents/live_progress.py) instead of a `\r`-based
+                # update that would fight other threads for the same
+                # cursor position.
+                if is_progress:
+                    display.update_progress(label, line)
+                elif line.strip():
+                    display.print_line(f"[{label}] {line}")
+            else:
+                # Sequential single-GPU path: unchanged in-place `\r` update.
+                if is_progress:
+                    last_progress_bar = line
+                    print(f"\r  [{label}] {line}", end="", flush=True)
+                elif line.strip():
+                    if last_progress_bar:
+                        print()  # newline to finish the progress bar line
+                        last_progress_bar = None
+                    print(f"  [{label}] {line}", flush=True)
 
-        if last_progress_bar:
+        if display is None and last_progress_bar:
             print()  # final newline after last progress bar
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()
         exit_code = stdout.channel.recv_exit_status()
 
         if exit_code != 0:
-            print(f"[{label}] Remote process exited with code {exit_code}")
+            _print(f"Remote process exited with code {exit_code}")
             if err_output:
-                print(f"[{label}] stderr: {err_output[:500]}")
+                _print(f"stderr: {err_output[:500]}")
             return {
                 "val_bpb": float("inf"),
                 "error": err_output or f"exit code {exit_code}",
@@ -336,7 +473,7 @@ def run_training_remote(
 
         metrics = _parse_output("\n".join(output_lines))
         metrics["device"] = gpu_index
-        print(f"[{label}] Parsed metrics: {metrics}")
+        _print(f"Parsed metrics: {metrics}")
         return metrics
 
     finally:
