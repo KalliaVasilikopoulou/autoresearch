@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from agents import claude_cli
 from agents.xai_methods.fast_methods import FastXAIMethods
 from agents.protocols import AnalysisEvidence
 from agents.agent1_training_specialist import LR_DEFAULTS
@@ -57,8 +58,14 @@ class Agent2XAISpecialist:
         self.report_counter = self._count_existing_reports()
         self.all_impacts = []  # Real head-ablation impacts, one dict per run that had them (for stuck detection)
 
-        # Claude client (lazy loaded if needed)
-        self.claude = None
+        # LLM/copilot integration (dev/checks.txt item 4): shared campaign
+        # budget across agent1/2/3 -- see agents/claude_cli.py's docstring.
+        llm_config = self.config.get("llm", {})
+        self._llm_backend = llm_config.get("backend", "cli")
+        self._llm_model = llm_config.get("model", "sonnet")
+        self._llm_campaign_budget_usd = float(llm_config.get("campaign_budget_usd", 5.0))
+        self._llm_max_call_budget_usd = float(llm_config.get("max_call_budget_usd", 0.20))
+        self._llm_usage_path = llm_config.get("usage_log_path", "state/llm_usage.json")
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
@@ -71,21 +78,6 @@ class Agent2XAISpecialist:
         """Count existing reports to continue numbering."""
         reports = list(self.reports_dir.glob("report_*.md"))
         return len(reports)
-
-    def _init_claude(self):
-        """Lazy-load Claude client."""
-        if self.claude is not None:
-            return
-
-        try:
-            from anthropic import Anthropic
-
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not set")
-            self.claude = Anthropic(api_key=api_key)
-        except ImportError:
-            raise ImportError("anthropic package not installed")
 
     def analyze_result(self, result_payload: Dict[str, Any]) -> Optional[AnalysisEvidence]:
         """Analyze a completed training result and emit structured evidence."""
@@ -164,6 +156,48 @@ class Agent2XAISpecialist:
         """
         impacts = run_metrics.get("head_ablation_impacts")
         return dict(impacts) if isinstance(impacts, dict) else {}
+
+    def _get_llm_interpretation(self, structured: Dict[str, Any]) -> Optional[str]:
+        """A short, LLM-generated plain-language read of this run's real,
+        measured XAI evidence (dev/checks.txt item 4) -- never a substitute
+        for the measured data above it in the report, just a summary of it.
+        None (not fabricated) when the CLI is unavailable or the shared
+        campaign budget is exhausted; see agents/claude_cli.py.
+        """
+        top_heads = structured.get("head_importance") or {}
+        top_heads_str = ", ".join(
+            f"{h}={v:.4f}" for h, v in sorted(top_heads.items(), key=lambda kv: -abs(kv[1]))[:5]
+        ) or "none measured this run"
+
+        importance = structured.get("hyperparameter_importance") or {}
+        importance_str = ", ".join(f"{k}={v:.3f}" for k, v in importance.items()) or "insufficient history yet"
+
+        fingerprint = structured.get("token_fingerprint") or {}
+        slope, induction = fingerprint.get("attn_distance_slope"), fingerprint.get("induction_score")
+        fingerprint_str = (
+            f"attn_distance_slope={slope:.4f}, induction_score={induction:.4f}"
+            if isinstance(slope, (int, float)) and isinstance(induction, (int, float))
+            else "not measured this run"
+        )
+
+        prompt = f"""Here is one training run's real, measured XAI evidence -- interpret it in
+2-4 plain-language sentences for a researcher skimming many reports. Do not
+invent numbers not given below; if evidence is thin, say so.
+
+val_bpb: {structured.get('val_bpb')}
+stuck_signal: {structured.get('stuck_signal')}
+top head-ablation impacts: {top_heads_str}
+hyperparameter importance (Spearman |r| vs val_bpb): {importance_str}
+token-level fingerprint: {fingerprint_str}"""
+
+        return claude_cli.call_with_budget(
+            prompt, call_site="agent2_report_interpretation",
+            model=self._llm_model,
+            campaign_budget_usd=self._llm_campaign_budget_usd,
+            max_call_budget_usd=self._llm_max_call_budget_usd,
+            usage_path=self._llm_usage_path,
+            backend=self._llm_backend,
+        )
 
     def _render_markdown_report(
         self,
@@ -418,6 +452,17 @@ class Agent2XAISpecialist:
         ])
         for note in evidence.notes:
             lines.append(f"- {note}")
+
+        lines.extend([
+            "",
+            "## LLM Interpretation",
+        ])
+        if self.use_llm:
+            llm_text = self._get_llm_interpretation(structured)
+            lines.append(llm_text if llm_text else
+                         "- Unavailable this run (CLI not reachable, or campaign LLM budget exhausted)")
+        else:
+            lines.append("- Disabled (agent2.use_llm is false)")
 
         lines.extend([
             "",

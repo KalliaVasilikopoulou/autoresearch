@@ -13,8 +13,10 @@ try:
 except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
+from agents import claude_cli
 from agents.protocols import SummaryEvidence
 from agents.agent1_training_specialist import LR_KEYS
+from state import llm_usage
 from state.clustering import cluster_attention_trajectories, cluster_fingerprints
 from state.visualize import (
     chart_attention_trajectory_clusters,
@@ -66,8 +68,16 @@ class Agent3ReportAnalyst:
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()
-        self.claude = None
         self._latest_summary_evidence: Optional[SummaryEvidence] = None
+
+        # LLM/copilot integration (dev/checks.txt item 4): shared campaign
+        # budget across agent1/2/3 -- see agents/claude_cli.py's docstring.
+        llm_config = self.config.get("llm", {})
+        self._llm_backend = llm_config.get("backend", "cli")
+        self._llm_model = llm_config.get("model", "sonnet")
+        self._llm_campaign_budget_usd = float(llm_config.get("campaign_budget_usd", 5.0))
+        self._llm_max_call_budget_usd = float(llm_config.get("max_call_budget_usd", 0.20))
+        self._llm_usage_path = llm_config.get("usage_log_path") or str(_state / "llm_usage.json")
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
@@ -82,21 +92,6 @@ class Agent3ReportAnalyst:
         """Count existing summaries."""
         summaries = list(self.summaries_dir.glob("summary_*.md"))
         return len(summaries)
-
-    def _init_claude(self):
-        """Lazy-load Claude client."""
-        if self.claude is not None:
-            return
-
-        try:
-            from anthropic import Anthropic
-
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not set")
-            self.claude = Anthropic(api_key=api_key)
-        except ImportError:
-            raise ImportError("anthropic package not installed")
 
     def should_create_summary(self, report_count: int) -> bool:
         """Check if batch is complete."""
@@ -170,25 +165,22 @@ class Agent3ReportAnalyst:
         # ALWAYS: Generate statistical summary
         summary, aggregate = self._format_statistical_summary(new_reports, prev_summary)
 
-        # OPTIONAL: If LLM enabled, add Claude narrative
+        # OPTIONAL: If LLM enabled, add a Claude-generated strategic narrative
+        # (via agents/claude_cli.py -- your subscription, not a separately
+        # billed API key). None (never fabricated) when the CLI is
+        # unavailable or the shared campaign budget is exhausted.
         if self.use_llm:
-            try:
-                self._init_claude()
-                narrative = self._get_claude_narrative(summary)
-                summary += f"\n\n## Strategic Narrative\n{narrative}\n"
-            except Exception as e:
-                summary += f"\n\n## Strategic Narrative\nFailed to generate: {e}\n"
+            narrative = self._get_claude_narrative(summary)
+            summary += (f"\n\n## Strategic Narrative\n{narrative}\n" if narrative else
+                        "\n\n## Strategic Narrative\nUnavailable this run (CLI not reachable, or campaign LLM budget exhausted)\n")
 
         # OPTIONAL: If LLM enabled AND there's real cluster data (Tier 3.3)
         # -- not invoked when clustering hasn't found anything yet, so a
-        # missing-data run never costs an API call.
+        # missing-data run never costs a call.
         if self.use_llm and aggregate.get("fingerprint_clusters"):
-            try:
-                self._init_claude()
-                hypotheses = self._get_cluster_hypotheses(aggregate["fingerprint_clusters"])
-                summary += f"\n\n## Cluster Hypotheses (Claude)\n{hypotheses}\n"
-            except Exception as e:
-                summary += f"\n\n## Cluster Hypotheses (Claude)\nFailed to generate: {e}\n"
+            hypotheses = self._get_cluster_hypotheses(aggregate["fingerprint_clusters"])
+            summary += (f"\n\n## Cluster Hypotheses (Claude)\n{hypotheses}\n" if hypotheses else
+                        "\n\n## Cluster Hypotheses (Claude)\nUnavailable this run (CLI not reachable, or campaign LLM budget exhausted)\n")
 
         return summary, aggregate
 
@@ -687,6 +679,30 @@ class Agent3ReportAnalyst:
                 except Exception as _e:
                     print(f"[Agent 3] Chart generation (pipeline issues) failed: {_e}")
 
+        # LLM usage/budget (dev/checks.txt item 4) -- state/llm_usage.json is
+        # shared across agent1/2/3, so this is the campaign total, not just
+        # this agent's own calls. Self-tracked against the budget you set in
+        # agents_config.yaml's llm.campaign_budget_usd -- not a readout of
+        # your actual Claude subscription's remaining quota (the CLI doesn't
+        # expose that).
+        summary_lines.extend(["", "## LLM Usage This Campaign"])
+        usage_records = llm_usage.load_usage_log(self._llm_usage_path)
+        if not usage_records:
+            summary_lines.append("- No LLM calls made yet this campaign")
+        else:
+            cumulative = llm_usage.cumulative_cost_usd(self._llm_usage_path)
+            remaining = llm_usage.remaining_budget_usd(self._llm_campaign_budget_usd, self._llm_usage_path)
+            successes = sum(1 for r in usage_records if not r.get("is_error"))
+            summary_lines.append(
+                f"- {len(usage_records)} call(s) ({successes} successful), "
+                f"cumulative cost ${cumulative:.4f} / ${self._llm_campaign_budget_usd:.2f} budget "
+                f"(${remaining:.4f} remaining)"
+            )
+            by_site = Counter(r.get("call_site") for r in usage_records)
+            summary_lines.append(
+                "- By call site: " + ", ".join(f"{site}={count}" for site, count in sorted(by_site.items()))
+            )
+
         summary_lines.extend([
             "",
             "## Recommendations for Agent 1 (Data-Backed)",
@@ -753,8 +769,11 @@ class Agent3ReportAnalyst:
             reasoning=["Load markdown summary for full details"],
         )
 
-    def _get_claude_narrative(self, statistical_summary: str) -> str:
-        """Get Claude to create strategic narrative."""
+    def _get_claude_narrative(self, statistical_summary: str) -> Optional[str]:
+        """Ask the Claude Code CLI (agents/claude_cli.py -- your subscription)
+        for a strategic narrative. None (not fabricated) when the CLI is
+        unavailable or the shared campaign budget is exhausted.
+        """
         prompt = f"""Based on this summary, provide a strategic narrative:
 1. What patterns emerge across multiple models?
 2. What should Agent 1 focus on for next iteration?
@@ -765,20 +784,22 @@ Summary:
 
 Be concise (under 250 words)."""
 
-        try:
-            message = self.claude.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=400,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return message.content[0].text
-        except Exception as e:
-            return f"Error getting Claude narrative: {e}"
+        return claude_cli.call_with_budget(
+            prompt, call_site="agent3_strategic_narrative",
+            model=self._llm_model,
+            campaign_budget_usd=self._llm_campaign_budget_usd,
+            max_call_budget_usd=self._llm_max_call_budget_usd,
+            usage_path=self._llm_usage_path,
+            backend=self._llm_backend,
+        )
 
-    def _get_cluster_hypotheses(self, fingerprint_clusters: Dict[str, Any]) -> str:
+    def _get_cluster_hypotheses(self, fingerprint_clusters: Dict[str, Any]) -> Optional[str]:
         """Tier 3.3: feed the cluster table to Claude for hypotheses only --
         never treated as a finding on its own, just candidate explanations
-        for Agent 1 to actually test as real runs."""
+        for Agent 1 to actually test as real runs. None (not fabricated)
+        when the CLI is unavailable or the shared campaign budget is
+        exhausted.
+        """
         prompt = f"""Below is a table of behavioral-fingerprint clusters found across recent
 training runs (from hierarchical clustering of attention/attribution
 statistics), each with its mean validation bpb (lower is better).
@@ -792,12 +813,11 @@ Cluster data:
 
 Be concise (under 200 words)."""
 
-        try:
-            message = self.claude.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=350,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return message.content[0].text
-        except Exception as e:
-            return f"Error getting cluster hypotheses: {e}"
+        return claude_cli.call_with_budget(
+            prompt, call_site="agent3_cluster_hypotheses",
+            model=self._llm_model,
+            campaign_budget_usd=self._llm_campaign_budget_usd,
+            max_call_budget_usd=self._llm_max_call_budget_usd,
+            usage_path=self._llm_usage_path,
+            backend=self._llm_backend,
+        )

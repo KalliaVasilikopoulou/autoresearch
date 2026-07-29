@@ -347,7 +347,10 @@ def test_agent3_cluster_section_absent_below_min_observations(tmp_path):
         report_id = f"report_{i:04d}"
         _write_fake_report(reports_dir / "agent2_reports", report_id, 1.0 + i * 0.01, _fake_fingerprint("low"))
 
-    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    analyst = Agent3ReportAnalyst(
+        config_path=str(tmp_path / "nonexistent_agents_config.yaml"),  # no LLM calls in these tests
+        reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"),
+    )
     summary = analyst.analyze_and_summarize([f"report_{i:04d}" for i in range(3)])
 
     assert summary.fingerprint_clusters == {}
@@ -368,7 +371,10 @@ def test_agent3_cluster_section_present_with_enough_separable_data(tmp_path):
         _write_fake_report(reports_dir / "agent2_reports", report_id, 1.30 + random.uniform(-0.01, 0.01), _fake_fingerprint("high"))
         report_ids.append(report_id)
 
-    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    analyst = Agent3ReportAnalyst(
+        config_path=str(tmp_path / "nonexistent_agents_config.yaml"),  # no LLM calls in these tests
+        reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"),
+    )
     summary = analyst.analyze_and_summarize(report_ids)
 
     assert summary.fingerprint_clusters != {}
@@ -391,7 +397,10 @@ def test_agent3_new_sections_absent_without_data_present_with_data(tmp_path):
     _write_fake_report(reports_dir / "agent2_reports", "report_0000", 1.0, {})
 
     # --- Case 1: neither directory has any data yet ---
-    analyst = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    analyst = Agent3ReportAnalyst(
+        config_path=str(tmp_path / "nonexistent_agents_config.yaml"),  # no LLM calls in these tests
+        reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"),
+    )
     summary = analyst.analyze_and_summarize(["report_0000"])
     text = (reports_dir / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
     assert "No fingerprint-driven adjustments fired yet" in text
@@ -416,7 +425,10 @@ def test_agent3_new_sections_absent_without_data_present_with_data(tmp_path):
     }))
 
     _write_fake_report(reports_dir / "agent2_reports", "report_0001", 0.95, {})
-    analyst2 = Agent3ReportAnalyst(reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"))
+    analyst2 = Agent3ReportAnalyst(
+        config_path=str(tmp_path / "nonexistent_agents_config.yaml"),  # no LLM calls in these tests
+        reports_dir=str(reports_dir), state_dir=str(tmp_path / "state"),
+    )
     summary2 = analyst2.analyze_and_summarize(["report_0001"])
     text2 = (reports_dir / "agent3_summaries" / f"{summary2.summary_id}.md").read_text()
     assert "2 fingerprint-driven adjustment(s)" in text2

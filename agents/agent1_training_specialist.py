@@ -14,6 +14,8 @@ try:
 except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
+from agents import claude_cli
+
 
 # The 4 learning-rate groups train.py's optimizer actually exposes (matches
 # GPT.setup_optimizer's kwargs 1:1 — see train.py). Each has its own default
@@ -138,6 +140,18 @@ class Agent1TrainingSpecialist:
         self._noise_floor_path = str(_state / "noise_floor.json")
         self._search_plan_report_dir = str(_reports / "agent1_search_plan")
 
+        # LLM/copilot integration (dev/checks.txt item 4): shared campaign
+        # budget across agent1/2/3, tracked via agents/claude_cli.py and
+        # state/llm_usage.json -- see claude_cli.py's docstring for why
+        # this calls the Claude Code CLI (your subscription) instead of
+        # the separately-billed anthropic SDK.
+        llm_config = self.config.get("llm", {})
+        self._llm_backend = llm_config.get("backend", "cli")
+        self._llm_model = llm_config.get("model", "sonnet")
+        self._llm_campaign_budget_usd = float(llm_config.get("campaign_budget_usd", 5.0))
+        self._llm_max_call_budget_usd = float(llm_config.get("max_call_budget_usd", 0.20))
+        self._llm_usage_path = llm_config.get("usage_log_path") or str(_state / "llm_usage.json")
+
         self.current_hyperparams = self._init_hyperparams()
         self.total_api_cost = 0.0
         self.best_val_bpb = float("inf")
@@ -154,8 +168,6 @@ class Agent1TrainingSpecialist:
         self._last_surrogate_frozen: list = []
         self._last_surrogate_active_block: list = []
         self._last_fingerprint_adjustments: List[Dict[str, Any]] = []
-
-        self.claude = None
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
@@ -279,13 +291,16 @@ class Agent1TrainingSpecialist:
         # OPTIONAL: If LLM enabled, get Claude suggestions
         if self.use_llm and latest_summary:
             try:
-                self._init_claude()
                 claude_suggestion = self._get_claude_suggestion(
                     new_hyperparams, latest_summary
                 )
                 # Claude can override or confirm heuristic suggestion
                 new_hyperparams = claude_suggestion or new_hyperparams
-                self.total_api_cost += 0.03  # Estimate
+                # Real cumulative cost (state/llm_usage.json), not a fabricated
+                # per-call estimate -- cost_limit_usd stays a meaningful,
+                # separate campaign-wide safety net above the LLM budget's own.
+                from state import llm_usage
+                self.total_api_cost = llm_usage.cumulative_cost_usd(self._llm_usage_path)
             except Exception as e:
                 print(f"[Agent 1] Claude suggestion failed: {e}")
 
@@ -1041,25 +1056,16 @@ class Agent1TrainingSpecialist:
                     pass
         return metrics
 
-    def _init_claude(self):
-        """Lazy-load Claude client."""
-        if self.claude is not None:
-            return
-
-        try:
-            from anthropic import Anthropic
-
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not set")
-            self.claude = Anthropic(api_key=api_key)
-        except ImportError:
-            raise ImportError("anthropic package not installed")
-
     def _get_claude_suggestion(
         self, heuristic_params: Dict[str, Any], summary: str
     ) -> Optional[Dict[str, Any]]:
-        """Get Claude to suggest hyperparameters."""
+        """Ask the Claude Code CLI (agents/claude_cli.py -- your subscription,
+        not a separately-billed API key) to review the heuristic suggestion.
+        Returns None (falling back to heuristic_params unchanged, exactly as
+        before this feature existed) whenever the CLI is unavailable, the
+        campaign budget is exhausted, or the response isn't usable JSON --
+        never fabricated, never raises.
+        """
         prompt = f"""Based on this summary, review our heuristic hyperparameter suggestion:
 
 Summary insights:
@@ -1071,28 +1077,27 @@ Our heuristic suggestion:
 Should we adjust this? Provide JSON with adjustments (or empty {{}} if heuristic is good).
 Example: {{"n_layer": 14, "matrix_lr": 0.03}}"""
 
-        try:
-            message = self.claude.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=200,
-                messages=[{"role": "user", "content": prompt}],
-            )
+        response_text = claude_cli.call_with_budget(
+            prompt, call_site="agent1_hyperparameter_review",
+            model=self._llm_model,
+            campaign_budget_usd=self._llm_campaign_budget_usd,
+            max_call_budget_usd=self._llm_max_call_budget_usd,
+            usage_path=self._llm_usage_path,
+            backend=self._llm_backend,
+        )
+        if not response_text:
+            return None
 
-            # Try to parse JSON from response
-            response_text = message.content[0].text
-            # Simple JSON extraction
+        try:
             if "{" in response_text and "}" in response_text:
-                json_str = (
-                    response_text[response_text.find("{") : response_text.rfind("}") + 1]
-                )
+                json_str = response_text[response_text.find("{"): response_text.rfind("}") + 1]
                 adjustments = json.loads(json_str)
                 if adjustments:
                     updated = heuristic_params.copy()
                     updated.update(adjustments)
                     print(f"[Agent 1] Claude suggested adjustments: {adjustments}")
                     return updated
-
             return None
-        except Exception as e:
+        except (json.JSONDecodeError, ValueError) as e:
             print(f"[Agent 1] Claude suggestion error: {e}")
             return None

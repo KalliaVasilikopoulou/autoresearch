@@ -3,8 +3,10 @@
 
 # AGENT 1: Training Specialist
 agent1:
-  # Whether to use Claude for hyperparameter suggestions (optional, default: false)
-  use_llm: false
+  # Whether to use Claude for hyperparameter suggestions (via the Claude
+  # Code CLI -- your subscription, not a separately-billed API key, see the
+  # llm: section below). Shares one campaign-wide budget with agent2/agent3.
+  use_llm: true
 
   # Stop when accuracy reaches this threshold (val_bpb lower is better)
   accuracy_threshold: 0.97
@@ -63,8 +65,10 @@ agent2:
   # Which XAI method to use: "fast" or "thorough"
   xai_method: "fast"
 
-  # Whether to use Claude for prose report interpretation (optional, default: false)
-  use_llm: false
+  # Whether to use Claude for prose report interpretation (via the Claude
+  # Code CLI, see the llm: section below). Adds a short "LLM Interpretation"
+  # section to every per-run report.
+  use_llm: true
 
   # Fast methods
   fast_methods:
@@ -86,8 +90,9 @@ agent3:
   # Summarize every N new reports (batch size)
   batch_size: 3
 
-  # Whether to use Claude for narrative summary (optional, default: false)
-  use_llm: false
+  # Whether to use Claude for narrative summary + Tier 3 cluster hypotheses
+  # (via the Claude Code CLI, see the llm: section below).
+  use_llm: true
 
   # Include previous summary in new summary (preserve history)
   preserve_history: true
@@ -105,6 +110,39 @@ agent3:
   # adjustable once real fingerprint history accumulates via Tier 2's
   # token_xai_interval cadence trigger (agents/orchestrator.py).
   min_cluster_observations: 8
+
+# LLM / COPILOT INTEGRATION (dev/checks.txt item 4)
+# Backs agent1.use_llm / agent2.use_llm / agent3.use_llm. Calls the Claude
+# Code CLI (agents/claude_cli.py) -- the subscription you're already logged
+# into (`claude auth status`), never a separately-billed ANTHROPIC_API_KEY.
+# The CLI doesn't expose your subscription's true remaining usage %/reset
+# date, so campaign_budget_usd is a self-tracked, locally-logged
+# dollar-equivalent budget you set yourself (state/llm_usage.json), using
+# the same cost units the CLI reports per call -- not a readout of your
+# actual plan quota.
+llm:
+  # "cli" (Claude Code CLI) or "none" (fully disabled regardless of the
+  # per-agent use_llm flags above).
+  backend: cli
+
+  # Model alias passed to `claude --model` for every call.
+  model: sonnet
+
+  # Total dollar-equivalent budget shared across every agent1/2/3 LLM call
+  # this campaign. Once exhausted, every call site cleanly skips (falls
+  # back to its existing non-LLM behavior) rather than erroring.
+  campaign_budget_usd: 5.0
+
+  # Per-call safety cap (also passed as `claude --max-budget-usd`) so one
+  # call can never consume more than this even early in the campaign.
+  max_call_budget_usd: 0.20
+
+  # usage_log_path is intentionally NOT set here -- each agent defaults it
+  # to <its own state_dir>/llm_usage.json (same convention as
+  # noise_floor.json/search_planner_state.json: no config override, purely
+  # constructor-derived), so tests that redirect state_dir stay isolated
+  # from the real repo's state/llm_usage.json. Set it explicitly only if
+  # you want every agent to share one non-default path.
 
 # ORCHESTRATOR
 orchestrator:
