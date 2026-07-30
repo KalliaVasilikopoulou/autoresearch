@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +22,20 @@ from agents.agent3_report_analyst import Agent3ReportAnalyst
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
 from state.state_manager import StateManager
 from state.results_logger import log_result
+
+
+def _format_duration(seconds: float) -> str:
+    """Human-readable wall-clock duration for terminal/log output --
+    "12.3s", "5m 12s", or "1h 03m 12s" depending on magnitude, instead of a
+    bare (and for a multi-hour campaign, hard-to-read) seconds float."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rem_seconds = divmod(int(round(seconds)), 60)
+    if minutes < 60:
+        return f"{minutes}m {rem_seconds:02d}s"
+    hours, rem_minutes = divmod(minutes, 60)
+    return f"{hours}h {rem_minutes:02d}m {rem_seconds:02d}s"
 
 
 class Orchestrator:
@@ -139,6 +154,7 @@ class Orchestrator:
     def run(self, max_iterations: Optional[int] = None):
         """Main orchestration loop with structured evidence flow."""
         print("[Orchestrator] Starting autonomous multi-agent loop...\n")
+        run_start = time.time()
 
         self._kill_stale_remote_training()
 
@@ -225,10 +241,12 @@ class Orchestrator:
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
 
+        total_elapsed = time.time() - run_start
         summary = self.agent3.get_latest_summary_object()
         print(f"\n{'='*60}")
         print("[Orchestrator] MULTI-AGENT LOOP COMPLETE")
         print(f"Total iterations: {iteration}")
+        print(f"Total run time: {_format_duration(total_elapsed)}")
         print(f"Final best val_bpb: {self.agent1.best_val_bpb:.6f}")
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
@@ -398,6 +416,7 @@ class Orchestrator:
         wave_size = min(len(candidates), max_iterations - iteration)
         print(f"[Orchestrator] Parallel wave: {len(candidates)} GPU(s) available -- "
               f"dispatching {wave_size} concurrent run(s) on GPUs {[c['index'] for c in candidates[:wave_size]]}")
+        wave_start = time.time()
 
         latest_summary = self._load_latest_summary()
         recent_evidence = self.state_mgr.get_recent_evidence(limit=5)
@@ -511,6 +530,9 @@ class Orchestrator:
             hp, train_result = results_by_iteration[it]
             slot_halt, report_batch = self._process_training_result(it, hp, train_result, report_batch)
             halt = halt or slot_halt
+
+        wave_elapsed = time.time() - wave_start
+        print(f"[Orchestrator] Wave complete: {len(slots)} run(s) in {_format_duration(wave_elapsed)}")
 
         next_iteration = iteration + len(slots)
         return next_iteration, report_batch, halt

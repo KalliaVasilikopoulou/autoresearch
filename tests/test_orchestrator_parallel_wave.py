@@ -13,7 +13,7 @@ campaign start and before every wave's GPU discovery.
 from unittest.mock import patch
 
 from agents import remote_runner
-from agents.orchestrator import Orchestrator
+from agents.orchestrator import Orchestrator, _format_duration
 from state.results_analysis import load_results
 
 
@@ -124,7 +124,16 @@ def test_run_parallel_wave_cleans_up_stale_processes_before_discovery(tmp_path, 
 
 # --- real 2-GPU wave dispatch ---------------------------------------
 
-def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path, monkeypatch):
+def test_format_duration_hand_computed():
+    assert _format_duration(12.34) == "12.3s"
+    assert _format_duration(59.99) == "60.0s"
+    assert _format_duration(65) == "1m 05s"
+    assert _format_duration(3599) == "59m 59s"
+    assert _format_duration(3661) == "1h 01m 01s"
+    assert _format_duration(-5) == "0.0s"  # never a negative duration
+
+
+def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path, monkeypatch, capsys):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
@@ -164,6 +173,10 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
     assert len(seen_remote_names) == 2
     assert all(name for name in seen_remote_names)
     assert len(set(seen_remote_names)) == 2
+
+    out = capsys.readouterr().out
+    assert "[Orchestrator] Wave complete: 2 run(s) in" in out
+    assert "Total run time:" in out
 
 
 def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monkeypatch):
