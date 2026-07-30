@@ -5,6 +5,7 @@ gpu_index/hp_remote_name/run_label/skip_sync parameters. All SSH is mocked
 -- no real connectivity is required or attempted.
 """
 
+import socket
 import time
 from types import SimpleNamespace
 
@@ -21,14 +22,21 @@ FAKE_CFG = {
 
 
 class FakeStream:
-    """Mimics paramiko's stdout/stderr channel file objects."""
+    """Mimics paramiko's stdout/stderr channel file objects. raise_after/
+    raise_exc let a test simulate a connection lost partway through
+    reading -- readline() returns lines normally until raise_after lines
+    have been yielded, then raises raise_exc instead of returning "" (EOF)."""
 
-    def __init__(self, text: str = "", exit_status: int = 0):
+    def __init__(self, text: str = "", exit_status: int = 0, raise_after=None, raise_exc=None):
         self._lines = text.splitlines(keepends=True) if text else []
         self._idx = 0
+        self._raise_after = raise_after
+        self._raise_exc = raise_exc
         self.channel = SimpleNamespace(recv_exit_status=lambda: exit_status)
 
     def readline(self):
+        if self._raise_after is not None and self._idx >= self._raise_after:
+            raise self._raise_exc
         if self._idx >= len(self._lines):
             return ""
         line = self._lines[self._idx]
@@ -58,6 +66,9 @@ class FakeSSHClient:
     matcher's queue is down to one item, that item repeats for any further
     calls (so tests only need to spell out the responses that actually
     differ across repeated calls, e.g. a lock retry after reclaiming).
+    A response entry may also be a 4-tuple (stdout_text, exit_status,
+    raise_after, raise_exc) to simulate a connection lost partway through
+    reading -- see FakeStream.
     """
 
     def __init__(self, responses=None, shared_commands=None):
@@ -78,7 +89,11 @@ class FakeSSHClient:
             if matcher in cmd:
                 if not queue:
                     return None, FakeStream(""), FakeStream("")
-                out, exit_status = queue[0] if len(queue) == 1 else queue.pop(0)
+                entry = queue[0] if len(queue) == 1 else queue.pop(0)
+                if len(entry) == 4:
+                    out, exit_status, raise_after, raise_exc = entry
+                    return None, FakeStream(out, exit_status, raise_after, raise_exc), FakeStream("")
+                out, exit_status = entry
                 return None, FakeStream(out, exit_status), FakeStream("")
         return None, FakeStream(""), FakeStream("")
 
@@ -301,6 +316,88 @@ def test_run_training_remote_routes_progress_lines_to_display_when_provided(monk
     # live-updating progress table.
     assert any("Connecting to" in text for text in display.printed_lines)
     assert any("Parsed metrics" in text for text in display.printed_lines)
+
+
+def test_run_training_remote_salvages_val_bpb_when_connection_lost_after_training_completed(monkeypatch, tmp_path):
+    """train.py prints a real val_bpb right after its own internal training
+    budget expires -- well before the (silent, can run for minutes) head-
+    ablation study that follows. A connection lost during that later, silent
+    stretch must not discard the val_bpb that was already fully received."""
+    captured_output = (
+        "[--------------------]   0.0% | loss: 9.0 | remaining: 300.0s\n"
+        "---\n"
+        "val_bpb:          0.987654\n"
+        "training_seconds: 300.1\n"
+        "status:           remote_ok\n"
+    )  # 5 lines -- all fully received before the simulated timeout below
+
+    def client_factory():
+        return FakeSSHClient(responses=[
+            (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
+            ("python -u train.py", [(captured_output, 0, 5, socket.timeout("timed out"))]),
+        ])
+
+    _patch_paramiko(monkeypatch, client_factory)
+    hp_file = tmp_path / "hp.yaml"
+    hp_file.write_text("n_layer: 8\n")
+
+    metrics = remote_runner.run_training_remote(str(hp_file), timeout=60, gpu_index=1, skip_sync=True)
+
+    assert metrics["status"] == "remote_partial_timeout"
+    assert metrics["val_bpb"] == pytest.approx(0.987654)
+    assert metrics["device"] == 1
+    # Post-training analysis fields never arrived -- honestly absent, not
+    # fabricated, same convention as a run where that analysis never ran.
+    assert "head_ablation_impacts" not in metrics
+
+
+def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_captured(monkeypatch, tmp_path):
+    """A connection lost before val_bpb was ever printed (e.g. still mid
+    training loop) has nothing to salvage -- must still report a failure,
+    not fabricate a result."""
+    partial_output = (
+        "[--------------------]   0.0% | loss: 9.0 | remaining: 300.0s\n"
+        "[--------------------]   5.0% | loss: 8.5 | remaining: 285.0s\n"
+    )
+
+    def client_factory():
+        return FakeSSHClient(responses=[
+            (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
+            ("python -u train.py", [(partial_output, 0, 2, socket.timeout("timed out"))]),
+        ])
+
+    _patch_paramiko(monkeypatch, client_factory)
+    hp_file = tmp_path / "hp.yaml"
+    hp_file.write_text("n_layer: 8\n")
+
+    metrics = remote_runner.run_training_remote(str(hp_file), timeout=60, gpu_index=1, skip_sync=True)
+
+    assert metrics["status"] == "remote_error"
+    assert metrics["val_bpb"] == float("inf")
+    assert metrics["device"] == 1
+
+
+def test_run_training_remote_salvage_routes_through_display_when_provided(monkeypatch, tmp_path):
+    captured_output = "---\nval_bpb:          1.1\nstatus:           remote_ok\n"
+
+    def client_factory():
+        return FakeSSHClient(responses=[
+            (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
+            ("python -u train.py", [(captured_output, 0, 3, socket.timeout("timed out"))]),
+        ])
+
+    _patch_paramiko(monkeypatch, client_factory)
+    hp_file = tmp_path / "hp.yaml"
+    hp_file.write_text("n_layer: 8\n")
+    display = FakeDisplay()
+
+    metrics = remote_runner.run_training_remote(
+        str(hp_file), timeout=60, gpu_index=1, run_label="GPU1", skip_sync=True, display=display,
+    )
+
+    assert metrics["status"] == "remote_partial_timeout"
+    assert any("Lost connection" in text for text in display.printed_lines)
+    assert any("Recovered a usable val_bpb" in text for text in display.printed_lines)
 
 
 def test_run_training_remote_reports_error_status_on_nonzero_exit(monkeypatch, tmp_path):

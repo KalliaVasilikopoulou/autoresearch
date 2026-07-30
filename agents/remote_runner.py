@@ -16,7 +16,9 @@ device.
 """
 
 import json
+import math
 import os
+import socket
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -351,9 +353,20 @@ def run_training_remote(
       4. Acquire this GPU's lock, execute train.py inside the conda env.
       5. Stream output back, parse metrics, release the lock.
 
+    If the SSH connection is lost while reading output (most often during
+    the head-ablation study's silent stretch, well after train.py's own
+    time-budget-driven training loop already printed a real val_bpb --
+    see train.py), whatever was already captured is parsed and, if it
+    contains a usable val_bpb, returned with status "remote_partial_timeout"
+    instead of being discarded as an error -- post-training analysis fields
+    (head_ablation_impacts, etc.) may be absent from a partial result the
+    same way they're absent whenever that analysis didn't run at all.
+
     Returns:
         Metrics dict with at least {"val_bpb": float, "status": str,
-        "device": gpu_index}.
+        "device": gpu_index}. status is "remote_ok" on a full completion,
+        "remote_partial_timeout" on a salvaged partial result, or
+        "remote_error" when nothing usable was recovered.
     """
     if not _PARAMIKO_AVAILABLE:
         raise RuntimeError(
@@ -430,32 +443,65 @@ def run_training_remote(
 
         output_lines = []
         last_progress_bar = None
-        for line in iter(stdout.readline, ""):
-            line = line.rstrip("\n")
-            output_lines.append(line)
-            is_progress = line.startswith('[') and ']' in line and '%' in line
-            if display is not None:
-                # Concurrent multi-GPU wave: this GPU's own pinned line
-                # (see agents/live_progress.py) instead of a `\r`-based
-                # update that would fight other threads for the same
-                # cursor position.
-                if is_progress:
-                    display.update_progress(label, line)
-                elif line.strip():
-                    display.print_line(f"[{label}] {line}")
-            else:
-                # Sequential single-GPU path: unchanged in-place `\r` update.
-                if is_progress:
-                    last_progress_bar = line
-                    print(f"\r  [{label}] {line}", end="", flush=True)
-                elif line.strip():
-                    if last_progress_bar:
-                        print()  # newline to finish the progress bar line
-                        last_progress_bar = None
-                    print(f"  [{label}] {line}", flush=True)
+        lost_connection = False
+        try:
+            for line in iter(stdout.readline, ""):
+                line = line.rstrip("\n")
+                output_lines.append(line)
+                is_progress = line.startswith('[') and ']' in line and '%' in line
+                if display is not None:
+                    # Concurrent multi-GPU wave: this GPU's own pinned line
+                    # (see agents/live_progress.py) instead of a `\r`-based
+                    # update that would fight other threads for the same
+                    # cursor position.
+                    if is_progress:
+                        display.update_progress(label, line)
+                    elif line.strip():
+                        display.print_line(f"[{label}] {line}")
+                else:
+                    # Sequential single-GPU path: unchanged in-place `\r` update.
+                    if is_progress:
+                        last_progress_bar = line
+                        print(f"\r  [{label}] {line}", end="", flush=True)
+                    elif line.strip():
+                        if last_progress_bar:
+                            print()  # newline to finish the progress bar line
+                            last_progress_bar = None
+                        print(f"  [{label}] {line}", flush=True)
+        except (socket.timeout, OSError) as e:
+            # train.py has its own internal wall-clock training budget (see
+            # train.py: the loop breaks on total_training_time >= TIME_BUDGET)
+            # and prints a real val_bpb right after -- well before the
+            # (optional, much slower) head-ablation study, holdout eval, and
+            # token-fingerprint analysis that follow it, none of which print
+            # anything while they run. A read timeout here overwhelmingly
+            # means we stopped listening during one of *those* silent
+            # stretches, not that training itself failed -- so salvage
+            # whatever was already captured instead of discarding a real
+            # result along with the connection.
+            lost_connection = True
+            _print(f"Lost connection while reading output ({e}) -- checking whether a usable "
+                   f"result was already captured before giving up")
 
         if display is None and last_progress_bar:
             print()  # final newline after last progress bar
+
+        if lost_connection:
+            partial_metrics = _parse_output("\n".join(output_lines))
+            if math.isfinite(partial_metrics.get("val_bpb", float("inf"))):
+                partial_metrics["status"] = "remote_partial_timeout"
+                partial_metrics["device"] = gpu_index
+                _print(f"Recovered a usable val_bpb before the connection was lost -- treating as "
+                       f"a partial success (post-training analysis, e.g. head ablation, may be "
+                       f"incomplete or missing): {partial_metrics}")
+                return partial_metrics
+            _print("No usable val_bpb was captured before the connection was lost -- treating as a failure")
+            return {
+                "val_bpb": float("inf"),
+                "error": "connection lost while reading output, before any usable result was captured",
+                "status": "remote_error",
+                "device": gpu_index,
+            }
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()
         exit_code = stdout.channel.recv_exit_status()
