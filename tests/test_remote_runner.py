@@ -19,6 +19,7 @@ FAKE_CFG = {
     "repo": "/home/fake-user/autoresearch", "conda_env": "autoresearch",
     "conda_activate": "source /opt/anaconda3/bin/activate",
 }
+SYNC_LOCK_DIR = f"{FAKE_CFG['repo']}/.autoresearch_sync_lock"
 
 
 class FakeStream:
@@ -82,6 +83,9 @@ class FakeSSHClient:
 
     def connect(self, **kwargs):
         pass
+
+    def get_transport(self):
+        return SimpleNamespace(set_keepalive=lambda seconds: None)
 
     def exec_command(self, cmd, timeout=None):
         self.commands.append(cmd)
@@ -208,6 +212,7 @@ def test_run_training_remote_defaults_match_pre_multi_gpu_behavior(monkeypatch, 
         return FakeSSHClient(
             responses=[
                 ("nvidia-smi", []),  # discovery: empty output -> []
+                (f"mkdir {SYNC_LOCK_DIR} 2>&1", [("LOCK_OK\n", 0)]),
                 ("git stash", [("No local changes\n", 0)]),
                 ("git pull", [("Already up to date.\n", 0)]),
                 (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_4 2>&1", [("LOCK_OK\n", 0)]),
@@ -420,12 +425,68 @@ def test_run_training_remote_reports_error_status_on_nonzero_exit(monkeypatch, t
 
 def test_sync_remote_code_issues_stash_then_pull(monkeypatch):
     shared_commands = []
-    _patch_paramiko(monkeypatch, lambda: FakeSSHClient(shared_commands=shared_commands))
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[(f"mkdir {SYNC_LOCK_DIR} 2>&1", [("LOCK_OK\n", 0)])],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
 
     remote_runner.sync_remote_code()
 
     assert any("git stash" in c for c in shared_commands)
     assert any("git pull" in c for c in shared_commands)
+    assert any(f"rm -rf {SYNC_LOCK_DIR}" in c for c in shared_commands)  # lock released
+
+
+def test_sync_remote_code_waits_for_lock_then_proceeds(monkeypatch):
+    """A second caller finds the lock held (e.g. a concurrent wave's own
+    sync_remote_code call), waits, and proceeds once it's released --
+    exactly the race that used to corrupt train.py mid-checkout."""
+    shared_commands = []
+
+    def client_factory():
+        return FakeSSHClient(
+            responses=[
+                (f"mkdir {SYNC_LOCK_DIR} 2>&1", [("LOCK_BUSY\n", 0), ("LOCK_OK\n", 0)]),
+                (f"stat -c %Y {SYNC_LOCK_DIR}", [(str(int(time.time())), 0)]),  # fresh, not stale
+            ],
+            shared_commands=shared_commands,
+        )
+
+    _patch_paramiko(monkeypatch, client_factory)
+
+    remote_runner.sync_remote_code()
+
+    assert any("git pull" in c for c in shared_commands)
+
+
+def test_acquire_sync_lock_reclaims_when_stale(monkeypatch):
+    stale_mtime = str(int(time.time()) - 100_000)
+    client = FakeSSHClient(responses=[
+        (f"mkdir {SYNC_LOCK_DIR} 2>&1", [("LOCK_BUSY\n", 0), ("LOCK_OK\n", 0)]),
+        (f"stat -c %Y {SYNC_LOCK_DIR}", [(stale_mtime, 0)]),
+    ])
+    assert remote_runner._acquire_sync_lock(client, FAKE_CFG["repo"], max_wait_seconds=5) is True
+    assert any(f"rm -rf {SYNC_LOCK_DIR}" in c for c in client.commands)
+
+
+def test_acquire_sync_lock_gives_up_after_max_wait(monkeypatch):
+    client = FakeSSHClient(responses=[
+        (f"mkdir {SYNC_LOCK_DIR} 2>&1", [("LOCK_BUSY\n", 0)]),
+        (f"stat -c %Y {SYNC_LOCK_DIR}", [(str(int(time.time())), 0)]),  # fresh -- never reclaimed
+    ])
+    assert remote_runner._acquire_sync_lock(client, FAKE_CFG["repo"], max_wait_seconds=0.05) is False
+
+
+def test_release_sync_lock_never_raises_on_failure(monkeypatch):
+    class RaisingClient(FakeSSHClient):
+        def exec_command(self, cmd, timeout=None):
+            raise OSError("connection dropped")
+
+    remote_runner._release_sync_lock(RaisingClient(), FAKE_CFG["repo"])  # must not raise
 
 
 # --- kill_stale_training_processes ---------------------------------------

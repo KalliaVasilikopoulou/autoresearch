@@ -89,6 +89,7 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[s
             hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
             password=cfg["password"] or None, timeout=30,
         )
+        client.get_transport().set_keepalive(30)
         _, stdout, _ = client.exec_command(
             "nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu "
             "--format=csv,noheader,nounits",
@@ -221,6 +222,7 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
             hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
             password=cfg["password"] or None, timeout=30,
         )
+        client.get_transport().set_keepalive(30)
 
         _, stdout, _ = client.exec_command(
             "nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits", timeout=timeout,
@@ -272,11 +274,61 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
         client.close()
 
 
+def _acquire_sync_lock(client, remote_repo: str, max_wait_seconds: float = 60.0,
+                        stale_after_seconds: float = 120.0) -> bool:
+    """mkdir-based lock (same atomicity as _acquire_gpu_lock) around
+    sync_remote_code's git stash/pull -- confirmed necessary the hard way:
+    two uncoordinated callers git-pulling the same working tree at once
+    (a parallel wave's sync racing a totally separate process's own
+    sync_remote_code call, e.g. an unmocked test run) can leave train.py
+    torn mid-write (a real IndentationError at one exact line) or briefly
+    reading an old checked-out commit (a real run against code from before
+    a since-merged refactor). Unlike a GPU lock, this is worth actually
+    waiting for -- a git pull normally finishes in seconds -- so it polls
+    briefly instead of giving up immediately.
+    """
+    lock_dir = f"{remote_repo}/.autoresearch_sync_lock"
+
+    def _try_mkdir() -> bool:
+        _, stdout, _ = client.exec_command(f'mkdir {lock_dir} 2>&1 && echo LOCK_OK || echo LOCK_BUSY')
+        return stdout.read().decode("utf-8", errors="replace").strip().endswith("LOCK_OK")
+
+    deadline = time.time() + max_wait_seconds
+    while True:
+        if _try_mkdir():
+            return True
+
+        _, stdout, _ = client.exec_command(f'stat -c %Y {lock_dir} 2>/dev/null')
+        mtime_str = stdout.read().decode("utf-8", errors="replace").strip()
+        try:
+            age = time.time() - float(mtime_str)
+        except ValueError:
+            age = 0.0
+        if age > stale_after_seconds:
+            print(f"[RemoteRunner] Sync lock stale ({age:.0f}s old) -- reclaiming")
+            client.exec_command(f'rm -rf {lock_dir}')[1].read()
+            if _try_mkdir():
+                return True
+
+        if time.time() >= deadline:
+            print("[RemoteRunner] Could not acquire sync lock in time -- proceeding without it (best effort)")
+            return False
+        time.sleep(2)
+
+
+def _release_sync_lock(client, remote_repo: str) -> None:
+    lock_dir = f"{remote_repo}/.autoresearch_sync_lock"
+    try:
+        client.exec_command(f'rm -rf {lock_dir}')[1].read()
+    except Exception:
+        pass
+
+
 def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> None:
-    """git stash + pull --ff-only on the remote clone. Call this once per
-    dispatch round (a single run, or once for a whole parallel wave) --
-    never concurrently from multiple SSH sessions against the same working
-    tree, which would itself be a race between two git processes.
+    """git stash + pull --ff-only on the remote clone, guarded by a remote
+    mkdir-based lock (see _acquire_sync_lock) so two uncoordinated callers
+    -- a parallel wave, a single sequential run, or an entirely separate
+    process -- never race on the same working tree.
     """
     if not _PARAMIKO_AVAILABLE:
         return
@@ -289,18 +341,25 @@ def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> None:
             hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
             password=cfg["password"] or None, timeout=30,
         )
-        print("[RemoteRunner] Pulling latest code on remote ...")
-        stash_cmd = f'bash -lc "cd {remote_repo} && git stash 2>&1"'
-        _, stash_o, _ = client.exec_command(stash_cmd)
-        stash_out = stash_o.read().decode("utf-8", errors="replace").strip()
-        if stash_out and "No local changes" not in stash_out:
-            print(f"[RemoteRunner] git stash: {stash_out[:100]}")
+        client.get_transport().set_keepalive(30)
 
-        _, o, e = client.exec_command(
-            f'bash -lc "cd {remote_repo} && git pull --ff-only 2>&1"'
-        )
-        pull_out = o.read().decode("utf-8", errors="replace").strip()
-        print(f"[RemoteRunner] git pull: {pull_out[:120]}")
+        lock_acquired = _acquire_sync_lock(client, remote_repo)
+        try:
+            print("[RemoteRunner] Pulling latest code on remote ...")
+            stash_cmd = f'bash -lc "cd {remote_repo} && git stash 2>&1"'
+            _, stash_o, _ = client.exec_command(stash_cmd)
+            stash_out = stash_o.read().decode("utf-8", errors="replace").strip()
+            if stash_out and "No local changes" not in stash_out:
+                print(f"[RemoteRunner] git stash: {stash_out[:100]}")
+
+            _, o, e = client.exec_command(
+                f'bash -lc "cd {remote_repo} && git pull --ff-only 2>&1"'
+            )
+            pull_out = o.read().decode("utf-8", errors="replace").strip()
+            print(f"[RemoteRunner] git pull: {pull_out[:120]}")
+        finally:
+            if lock_acquired:
+                _release_sync_lock(client, remote_repo)
     finally:
         client.close()
 
@@ -415,6 +474,13 @@ def run_training_remote(
             password=cfg["password"] or None,
             timeout=30,
         )
+        # A training session can hold this connection open for several
+        # minutes; without a keepalive, an idle-connection timeout anywhere
+        # between here and the remote server (a NAT gateway or firewall on
+        # the network path is the usual culprit) can silently drop it
+        # before any output ever comes back -- exactly the failure mode
+        # behind a large fraction of this project's real remote_error runs.
+        client.get_transport().set_keepalive(30)
 
         lock_acquired = _acquire_gpu_lock(client, gpu_index, remote_repo, stale_after, display=display, label=label)
         if not lock_acquired:
