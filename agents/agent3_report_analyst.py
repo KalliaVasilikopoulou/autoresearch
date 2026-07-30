@@ -1,6 +1,7 @@
 """Agent 3: Report Analyst - Aggregates XAI reports and finds trends."""
 
 import os
+import hashlib
 import json
 import math
 import re
@@ -17,7 +18,11 @@ from agents import claude_cli
 from agents.protocols import SummaryEvidence
 from agents.agent1_training_specialist import LR_KEYS
 from state import llm_usage
-from state.clustering import cluster_attention_trajectories, cluster_fingerprints
+from state.clustering import (
+    cluster_attention_trajectories,
+    cluster_fingerprints,
+    trajectory_smoothness_correlation,
+)
 from state.visualize import (
     chart_attention_trajectory_clusters,
     chart_fingerprint_adjustments_trend,
@@ -78,6 +83,15 @@ class Agent3ReportAnalyst:
         self._llm_campaign_budget_usd = float(llm_config.get("campaign_budget_usd", 5.0))
         self._llm_max_call_budget_usd = float(llm_config.get("max_call_budget_usd", 0.20))
         self._llm_usage_path = llm_config.get("usage_log_path") or str(_state / "llm_usage.json")
+
+        # Cheap guard (dev/checks.txt follow-up): remembers the fingerprint
+        # of the last cluster data actually sent to _get_cluster_hypotheses,
+        # so a summary whose fingerprint_clusters are byte-identical to the
+        # last analyzed batch skips the LLM call instead of re-paying to
+        # restate the same finding (observed in practice across summaries
+        # #28-30: 15 fingerprint-bearing runs, unchanged clusters, 3 near-
+        # identical hypotheses paid for in a row).
+        self._cluster_signature_path = _state / "cluster_hypotheses_signature.json"
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
@@ -176,11 +190,24 @@ class Agent3ReportAnalyst:
 
         # OPTIONAL: If LLM enabled AND there's real cluster data (Tier 3.3)
         # -- not invoked when clustering hasn't found anything yet, so a
-        # missing-data run never costs a call.
+        # missing-data run never costs a call. Also skipped (cheap guard)
+        # when the underlying fingerprint cluster data is byte-identical to
+        # what was last actually sent to Claude -- see _cluster_signature_path.
         if self.use_llm and aggregate.get("fingerprint_clusters"):
-            hypotheses = self._get_cluster_hypotheses(aggregate["fingerprint_clusters"])
-            summary += (f"\n\n## Cluster Hypotheses (Claude)\n{hypotheses}\n" if hypotheses else
-                        "\n\n## Cluster Hypotheses (Claude)\nUnavailable this run (CLI not reachable, or campaign LLM budget exhausted)\n")
+            signature = self._fingerprint_clusters_signature(aggregate["fingerprint_clusters"])
+            if signature == self._load_last_cluster_signature():
+                print(f"[Agent 3] Fingerprint cluster data unchanged since the last analyzed "
+                      f"summary -- skipping the cluster-hypotheses LLM call to avoid spending "
+                      f"budget restating the same finding.")
+                summary += ("\n\n## Cluster Hypotheses (Claude)\nSkipped this run -- underlying "
+                            "fingerprint cluster data is unchanged since the last time Claude "
+                            "analyzed it (no new evidence; budget preserved).\n")
+            else:
+                hypotheses = self._get_cluster_hypotheses(aggregate["fingerprint_clusters"])
+                if hypotheses:
+                    self._save_last_cluster_signature(signature)
+                summary += (f"\n\n## Cluster Hypotheses (Claude)\n{hypotheses}\n" if hypotheses else
+                            "\n\n## Cluster Hypotheses (Claude)\nUnavailable this run (CLI not reachable, or campaign LLM budget exhausted)\n")
 
         return summary, aggregate
 
@@ -330,9 +357,18 @@ class Agent3ReportAnalyst:
         ]
         overall_clusters = cluster_fingerprints(fingerprint_rows, min_n=self.min_cluster_n)
         trajectory_clusters = cluster_attention_trajectories(fingerprint_rows, min_n=self.min_cluster_n)
+        # Tier 3.4: a continuous correlation over all usable rows, instead of
+        # reading only cluster membership -- more robust at small n than the
+        # trajectory clusters above (which have been landing at silhouette
+        # ~0.25-0.29 with clusters as small as n=2 in practice).
+        smoothness_correlation = trajectory_smoothness_correlation(fingerprint_rows, min_n=self.min_cluster_n)
         fingerprint_clusters = (
-            {"overall": overall_clusters, "trajectory": trajectory_clusters}
-            if (overall_clusters or trajectory_clusters) else {}
+            {
+                "overall": overall_clusters,
+                "trajectory": trajectory_clusters,
+                "smoothness_correlation": smoothness_correlation,
+            }
+            if (overall_clusters or trajectory_clusters or smoothness_correlation) else {}
         )
 
         finite_bpbs = [
@@ -598,6 +634,24 @@ class Agent3ReportAnalyst:
             else:
                 summary_lines.append(f"- Not enough historical fingerprints yet to cluster trajectory shapes (need >= {self.min_cluster_n}, have {len(fingerprint_rows)})")
 
+            if smoothness_correlation:
+                sign_note = (
+                    "more volatile trajectories tend toward higher (worse) val_bpb"
+                    if smoothness_correlation["correlation"] > 0 else
+                    "more volatile trajectories tend toward lower (better) val_bpb"
+                    if smoothness_correlation["correlation"] < 0 else
+                    "no directional signal"
+                )
+                summary_lines.extend([
+                    "",
+                    f"### Trajectory volatility vs. val_bpb (Tier 3.4, n={smoothness_correlation['n']})",
+                    f"- Spearman correlation: {smoothness_correlation['correlation']:+.4f} ({sign_note})",
+                    "- Volatility = total variation of each run's normalized attn_distance curve (0 = perfectly smooth/monotonic, higher = zig-zags more). "
+                    "Uses every fingerprint-bearing run individually rather than fragile small clusters, so it's a statistically sturdier read on the same question the trajectory clusters above are asking.",
+                ])
+            else:
+                summary_lines.append(f"- Not enough historical fingerprints yet for a trajectory-volatility correlation (need >= {self.min_cluster_n}, have {len(fingerprint_rows)})")
+
         if self.generate_charts:
             try:
                 chart_path = chart_fingerprint_clusters(
@@ -769,6 +823,29 @@ class Agent3ReportAnalyst:
             reasoning=["Load markdown summary for full details"],
         )
 
+    def _fingerprint_clusters_signature(self, fingerprint_clusters: Dict[str, Any]) -> str:
+        """Deterministic hash of the exact payload that would be sent to
+        _get_cluster_hypotheses -- a byte-for-byte-stable JSON dump (sorted
+        keys) so identical cluster data always hashes the same regardless
+        of dict insertion order."""
+        payload = json.dumps(fingerprint_clusters, sort_keys=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _load_last_cluster_signature(self) -> Optional[str]:
+        if not self._cluster_signature_path.exists():
+            return None
+        try:
+            return json.loads(self._cluster_signature_path.read_text()).get("signature")
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _save_last_cluster_signature(self, signature: str) -> None:
+        try:
+            self._cluster_signature_path.parent.mkdir(parents=True, exist_ok=True)
+            self._cluster_signature_path.write_text(json.dumps({"signature": signature}))
+        except OSError:
+            pass
+
     def _get_claude_narrative(self, statistical_summary: str) -> Optional[str]:
         """Ask the Claude Code CLI (agents/claude_cli.py -- your subscription)
         for a strategic narrative. None (not fabricated) when the CLI is
@@ -800,15 +877,21 @@ Be concise (under 250 words)."""
         when the CLI is unavailable or the shared campaign budget is
         exhausted.
         """
-        prompt = f"""Below is a table of behavioral-fingerprint clusters found across recent
-training runs (from hierarchical clustering of attention/attribution
-statistics), each with its mean validation bpb (lower is better).
+        prompt = f"""Below is data on behavioral fingerprints found across recent training runs:
+cluster tables (from hierarchical clustering of attention/attribution statistics,
+each cluster with its mean validation bpb, lower is better) AND, separately, a
+"smoothness_correlation" field -- a Spearman correlation (across every individual
+fingerprint-bearing run, not cluster membership) between how volatile each run's
+attn_distance trajectory is and its val_bpb. Treat smoothness_correlation as the
+more statistically reliable signal when the clusters and the correlation seem to
+agree or disagree, since it isn't fragmented into small clusters.
 
-1. What distinguishes the best-performing cluster from the others?
+1. What distinguishes the best-performing cluster from the others, and does the
+   smoothness_correlation support or undercut that distinction?
 2. What is the most testable hypothesis for why that distinction might matter?
 3. Frame this as a hypothesis to test with a real run, not a conclusion.
 
-Cluster data:
+Data:
 {json.dumps(fingerprint_clusters, indent=2)}
 
 Be concise (under 200 words)."""

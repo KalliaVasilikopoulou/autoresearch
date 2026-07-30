@@ -6,8 +6,10 @@ from state.clustering import (
     MIN_CLUSTER_N,
     POS_SALIENCY_LEN,
     _resample_curve,
+    _total_variation,
     cluster_attention_trajectories,
     cluster_fingerprints,
+    trajectory_smoothness_correlation,
 )
 
 
@@ -124,6 +126,71 @@ def test_cluster_fingerprints_recovers_two_well_separated_groups():
     assert high_cluster["n"] == 15
     assert low_cluster["mean_val_bpb"] == pytest.approx(0.90, abs=0.02)
     assert high_cluster["mean_val_bpb"] == pytest.approx(1.30, abs=0.02)
+
+
+def test_total_variation_hand_computed():
+    # perfectly monotonic curve: total variation == |end - start|
+    assert _total_variation([0.0, 0.5, 1.0]) == pytest.approx(1.0)
+    # zig-zag: every step swings the full [0,1] range
+    assert _total_variation([0.0, 1.0, 0.0, 1.0]) == pytest.approx(3.0)
+    # flat curve: no movement at all
+    assert _total_variation([0.5, 0.5, 0.5]) == pytest.approx(0.0)
+
+
+def test_trajectory_smoothness_correlation_returns_none_below_min_n():
+    rows = [_fingerprint(4, [1, 2, 3, 4], [1, 2, 3, 4], [0.1] * 4, [1, 2, 3, 4], 0.5, 0.1) for _ in range(MIN_CLUSTER_N - 1)]
+    assert trajectory_smoothness_correlation(rows) is None
+
+
+def test_trajectory_smoothness_correlation_ignores_rows_without_finite_val_bpb_or_curve():
+    # A row with < 2 attn_distance points and a row with non-finite val_bpb
+    # must both be excluded rather than crashing or being coerced into a number.
+    # Curves alternate ramp/zig-zag so there are at least 2 distinct total-variation
+    # values among the MIN_CLUSTER_N good rows (otherwise the correlation is
+    # undefined by construction, regardless of the exclusion logic under test).
+    rows = [
+        _fingerprint(
+            4,
+            [1, 2, 3, 4],
+            [0.0, 1.0, 2.0, 3.0] if i % 2 == 0 else [0.0, 3.0, 1.0, 2.0],
+            [0.1] * 4, [1, 2, 3, 4], 0.5, 0.1, val_bpb=1.0 + i * 0.01,
+        )
+        for i in range(MIN_CLUSTER_N)
+    ]
+    rows.append(_fingerprint(4, [1], [5.0], [0.1], [1], 0.5, 0.1, val_bpb=1.0))  # single-point curve
+    rows.append(_fingerprint(4, [1, 2, 3, 4], [1, 2, 3, 4], [0.1] * 4, [1, 2, 3, 4], 0.5, 0.1, val_bpb=float("inf")))
+    result = trajectory_smoothness_correlation(rows)
+    assert result is not None
+    assert result["n"] == MIN_CLUSTER_N  # the two bad rows are excluded, not counted
+
+
+def test_trajectory_smoothness_correlation_detects_volatility_bpb_relationship():
+    random.seed(2)
+    rows = []
+    # Smooth group: monotonic ramp (low total variation after normalization) -> low val_bpb
+    for _ in range(15):
+        n_layer = random.choice([8, 10, 12])
+        curve = [float(i) + random.uniform(-0.05, 0.05) for i in range(n_layer)]
+        rows.append(_fingerprint(
+            n_layer=n_layer, attn_entropy=[1.0] * n_layer, attn_distance=curve,
+            dla=[0.1] * n_layer, x0_lambda=[1.0] * n_layer,
+            attn_distance_slope=1.0, induction_score=0.1, val_bpb=0.90 + random.uniform(-0.02, 0.02),
+        ))
+    # Volatile group: zig-zag (high total variation) -> high val_bpb
+    for _ in range(15):
+        n_layer = random.choice([8, 10, 12])
+        curve = [(i % 2) * 10.0 + random.uniform(-0.3, 0.3) for i in range(n_layer)]
+        rows.append(_fingerprint(
+            n_layer=n_layer, attn_entropy=[1.0] * n_layer, attn_distance=curve,
+            dla=[0.1] * n_layer, x0_lambda=[1.0] * n_layer,
+            attn_distance_slope=0.0, induction_score=0.1, val_bpb=1.30 + random.uniform(-0.02, 0.02),
+        ))
+
+    result = trajectory_smoothness_correlation(rows)
+    assert result is not None
+    assert result["n"] == 30
+    # Strong positive: more volatile trajectory -> higher (worse) val_bpb.
+    assert result["correlation"] > 0.6
 
 
 def test_cluster_attention_trajectories_recovers_shapes_across_varying_n_layer():

@@ -12,6 +12,8 @@ function that needs them returns None rather than fabricating a result.
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from state.results_analysis import spearman
+
 try:
     import numpy as np
     from scipy.cluster.hierarchy import linkage, fcluster
@@ -140,6 +142,53 @@ def _resample_curve(curve: List[float], n_resample: int) -> List[float]:
                 out.append(normalized[i] + t * (normalized[i + 1] - normalized[i]))
                 break
     return out
+
+
+def _total_variation(curve: List[float]) -> float:
+    """Sum of absolute step-to-step changes -- how much a curve zig-zags
+    rather than moving smoothly in one direction. `curve` is expected to
+    already be min-max normalized to [0,1] (see _resample_curve) so runs
+    with different overall attention-reach scales are comparable. Low value
+    = smooth/monotonic; high value = volatile (repeatedly reverses
+    direction)."""
+    return sum(abs(curve[i + 1] - curve[i]) for i in range(len(curve) - 1))
+
+
+def trajectory_smoothness_correlation(
+    rows: List[Dict[str, Any]], min_n: int = MIN_CLUSTER_N, n_resample: int = 8,
+) -> Optional[Dict[str, Any]]:
+    """3.4: Spearman correlation between each run's attn_distance trajectory
+    volatility (_total_variation of the same normalized curve
+    cluster_attention_trajectories uses) and its val_bpb.
+
+    This is a statistically more robust alternative to reading the
+    trajectory *clusters* for the same "does a volatile early trajectory
+    predict worse bpb" question: a continuous correlation over n rows
+    doesn't fragment the data into 2-4-member clusters (which is what made
+    silhouette scores as low as 0.25-0.29 in practice), so it can detect the
+    same signal earlier and with a real n instead of ad hoc cluster sizes.
+    Positive correlation = more volatile trajectory -> higher (worse)
+    val_bpb. Returns None below min_n usable rows or when scipy isn't
+    needed here at all (pure math) but there just isn't enough data -- same
+    "don't fabricate a signal from too little data" contract as the rest of
+    this module.
+    """
+    xs: List[float] = []
+    ys: List[float] = []
+    for row in rows:
+        curve = [float(v) for v in (row.get("attn_distance") or [])]
+        if len(curve) < 2:
+            continue
+        val_bpb = row.get("val_bpb")
+        if not isinstance(val_bpb, (int, float)) or not math.isfinite(float(val_bpb)):
+            continue
+        xs.append(_total_variation(_resample_curve(curve, n_resample)))
+        ys.append(float(val_bpb))
+
+    if len(xs) < min_n or len(set(xs)) < 2:
+        return None
+
+    return {"correlation": round(spearman(xs, ys), 6), "n": len(xs)}
 
 
 def _ward_cluster_with_best_silhouette(

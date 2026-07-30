@@ -259,6 +259,141 @@ def test_agent3_use_llm_true_narrative_unavailable_when_call_returns_none(tmp_pa
     assert "Unavailable this run (CLI not reachable, or campaign LLM budget exhausted)" in text
 
 
+def _write_fake_report_with_fingerprint(reports_dir, report_id, val_bpb, attn_distance):
+    """Like _write_fake_report but with a real (non-empty) token_fingerprint
+    payload -- needed to exercise fingerprint_clusters / smoothness_correlation
+    and, downstream, the agent3_cluster_hypotheses call site and its skip-guard."""
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    n_layer = len(attn_distance)
+    token_fingerprint = {
+        "attn_entropy": [1.0] * n_layer,
+        "attn_distance": list(attn_distance),
+        "attn_distance_slope": 0.1,
+        "dla": [0.1] * n_layer,
+        "x0_lambda": [1.0] * n_layer,
+        "induction_score": 0.1,
+        "pos_saliency": [0.0] * 16,
+    }
+    structured = {
+        "model_id": report_id, "report_id": report_id, "stuck_signal": False, "confidence": 0.9,
+        "val_bpb": val_bpb, "hyperparams": _base_hyperparams(), "hyperparameter_importance": {},
+        "ablation_ran": False, "head_importance": {}, "layer_importance_share_pct": {},
+        "layer_scalars": {}, "token_fingerprint": token_fingerprint, "metadata": {"status": "ok"},
+    }
+    text = f"# XAI Analysis Report: {report_id}\n\n```json\n{json.dumps(structured)}\n```\n"
+    (reports_dir / f"{report_id}.md").write_text(text)
+
+
+def _write_eight_fingerprint_reports(reports_dir):
+    """8 reports (MIN_CLUSTER_N default) with a real attn_distance curve
+    each -- enough for trajectory_smoothness_correlation (pure math, no
+    scipy needed) and, when scipy/sklearn are installed, the cluster
+    functions too. Alternates ramp/zig-zag shapes: a constant offset alone
+    normalizes away to an identical curve (min-max normalization), which
+    would make every row's total-variation value identical and the
+    correlation undefined -- shape must actually vary, not just magnitude.
+    """
+    report_ids = []
+    for i in range(8):
+        report_id = f"report_{i:04d}"
+        curve = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0] if i % 2 == 0 else [0.0, 5.0, 1.0, 4.0, 2.0, 3.0]
+        _write_fake_report_with_fingerprint(reports_dir, report_id, val_bpb=0.9 + 0.01 * i, attn_distance=curve)
+        report_ids.append(report_id)
+    return report_ids
+
+
+def test_agent3_smoothness_correlation_section_and_cluster_hypotheses_prompt_fire_together(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    report_ids = _write_eight_fingerprint_reports(reports_dir)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    def fake_call(prompt, call_site, **kwargs):
+        return {
+            "agent3_strategic_narrative": "We are converging steadily.",
+            "agent3_cluster_hypotheses": "Smoother trajectories look better.",
+        }.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call) as mock_call:
+        summary = agent3.analyze_and_summarize(report_ids)
+
+    text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
+    assert "### Trajectory volatility vs. val_bpb (Tier 3.4" in text
+    assert "## Cluster Hypotheses (Claude)" in text
+    assert "Smoother trajectories look better." in text
+    cluster_calls = [c for c in mock_call.call_args_list if c.kwargs.get("call_site") == "agent3_cluster_hypotheses"]
+    assert len(cluster_calls) == 1
+    assert "smoothness_correlation" in cluster_calls[0].args[0]  # prompt includes the field name
+
+
+def test_agent3_cluster_hypotheses_skipped_when_fingerprint_data_unchanged(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    report_ids = _write_eight_fingerprint_reports(reports_dir)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    def fake_call(prompt, call_site, **kwargs):
+        return {
+            "agent3_strategic_narrative": "narrative 1",
+            "agent3_cluster_hypotheses": "hypothesis 1",
+        }.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call) as mock_call:
+        first_summary = agent3.analyze_and_summarize(report_ids)
+    first_text = (tmp_path / "reports" / "agent3_summaries" / f"{first_summary.summary_id}.md").read_text()
+    assert "hypothesis 1" in first_text
+
+    # No new reports, same underlying fingerprint data -> second summary
+    # should skip the cluster-hypotheses LLM call entirely.
+    def fake_call_2(prompt, call_site, **kwargs):
+        return {
+            "agent3_strategic_narrative": "narrative 2",
+            "agent3_cluster_hypotheses": "hypothesis 2 (should not appear)",
+        }.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call_2) as mock_call_2:
+        second_summary = agent3.analyze_and_summarize([report_ids[0]])
+    second_text = (tmp_path / "reports" / "agent3_summaries" / f"{second_summary.summary_id}.md").read_text()
+    assert "Skipped this run -- underlying fingerprint cluster data is unchanged" in second_text
+    assert "hypothesis 2" not in second_text
+    cluster_calls_2 = [c for c in mock_call_2.call_args_list if c.kwargs.get("call_site") == "agent3_cluster_hypotheses"]
+    assert len(cluster_calls_2) == 0
+    # The narrative call site has no skip-guard -- it should still fire every time.
+    narrative_calls_2 = [c for c in mock_call_2.call_args_list if c.kwargs.get("call_site") == "agent3_strategic_narrative"]
+    assert len(narrative_calls_2) == 1
+
+
+def test_agent3_cluster_hypotheses_recomputed_when_fingerprint_data_changes(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    report_ids = _write_eight_fingerprint_reports(reports_dir)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    def fake_call(prompt, call_site, **kwargs):
+        return {
+            "agent3_strategic_narrative": "narrative 1",
+            "agent3_cluster_hypotheses": "hypothesis 1",
+        }.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        agent3.analyze_and_summarize(report_ids)
+
+    # A genuinely new report with a very different curve changes the
+    # underlying fingerprint data -> the guard must NOT skip this time.
+    new_id = "report_0008"
+    _write_fake_report_with_fingerprint(reports_dir, new_id, val_bpb=2.0, attn_distance=[9.0, 0.0, 9.0, 0.0, 9.0, 0.0])
+
+    def fake_call_2(prompt, call_site, **kwargs):
+        return {
+            "agent3_strategic_narrative": "narrative 2",
+            "agent3_cluster_hypotheses": "hypothesis 2",
+        }.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call_2) as mock_call_2:
+        second_summary = agent3.analyze_and_summarize([new_id])
+    second_text = (tmp_path / "reports" / "agent3_summaries" / f"{second_summary.summary_id}.md").read_text()
+    assert "hypothesis 2" in second_text
+    cluster_calls_2 = [c for c in mock_call_2.call_args_list if c.kwargs.get("call_site") == "agent3_cluster_hypotheses"]
+    assert len(cluster_calls_2) == 1
+
+
 def test_agent3_llm_usage_section_reflects_logged_calls(tmp_path):
     from state import llm_usage
     reports_dir = tmp_path / "reports" / "agent2_reports"
