@@ -425,7 +425,15 @@ def run_training_remote(
         Metrics dict with at least {"val_bpb": float, "status": str,
         "device": gpu_index}. status is "remote_ok" on a full completion,
         "remote_partial_timeout" on a salvaged partial result, or
-        "remote_error" when nothing usable was recovered.
+        "remote_error" when nothing usable was recovered. On either of the
+        latter two, also includes "connection_lost_after_seconds" (elapsed
+        wall-clock time from exec_command to the dropped connection) and
+        "connection_lost_line_count" (how many stdout lines were received
+        first) -- diagnostic breadcrumbs for telling "died near connect"
+        apart from "died mid/late in a real run" without guessing.
+        "remote_error" additionally includes "connection_lost_last_progress"
+        (the last progress-bar line seen, or None if training never even
+        printed one).
     """
     if not _PARAMIKO_AVAILABLE:
         raise RuntimeError(
@@ -505,16 +513,21 @@ def run_training_remote(
             f'AUTORESEARCH_MANAGED=1 python -u train.py"'
         )
         _print(f"Executing on GPU {gpu_index}: {remote_cmd}")
+        exec_start = time.time()
         _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
 
         output_lines = []
         last_progress_bar = None
+        last_progress_line = None  # tracked independent of the display/no-display print path below
         lost_connection = False
+        connection_lost_elapsed = None
         try:
             for line in iter(stdout.readline, ""):
                 line = line.rstrip("\n")
                 output_lines.append(line)
                 is_progress = line.startswith('[') and ']' in line and '%' in line
+                if is_progress:
+                    last_progress_line = line
                 if display is not None:
                     # Concurrent multi-GPU wave: this GPU's own pinned line
                     # (see agents/live_progress.py) instead of a `\r`-based
@@ -546,8 +559,18 @@ def run_training_remote(
             # whatever was already captured instead of discarding a real
             # result along with the connection.
             lost_connection = True
-            _print(f"Lost connection while reading output ({e}) -- checking whether a usable "
-                   f"result was already captured before giving up")
+            connection_lost_elapsed = round(time.time() - exec_start, 1)
+            # Diagnostic breadcrumb (dev/checks.txt follow-up: remote_error
+            # rate climbed after the sync-lock/keepalive fix, so this is a
+            # DIFFERENT failure than the git-sync race those fixed --
+            # capturing elapsed time + how much output we'd already seen
+            # distinguishes "died at/near connect (0 lines, ~0s -- points to
+            # a session/handshake limit)" from "died mid-training after real
+            # progress (points to a mid-run network drop)" without guessing.
+            _print(f"Lost connection while reading output ({e}) after {connection_lost_elapsed}s "
+                   f"and {len(output_lines)} line(s) of output (last progress: "
+                   f"{last_progress_line!r}) -- checking whether a usable result was already "
+                   f"captured before giving up")
 
         if display is None and last_progress_bar:
             print()  # final newline after last progress bar
@@ -557,6 +580,8 @@ def run_training_remote(
             if math.isfinite(partial_metrics.get("val_bpb", float("inf"))):
                 partial_metrics["status"] = "remote_partial_timeout"
                 partial_metrics["device"] = gpu_index
+                partial_metrics["connection_lost_after_seconds"] = connection_lost_elapsed
+                partial_metrics["connection_lost_line_count"] = len(output_lines)
                 _print(f"Recovered a usable val_bpb before the connection was lost -- treating as "
                        f"a partial success (post-training analysis, e.g. head ablation, may be "
                        f"incomplete or missing): {partial_metrics}")
@@ -567,6 +592,9 @@ def run_training_remote(
                 "error": "connection lost while reading output, before any usable result was captured",
                 "status": "remote_error",
                 "device": gpu_index,
+                "connection_lost_after_seconds": connection_lost_elapsed,
+                "connection_lost_line_count": len(output_lines),
+                "connection_lost_last_progress": last_progress_line,
             }
 
         err_output = stderr.read().decode("utf-8", errors="replace").strip()

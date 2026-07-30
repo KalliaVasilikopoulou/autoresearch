@@ -354,6 +354,11 @@ def test_run_training_remote_salvages_val_bpb_when_connection_lost_after_trainin
     # Post-training analysis fields never arrived -- honestly absent, not
     # fabricated, same convention as a run where that analysis never ran.
     assert "head_ablation_impacts" not in metrics
+    # Diagnostic breadcrumb (dev/checks.txt follow-up: distinguishing "died
+    # near connect" from "died mid/late in a real run" without guessing) --
+    # all 5 lines of captured_output were delivered before the timeout.
+    assert metrics["connection_lost_line_count"] == 5
+    assert metrics["connection_lost_after_seconds"] >= 0
 
 
 def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_captured(monkeypatch, tmp_path):
@@ -380,6 +385,13 @@ def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_cap
     assert metrics["status"] == "remote_error"
     assert metrics["val_bpb"] == float("inf")
     assert metrics["device"] == 1
+    # Diagnostic breadcrumb: both lines delivered before the timeout, the
+    # last (and most recent) progress line is the 5.0% one, and elapsed time
+    # is captured -- this is what lets a later diagnosis tell "died at 0
+    # lines near connect" apart from "died after real progress was made".
+    assert metrics["connection_lost_line_count"] == 2
+    assert metrics["connection_lost_after_seconds"] >= 0
+    assert "5.0%" in metrics["connection_lost_last_progress"]
 
 
 def test_run_training_remote_salvage_routes_through_display_when_provided(monkeypatch, tmp_path):
