@@ -109,19 +109,25 @@ class Orchestrator:
             config = yaml.safe_load(f) or {}
         return config.get("orchestrator", {})
 
-    def _kill_stale_remote_training(self) -> None:
-        """Once, at the start of a campaign: clean up any leftover train.py
-        process from a previous, not-cleanly-stopped run on the remote
-        server -- see remote_runner.kill_stale_training_processes for the
-        5-condition identification (owned by us, running train.py, from
-        our repo, carrying our own marker env var) that keeps this from
-        ever touching another user's or another project's process. Not
-        repeated per-iteration: nothing new can go stale mid-campaign since
-        this orchestrator is the only thing dispatching trainings.
+    def _kill_stale_remote_training(self, context: str = "a previous run") -> None:
+        """Clean up any leftover train.py process on the remote server --
+        see remote_runner.kill_stale_training_processes for the 5-condition
+        identification (owned by us, running train.py, from our repo,
+        carrying our own marker env var) that keeps this from ever touching
+        another user's or another project's process.
+
+        Called at campaign start (context="a previous run") AND at the
+        start of every parallel wave (context="an earlier wave in this
+        campaign"): a wave-dispatched run that exceeds its SSH timeout
+        raises locally (logged as remote_error) but doesn't necessarily
+        kill the remote process -- it can keep running and hold the GPU
+        for the rest of the campaign unless something reclaims it. Cheap
+        when nothing's stale (one SSH round-trip for the GPU-attached PID
+        list, no further calls).
         """
         if self.dry_run or not remote_runner.is_remote_configured():
             return
-        print("[Orchestrator] Checking the remote server for stale training processes from a previous run...")
+        print(f"[Orchestrator] Checking the remote server for stale training processes from {context}...")
         killed = remote_runner.kill_stale_training_processes()
         if not killed:
             print("[Orchestrator]   None found.")
@@ -378,6 +384,12 @@ class Orchestrator:
             return None
         if not remote_runner.is_remote_configured():
             return None
+
+        # Reclaim any GPU still held by one of our own leftover processes
+        # (e.g. a previous wave's run that exceeded its SSH timeout and got
+        # logged as remote_error locally without actually dying remotely)
+        # before this wave's discovery call decides what's available.
+        self._kill_stale_remote_training(context="an earlier wave in this campaign")
 
         candidates = remote_runner.discover_available_gpus()[: self.max_parallel_runs]
         if len(candidates) < 2:

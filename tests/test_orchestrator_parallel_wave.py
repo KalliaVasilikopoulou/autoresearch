@@ -5,7 +5,9 @@ Verifies: (1) _run_parallel_wave degrades to None (sequential fallback) in
 every case where parallel dispatch shouldn't apply, (2) a real 2-GPU wave
 dispatches concurrently, logs both results with distinct device values, and
 advances iteration by the wave size, (3) a mid-wave stop signal from
-decide_next_hyperparams halts cleanly without training remaining slots.
+decide_next_hyperparams halts cleanly without training remaining slots,
+(4) _kill_stale_remote_training's stale-process cleanup runs both at
+campaign start and before every wave's GPU discovery.
 """
 
 from unittest.mock import patch
@@ -84,6 +86,7 @@ def test_returns_none_when_remote_not_configured(tmp_path, monkeypatch):
 def test_returns_none_when_zero_gpus_discovered(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: [])
     assert orch._run_parallel_wave(0, [], 10) is None
 
@@ -91,8 +94,32 @@ def test_returns_none_when_zero_gpus_discovered(tmp_path, monkeypatch):
 def test_returns_none_when_only_one_gpu_discovered(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: TWO_GPUS[:1])
     assert orch._run_parallel_wave(0, [], 10) is None
+
+
+def test_run_parallel_wave_cleans_up_stale_processes_before_discovery(tmp_path, monkeypatch):
+    """A wave-dispatched run that exceeds its SSH timeout can leave the
+    remote train.py process alive even though we logged it locally as
+    remote_error -- each new wave must try to reclaim that GPU before
+    deciding what's available, not just once at campaign start."""
+    orch = _make_orchestrator(tmp_path)
+    monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+
+    call_order = []
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes",
+                         lambda *a, **k: call_order.append("kill") or [])
+
+    def tracking_discover(*a, **k):
+        call_order.append("discover")
+        return []
+
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", tracking_discover)
+
+    orch._run_parallel_wave(0, [], 10)
+
+    assert call_order == ["kill", "discover"]
 
 
 # --- real 2-GPU wave dispatch ---------------------------------------
@@ -142,6 +169,7 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
 def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
 
