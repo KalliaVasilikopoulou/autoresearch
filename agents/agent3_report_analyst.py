@@ -23,6 +23,7 @@ from state.clustering import (
     cluster_fingerprints,
     trajectory_smoothness_correlation,
 )
+from state.results_analysis import SYNTHETIC_STATUSES, top_quartile_by_val_bpb
 from state.visualize import (
     chart_attention_trajectory_clusters,
     chart_fingerprint_adjustments_trend,
@@ -337,6 +338,24 @@ class Agent3ReportAnalyst:
         idx = max(0, min(len(sorted_vals) - 1, int(round((len(sorted_vals) - 1) * q))))
         return sorted_vals[idx]
 
+    def _status_of(self, item: Dict[str, Any]) -> str:
+        """Same precedence used for the Status distribution table below --
+        metadata.status when present, else the top-level status field."""
+        return str(item.get("metadata", {}).get("status") or item.get("status") or "unknown")
+
+    def _is_synthetic(self, item: Dict[str, Any]) -> bool:
+        """True for dry_run/simulated reports -- their val_bpb is a fixed
+        formula (dry_run: 1.0 - 0.001*iteration; simulated: a hand-tuned
+        stand-in for local testing), never a measured result. Kept in
+        report counts/status-distribution reporting (that's legitimate --
+        it's counting how many runs of each kind happened), but must never
+        enter a numeric aggregate that treats val_bpb as comparable across
+        runs (Best/Worst/Mean, elite-run hyperparameter recommendations) --
+        mirrors state/results_analysis.py's SYNTHETIC_STATUSES filter on
+        the results.tsv side of this same problem.
+        """
+        return self._status_of(item) in SYNTHETIC_STATUSES
+
     def _format_statistical_summary(
         self, new_reports: List[tuple], prev_summary: str
     ) -> Tuple[str, Dict[str, Any]]:
@@ -375,6 +394,7 @@ class Agent3ReportAnalyst:
             float(item.get("val_bpb"))
             for item in all_metrics
             if isinstance(item.get("val_bpb"), (int, float)) and math.isfinite(float(item.get("val_bpb")))
+            and not self._is_synthetic(item)
         ]
         statuses = Counter(
             [
@@ -431,14 +451,18 @@ class Agent3ReportAnalyst:
             val = item.get("val_bpb")
             if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
                 continue
+            if self._is_synthetic(item):
+                continue
             hp = item.get("hyperparams", {}) or {}
             if not isinstance(hp, dict):
                 continue
             elite_candidates.append((float(val), hp))
 
-        elite_candidates.sort(key=lambda x: x[0])
-        elite_count = max(1, len(elite_candidates) // 4) if elite_candidates else 0
-        elite = elite_candidates[:elite_count] if elite_count else []
+        # Shared "what counts as elite" selection (state/results_analysis.py)
+        # -- Agent 2's stuck-signal reference value uses the exact same
+        # definition, just aggregates the val_bpb side instead of the
+        # hyperparams side.
+        elite = top_quartile_by_val_bpb(elite_candidates)
 
         def _avg_hp(name: str, default: float = 0.0) -> float:
             values = []

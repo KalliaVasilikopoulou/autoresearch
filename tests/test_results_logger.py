@@ -24,7 +24,10 @@ def test_log_result_writes_device_from_metrics(tmp_path):
 
 def test_log_result_leaves_device_blank_when_metrics_has_none(tmp_path):
     path = tmp_path / "results.tsv"
-    log_result("run_0000", {"n_layer": 8}, {"val_bpb": 1.1, "status": "dry_run"},
+    # status "ok" (not "dry_run"/"simulated") -- load_results drops synthetic
+    # statuses (see state/results_analysis.py::SYNTHETIC_STATUSES), and this
+    # test's actual point is the blank "device" field, not status handling.
+    log_result("run_0000", {"n_layer": 8}, {"val_bpb": 1.1, "status": "ok"},
                results_path=str(path))
 
     rows = load_results(str(path))

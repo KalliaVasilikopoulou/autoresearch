@@ -225,6 +225,28 @@ def prune_by_noise_floor(
 INT_PARAMS = {"n_layer", "n_head", "n_embd", "batch_size"}
 
 
+def snap_n_embd(n_embd: float, n_head: float) -> int:
+    """Round n_embd so that n_embd/n_head (head_dim) is an even integer --
+    byte-for-byte the same snap train.py itself applies (see train.py's
+    MODEL_DIM computation): RoPE splits each head into two equal rotation
+    halves, so head_dim must be even, and a valid multi-head split needs
+    n_head to divide n_embd evenly. Any code path that can set n_embd
+    (the surrogate/EI proposal below, or any of Agent 1's other decision
+    paths in agents/agent1_training_specialist.py) must apply this exact
+    snap before the value is ever recorded or trained on -- otherwise
+    "requested" and "actually used" diverge, and every downstream consumer
+    of the n_embd column (hyperparameter correlations, this very surrogate,
+    Tier 3 fingerprint clustering) ends up fitting against the wrong label.
+    """
+    n_head = int(n_head)
+    if n_head <= 0:
+        return int(round(n_embd))
+    head_dim = max(1, round(n_embd / n_head))
+    if head_dim % 2 != 0:
+        head_dim += 1
+    return head_dim * n_head
+
+
 def _snap_discrete(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
     """Rounds int-valued params and snaps n_embd so that n_embd/n_head is an
     even integer -- a continuous acquisition/sampling proposal must be
@@ -239,10 +261,7 @@ def _snap_discrete(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
         if p in out:
             out[p] = int(round(out[p]))
     if "n_embd" in out and "n_head" in out and out["n_head"] > 0:
-        head_dim = max(1, round(out["n_embd"] / out["n_head"]))
-        if head_dim % 2 != 0:
-            head_dim += 1
-        out["n_embd"] = head_dim * out["n_head"]
+        out["n_embd"] = snap_n_embd(out["n_embd"], out["n_head"])
     return out
 
 

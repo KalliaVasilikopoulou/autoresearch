@@ -330,6 +330,22 @@ class Agent1TrainingSpecialist:
             if key in new_hyperparams:
                 new_hyperparams[key] = self._clamp_lr(key, float(new_hyperparams[key]))
 
+        # Same idea for n_embd: only state/surrogate.py's EI/cold-start path
+        # snapped it to a value train.py can actually use unchanged (see
+        # snap_n_embd there) -- every other path here (heuristic random
+        # pick, Tier 4 fingerprint votes, evidence-based hints, Claude's
+        # free-form suggestion) could propose an n_embd that doesn't divide
+        # evenly by n_head/doesn't leave an even head_dim, which train.py
+        # then silently re-snaps at train time (pipeline_validator flags
+        # this as an ERROR: "train.py clamped n_embd"). Applying the exact
+        # same snap here, universally, means requested == actually used
+        # every time, regardless of which path produced new_hyperparams.
+        if "n_embd" in new_hyperparams and "n_head" in new_hyperparams:
+            from state.surrogate import snap_n_embd
+            new_hyperparams["n_embd"] = snap_n_embd(
+                float(new_hyperparams["n_embd"]), float(new_hyperparams["n_head"])
+            )
+
         self.current_hyperparams = new_hyperparams
         self._save_hyperparams()
 

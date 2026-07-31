@@ -14,7 +14,7 @@ as "unknown", never substitute a fabricated default.
 import csv
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from state.results_logger import COLUMNS as CURRENT_COLUMNS
 
@@ -28,6 +28,21 @@ LEGACY_COLUMNS = (
     "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps", "depth", "status",
 )
 LEGACY_DROP_FIELDS = {"learning_rate"}
+
+# Statuses whose val_bpb is a synthetic placeholder, not a measured result:
+# "dry_run" (agents/agent1_training_specialist.py::train_model) returns
+# val_bpb = 1.0 - 0.001*(iteration+1) -- a fixed formula of iteration index
+# alone, unrelated to the hyperparameters it's logged against -- and
+# "simulated" (._simulate_training_result, the local-fallback-of-last-resort
+# path) returns a hand-tuned formula meant to look plausible for local
+# testing, not a real measurement either. Both get logged to results.tsv
+# like any other run (so status-distribution/count reporting still sees
+# them), but every numeric consumer of load_results() below (hyperparameter
+# correlations, the Tier 1 surrogate, noise floor, holdout/dashboard
+# analysis) must never mix these in with real remote_ok/remote_error rows --
+# doing so was silently injecting iteration-correlated noise into every
+# hyperparameter's importance score and the surrogate model's fit.
+SYNTHETIC_STATUSES = frozenset({"dry_run", "simulated"})
 
 # Hyperparameter columns worth correlating against val_bpb (excludes
 # identifiers, timestamps, and outcome/runtime metrics).
@@ -65,6 +80,14 @@ def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Di
     current 20-column schema and the frozen legacy 15-column schema (rows
     are told apart by field count, not by the file's header line, since a
     stale/mismatched header is exactly the bug this loader has to survive).
+
+    Rows with a status in SYNTHETIC_STATUSES (dry_run, simulated) are
+    dropped -- every caller of this loader treats val_bpb as a real,
+    comparable measurement (correlations, surrogate fitting, noise floor,
+    elite-run selection), and a synthetic placeholder value mixed into any
+    of those silently distorts the result. Callers that specifically need
+    run *counts* by status (e.g. Agent 3's status-distribution reporting)
+    don't go through this loader -- they read agent2_reports/*.md directly.
     """
     if isinstance(paths, (str, Path)):
         paths = [paths]
@@ -85,11 +108,16 @@ def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Di
                     if fields and fields[0] == "timestamp":
                         continue
                 if len(fields) == len(CURRENT_COLUMNS):
-                    rows.append(_coerce_row(CURRENT_COLUMNS, fields, "current"))
+                    row = _coerce_row(CURRENT_COLUMNS, fields, "current")
                 elif len(fields) == len(LEGACY_COLUMNS):
-                    rows.append(_coerce_row(LEGACY_COLUMNS, fields, "legacy"))
-                # Rows matching neither known shape are skipped rather than
-                # guessed at.
+                    row = _coerce_row(LEGACY_COLUMNS, fields, "legacy")
+                else:
+                    # Rows matching neither known shape are skipped rather
+                    # than guessed at.
+                    continue
+                if row.get("status") in SYNTHETIC_STATUSES:
+                    continue
+                rows.append(row)
     return rows
 
 
@@ -160,6 +188,29 @@ def importance_from_correlations(
     data are simply absent — callers must not backfill them with a guess.
     """
     return {param: min(1.0, abs(info["correlation"])) for param, info in correlations.items()}
+
+
+def top_quartile_by_val_bpb(
+    candidates: Sequence[Tuple[float, Any]], fraction: float = 0.25
+) -> List[Tuple[float, Any]]:
+    """The best `fraction` of (val_bpb, payload) pairs, lowest (best)
+    val_bpb first -- at least 1 whenever `candidates` is non-empty, matching
+    the "at least one elite run to recommend from" behavior this replaces.
+
+    The single shared definition of "elite" used both for Agent 3's
+    data-backed hyperparameter recommendations (payload = a hyperparams
+    dict) and Agent 2's stuck-signal reference value (payload unused,
+    only the val_bpb side matters) -- one consistent notion of "good"
+    across the system instead of two independently-computed ones that
+    could quietly drift apart. Callers aggregate the returned subset
+    differently (geometric mean of hyperparams vs. median of val_bpb),
+    but which runs count as elite is decided exactly once, here.
+    """
+    if not candidates:
+        return []
+    ordered = sorted(candidates, key=lambda c: c[0])
+    count = max(1, int(len(ordered) * fraction))
+    return ordered[:count]
 
 
 def noise_floor(rows: List[Dict[str, Any]], run_id_prefix: Optional[str] = None) -> Optional[Dict[str, float]]:

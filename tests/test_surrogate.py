@@ -22,6 +22,7 @@ from state.surrogate import (
     propose_via_ei,
     rank_by_sensitivity,
     sensitivity_perf,
+    snap_n_embd,
     sobol_cold_start,
 )
 
@@ -223,6 +224,33 @@ def test_snap_discrete_n_embd_head_dim_already_even_unchanged():
     # head_dim = 128/4 = 32 (already even) -> n_embd unchanged
     out = _snap_discrete({"n_embd": 128, "n_head": 4})
     assert out["n_embd"] == 128
+
+
+# ---------------------------------------------------------------------------
+# snap_n_embd (public -- also used directly by agents/agent1_training_specialist.py's
+# universal end-of-decision snap, not just _snap_discrete above)
+# ---------------------------------------------------------------------------
+
+def test_snap_n_embd_matches_train_py_head_dim_parity_snap():
+    # Same case as test_snap_discrete_n_embd_head_dim_odd_snaps_up_to_even,
+    # called directly rather than through the hyperparams-dict wrapper.
+    assert snap_n_embd(100, 3) == 102
+
+
+def test_snap_n_embd_already_valid_is_unchanged():
+    assert snap_n_embd(128, 4) == 128
+
+
+def test_snap_n_embd_handles_non_integer_n_head_input():
+    # Callers may pass floats straight from a hyperparams dict (json/yaml
+    # round-trips int values as float sometimes) -- must not crash or
+    # silently misbehave.
+    assert snap_n_embd(100.0, 3.0) == 102
+
+
+def test_snap_n_embd_zero_or_negative_n_head_falls_back_to_plain_rounding():
+    assert snap_n_embd(100, 0) == 100
+    assert snap_n_embd(100.6, -1) == 101
 
 
 # ---------------------------------------------------------------------------

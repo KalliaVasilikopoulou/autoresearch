@@ -3,6 +3,7 @@
 import os
 import json
 import math
+import statistics
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from agents import claude_cli
@@ -14,6 +15,7 @@ from state.results_analysis import (
     hyperparameter_correlations,
     importance_from_correlations,
     load_results,
+    top_quartile_by_val_bpb,
 )
 from state.visualize import (
     chart_head_importance_heatmap,
@@ -22,6 +24,16 @@ from state.visualize import (
     chart_token_fingerprint,
 )
 import yaml
+
+
+# stuck-signal val_bpb check: how much worse than the elite reference (see
+# _elite_val_bpb_reference below) counts as "stuck." Replaces a bare
+# hardcoded val_bpb > 1.32 that turned out to flag ~95% of real
+# (non-dry_run) runs ever recorded -- 1.32 was miscalibrated against real
+# training's actual achievable range from the start, not something that
+# regressed. 0.15 == "more than 15% worse than the median of the best 25%
+# of real runs ever."
+STUCK_VAL_BPB_MARGIN = 0.15
 
 
 class Agent2XAISpecialist:
@@ -79,6 +91,28 @@ class Agent2XAISpecialist:
         reports = list(self.reports_dir.glob("report_*.md"))
         return len(reports)
 
+    def _elite_val_bpb_reference(self) -> Optional[float]:
+        """Median val_bpb of the best 25% of real historical runs (see
+        state/results_analysis.py::top_quartile_by_val_bpb -- the exact same
+        elite selection Agent 3's hyperparameter recommendations use, so
+        "elite" means one consistent thing across the system). The median
+        of several elite runs, not just the single best, so one lucky
+        outlier can't single-handedly set (or blow) the bar. None when
+        load_results() has no real (dry_run/simulated already excluded)
+        finite-val_bpb history yet -- callers must not fabricate a
+        threshold from zero data, and fall back to the ablation-pattern
+        signal alone.
+        """
+        rows = load_results(self.results_path)
+        candidates = [
+            (row["val_bpb"], None) for row in rows
+            if isinstance(row.get("val_bpb"), (int, float)) and math.isfinite(row["val_bpb"])
+        ]
+        elite = top_quartile_by_val_bpb(candidates)
+        if not elite:
+            return None
+        return statistics.median(val_bpb for val_bpb, _ in elite)
+
     def analyze_result(self, result_payload: Dict[str, Any]) -> Optional[AnalysisEvidence]:
         """Analyze a completed training result and emit structured evidence."""
         run_id = result_payload.get('run_id', 'unknown')
@@ -100,9 +134,10 @@ class Agent2XAISpecialist:
         # Ablation-pattern stuck detection (real) complements the val_bpb-threshold
         # heuristic below — either signal is enough to trigger Agent 1's radical change.
         ablation_stuck = self.xai.detect_stuck_signal(self.all_impacts) if self.all_impacts else False
+        elite_reference = self._elite_val_bpb_reference()
         stuck_signal = (
             (not math.isfinite(val_bpb))
-            or (val_bpb > 1.32)
+            or (elite_reference is not None and val_bpb > elite_reference * (1 + STUCK_VAL_BPB_MARGIN))
             or (status in {"remote_error", "simulated"})
             or ablation_stuck
         )
