@@ -363,13 +363,24 @@ def evaluate_bpb(model, tokenizer, batch_size):
     then converts nats/byte to bits/byte. Special tokens (byte length 0)
     are excluded from both sums.
     Uses fixed MAX_SEQ_LEN so results are comparable across configs.
+
+    Prints a progress bar (same ASCII-block style as train.py's training
+    loop) purely for visibility -- this loop can run thousands of steps
+    with a lazy, unprefetched dataloader (parquet read + tokenization on
+    every batch), and under multi-GPU parallel dispatch several runs can
+    contend hard enough for CPU/disk to stall it for minutes. Going that
+    long with zero output would trip the SSH read timeout in
+    agents/remote_runner.py and drop a training run that actually
+    succeeded. The computation below (total_nats/total_bytes) is untouched
+    -- this only adds prints, never changes the metric.
     """
     token_bytes = get_token_bytes(device="cuda")
     val_loader = make_dataloader(tokenizer, batch_size, MAX_SEQ_LEN, "val")
     steps = EVAL_TOKENS // (batch_size * MAX_SEQ_LEN)
+    print_interval = max(1, steps // 100)  # ~100 heartbeat lines across the loop, however long it runs
     total_nats = 0.0
     total_bytes = 0
-    for _ in range(steps):
+    for i in range(steps):
         x, y, _ = next(val_loader)
         loss_flat = model(x, y, reduction='none').view(-1)
         y_flat = y.view(-1)
@@ -377,6 +388,12 @@ def evaluate_bpb(model, tokenizer, batch_size):
         mask = nbytes > 0
         total_nats += (loss_flat * mask).sum().item()
         total_bytes += nbytes.sum().item()
+
+        if i % print_interval == 0 or i == steps - 1:
+            pct_done = 100 * (i + 1) / steps
+            bar_filled = int(pct_done / 5)
+            bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
+            print(f"{bar} {pct_done:5.1f}% | eval step {i + 1}/{steps}")
     return total_nats / (math.log(2) * total_bytes)
 
 

@@ -767,7 +767,13 @@ print()  # newline after \r training log
 
 total_tokens = step * TOTAL_BATCH_SIZE
 
-# Final eval
+# Final eval. evaluate_bpb (prepare.py) now prints its own progress bar
+# (same reasoning as the training loop's: this is a ~10k-step loop with
+# lazy, unprefetched dataloading, and under multi-GPU parallel dispatch
+# several runs can hit it at once and contend hard enough to stall for
+# minutes -- silent that long would trip the SSH read timeout in
+# agents/remote_runner.py and drop a training run that actually succeeded).
+print("[train.py] Starting validation eval...")
 model.eval()
 with autocast_ctx:
     val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
