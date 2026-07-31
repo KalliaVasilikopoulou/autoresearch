@@ -140,7 +140,7 @@ llm:
   # Total dollar-equivalent budget shared across every agent1/2/3 LLM call
   # this campaign. Once exhausted, every call site cleanly skips (falls
   # back to its existing non-LLM behavior) rather than erroring.
-  campaign_budget_usd: 7.0
+  campaign_budget_usd: 20.0
 
   # Per-call safety cap (also passed as `claude --max-budget-usd`) so one
   # call can never consume more than this even early in the campaign.
