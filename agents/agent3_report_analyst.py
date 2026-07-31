@@ -185,7 +185,7 @@ class Agent3ReportAnalyst:
         # billed API key). None (never fabricated) when the CLI is
         # unavailable or the shared campaign budget is exhausted.
         if self.use_llm:
-            narrative = self._get_claude_narrative(summary)
+            narrative = self._get_claude_narrative(aggregate.get("prompt_summary") or summary)
             summary += (f"\n\n## Strategic Narrative\n{narrative}\n" if narrative else
                         "\n\n## Strategic Narrative\nUnavailable this run (CLI not reachable, or campaign LLM budget exhausted)\n")
 
@@ -342,6 +342,59 @@ class Agent3ReportAnalyst:
         """Same precedence used for the Status distribution table below --
         metadata.status when present, else the top-level status field."""
         return str(item.get("metadata", {}).get("status") or item.get("status") or "unknown")
+
+    def _strip_markdown_section(self, text: str, heading: str) -> str:
+        """Removes the section starting at an exact "## heading" line up to
+        (not including) the next "## " heading or end of text. No-op if the
+        heading isn't present. Used to build a leaner LLM-prompt variant of
+        the full human-readable summary (see _build_prompt_summary) without
+        duplicating how each section gets built.
+        """
+        lines = text.splitlines()
+        start = None
+        for i, line in enumerate(lines):
+            if line.strip() == heading:
+                start = i
+                break
+        if start is None:
+            return text
+        end = start + 1
+        while end < len(lines) and not lines[end].startswith("## "):
+            end += 1
+        return "\n".join(lines[:start] + lines[end:])
+
+    def _build_prompt_summary(
+        self, full_summary: str, sorted_layers: List[Tuple[str, List[float]]]
+    ) -> str:
+        """A leaner variant of the full statistical summary, used only for
+        the strategic-narrative LLM prompt -- the saved report keeps every
+        section at full detail. Strips content that's pure overhead for a
+        text-only LLM call and costs real money every call:
+          - chart image embeds (an LLM reading text can't see a .png)
+          - the LLM Usage/budget section (irrelevant to pattern reasoning)
+          - the Tier 3.4 methodology sentence (static, identical every call)
+          - the full per-layer table (20+ rows) -> condensed to the top 5
+            layers by share plus a one-line "N others near zero" note, the
+            same conclusion a human draws from the full table
+        """
+        lines = [
+            line for line in full_summary.splitlines()
+            if not line.startswith("![")
+            and not line.startswith("- Volatility = total variation")
+        ]
+        text = "\n".join(lines)
+        text = self._strip_markdown_section(text, "## LLM Usage This Campaign")
+        text = self._strip_markdown_section(text, "## Layer-Level Importance Distribution")
+
+        if sorted_layers:
+            top_layers = sorted(sorted_layers, key=lambda kv: -self._safe_mean(kv[1]))[:5]
+            dead_count = sum(1 for _, shares in sorted_layers if self._safe_mean(shares) < 0.5)
+            layer_block = ["", "## Layer-Level Importance (condensed, top 5 by share)"]
+            layer_block += [f"- L{name}: {self._safe_mean(shares):.2f}%" for name, shares in top_layers]
+            if dead_count:
+                layer_block.append(f"- {dead_count} other layer(s) at <0.5% share (dead weight)")
+            text += "\n" + "\n".join(layer_block)
+        return text
 
     def _is_synthetic(self, item: Dict[str, Any]) -> bool:
         """True for dry_run/simulated reports -- their val_bpb is a fixed
@@ -817,6 +870,8 @@ class Agent3ReportAnalyst:
                 "- Preserved history is enabled; this summary supersedes prior generic trends with recalculated statistics.",
             ])
 
+        full_summary = "\n".join(summary_lines) + "\n"
+
         aggregate = {
             "stable_patterns": stable_patterns[:5],
             "conflicting_signals": conflicting_patterns[:5],
@@ -827,9 +882,14 @@ class Agent3ReportAnalyst:
                 "Importance/non-importance split uses threshold 0.50",
             ],
             "fingerprint_clusters": fingerprint_clusters,
+            # LLM-prompt-only leaner variant (dev/checks.txt follow-up:
+            # reduce prompt noise/duplication) -- _get_claude_narrative uses
+            # this instead of full_summary; the saved .md report always gets
+            # full_summary, unchanged.
+            "prompt_summary": self._build_prompt_summary(full_summary, sorted_layers),
         }
 
-        return "\n".join(summary_lines) + "\n", aggregate
+        return full_summary, aggregate
 
     def get_latest_summary_object(self) -> Optional[SummaryEvidence]:
         """Return the most recent structured summary object if it exists."""
@@ -916,7 +976,7 @@ agree or disagree, since it isn't fragmented into small clusters.
 3. Frame this as a hypothesis to test with a real run, not a conclusion.
 
 Data:
-{json.dumps(fingerprint_clusters, indent=2)}
+{json.dumps(fingerprint_clusters)}
 
 Be concise (under 200 words)."""
 

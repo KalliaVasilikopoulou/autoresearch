@@ -125,6 +125,76 @@ def test_agent1_use_llm_true_applies_claude_json_adjustment(tmp_path):
     assert result["n_head"] == 4  # untouched fields preserved
 
 
+def test_agent1_claude_suggestion_prompt_uses_distilled_sections_not_raw_tables(tmp_path):
+    """The prompt must contain the distilled sections (Recommendations,
+    Strategic Insights, Strategic Narrative, Cluster Hypotheses) but not
+    the raw statistical tables Agent 3 already turned into those sections
+    -- genuine duplication (same signal as numbers AND as Claude's own
+    prior paraphrase) removed, not just shortened."""
+    agent1 = _make_agent1(tmp_path, use_llm=True)
+    summary = """# Summary Report #7
+
+## Batch Scope
+- New reports in this batch: 3
+
+## Hyperparameter Importance Statistics
+| Hyperparameter | Mean Importance |
+|----------------|-----------------:|
+| RAW_TABLE_MARKER_XYZ | 0.900000 |
+
+## Layer-Level Importance Distribution
+| Layer | Mean Share (%) |
+|------:|---------------:|
+| L0 | RAW_LAYER_MARKER_ABC |
+
+## Recommendations for Agent 1 (Data-Backed)
+- scalar_lr (geometric mean from elite runs): 0.4771
+
+## Strategic Insights
+- Stable patterns:
+  - n_embd is the strongest average signal
+
+## Strategic Narrative
+n_embd dominates; anchor near the elite geometric mean next iteration.
+
+## Cluster Hypotheses (Claude)
+Smoother trajectories correlate with lower val_bpb, worth testing directly.
+"""
+    captured = {}
+
+    def fake_call(prompt, call_site, **kwargs):
+        captured["prompt"] = prompt
+        return "{}"
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        agent1._get_claude_suggestion(_base_hyperparams(), summary)
+
+    prompt = captured["prompt"]
+    assert "RAW_TABLE_MARKER_XYZ" not in prompt
+    assert "RAW_LAYER_MARKER_ABC" not in prompt
+    assert "scalar_lr (geometric mean from elite runs): 0.4771" in prompt
+    assert "n_embd is the strongest average signal" in prompt
+    assert "anchor near the elite geometric mean" in prompt
+    assert "Smoother trajectories correlate with lower val_bpb" in prompt
+
+
+def test_agent1_claude_suggestion_falls_back_to_truncation_when_no_sections_present(tmp_path):
+    """A plain string with no "## " markup (e.g. what several other tests in
+    this file pass as latest_summary) must still work -- falls back to the
+    original summary[:6000] behavior rather than sending an empty prompt."""
+    agent1 = _make_agent1(tmp_path, use_llm=True)
+    captured = {}
+
+    def fake_call(prompt, call_site, **kwargs):
+        captured["prompt"] = prompt
+        return "{}"
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        agent1._get_claude_suggestion(_base_hyperparams(), "some summary")
+
+    assert "some summary" in captured["prompt"]
+
+
 def test_agent1_use_llm_true_degrades_to_none_when_call_returns_none(tmp_path):
     agent1 = _make_agent1(tmp_path, use_llm=True)
     with patch.object(claude_cli, "call_with_budget", return_value=None):
@@ -257,6 +327,90 @@ def test_agent3_use_llm_true_narrative_unavailable_when_call_returns_none(tmp_pa
     text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
     assert "## Strategic Narrative" in text
     assert "Unavailable this run (CLI not reachable, or campaign LLM budget exhausted)" in text
+
+
+# --- Prompt-leanness (dev/checks.txt follow-up: reduce LLM prompt noise) --
+
+def test_agent3_narrative_prompt_excludes_llm_usage_and_chart_lines(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    _write_fake_report(reports_dir, "report_0000", 1.0)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+    # Log a real LLM usage entry so the "LLM Usage This Campaign" section
+    # in the SAVED report has real content -- proves the prompt-stripping
+    # is deliberate, not just "the section happened to be empty."
+    from state import llm_usage
+    llm_usage.log_call("agent3_strategic_narrative", {"cost_usd": 0.05, "model": "sonnet", "is_error": False}, agent3._llm_usage_path)
+
+    captured_prompts = {}
+
+    def fake_call(prompt, call_site, **kwargs):
+        captured_prompts[call_site] = prompt
+        return "narrative text"
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        summary = agent3.analyze_and_summarize(["report_0000"])
+
+    narrative_prompt = captured_prompts["agent3_strategic_narrative"]
+    assert "LLM Usage This Campaign" not in narrative_prompt
+    assert "![" not in narrative_prompt  # chart image embeds -- invisible to a text-only call
+
+    # The saved report keeps full detail regardless -- only the prompt is leaner.
+    saved_text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
+    assert "LLM Usage This Campaign" in saved_text
+
+
+def test_agent3_narrative_prompt_condenses_layer_table(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    # 20 layers: L0 dominant, everything else ~0 -- the full table the
+    # saved report gets vs. the condensed "top 5 + N dead" the prompt gets.
+    layer_shares = {str(i): (80.0 if i == 0 else 0.1) for i in range(20)}
+    structured = {
+        "model_id": "report_0000", "report_id": "report_0000", "stuck_signal": False, "confidence": 0.9,
+        "val_bpb": 1.0, "hyperparams": _base_hyperparams(), "hyperparameter_importance": {},
+        "ablation_ran": False, "head_importance": {}, "layer_importance_share_pct": layer_shares,
+        "layer_scalars": {}, "token_fingerprint": {}, "metadata": {"status": "ok"},
+    }
+    (reports_dir / "report_0000.md").write_text(
+        f"# XAI Analysis Report: report_0000\n\n```json\n{json.dumps(structured)}\n```\n"
+    )
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    captured_prompts = {}
+
+    def fake_call(prompt, call_site, **kwargs):
+        captured_prompts[call_site] = prompt
+        return "narrative text"
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        agent3.analyze_and_summarize(["report_0000"])
+
+    narrative_prompt = captured_prompts["agent3_strategic_narrative"]
+    assert "Layer-Level Importance (condensed, top 5 by share)" in narrative_prompt
+    assert "L0: 80.00%" in narrative_prompt
+    assert "19 other layer(s) at <0.5% share (dead weight)" in narrative_prompt
+    # The full 20-row table (every "| L{n} |" row) must not be in the prompt.
+    assert "| L19 | 0.1000" not in narrative_prompt
+
+
+def test_agent3_cluster_hypotheses_prompt_uses_compact_json(tmp_path):
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    report_ids = _write_eight_fingerprint_reports(reports_dir)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    captured_prompts = {}
+
+    def fake_call(prompt, call_site, **kwargs):
+        captured_prompts[call_site] = prompt
+        return "hypothesis text"
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        agent3.analyze_and_summarize(report_ids)
+
+    prompt = captured_prompts["agent3_cluster_hypotheses"]
+    json_blob = prompt[prompt.index("Data:\n") + len("Data:\n"): prompt.index("\n\nBe concise")]
+    assert json.loads(json_blob)  # still valid, parseable JSON
+    assert "\n" not in json_blob  # compact (no indent=2) -- indented JSON always has embedded newlines
 
 
 def _write_fake_report_with_fingerprint(reports_dir, report_id, val_bpb, attn_distance):

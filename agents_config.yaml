@@ -97,7 +97,7 @@ agent3:
   # summaries (and fewer agent3/agent1 LLM calls, since Agent 1 only reads
   # the LLM path on the iteration right after a fresh summary) at the cost
   # of less frequent hyperparameter-recommendation refreshes.
-  batch_size: 5
+  batch_size: 7
 
   # Whether to use Claude for narrative summary + Tier 3 cluster hypotheses
   # (via the Claude Code CLI, see the llm: section below).
@@ -140,11 +140,15 @@ llm:
   # Total dollar-equivalent budget shared across every agent1/2/3 LLM call
   # this campaign. Once exhausted, every call site cleanly skips (falls
   # back to its existing non-LLM behavior) rather than erroring.
-  campaign_budget_usd: 5.0
+  campaign_budget_usd: 7.0
 
   # Per-call safety cap (also passed as `claude --max-budget-usd`) so one
   # call can never consume more than this even early in the campaign.
-  max_call_budget_usd: 0.20
+  # Only agent1_hyperparameter_review's calls typically got close to the
+  # old 0.20 cap (avg $0.10, max $0.18 observed) -- the other two call
+  # sites rarely approach it, so this mostly trims that one site's
+  # expensive tail rather than constraining every call equally.
+  max_call_budget_usd: 0.14
 
   # usage_log_path is intentionally NOT set here -- each agent defaults it
   # to <its own state_dir>/llm_usage.json (same convention as

@@ -6,7 +6,7 @@ import random
 import subprocess
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import json
 
 try:
@@ -1082,27 +1082,68 @@ class Agent1TrainingSpecialist:
                     pass
         return metrics
 
+    def _extract_summary_sections(self, summary: str, headings: List[str]) -> str:
+        """Pulls out just the named "## Heading" sections (in the given
+        order) from a full Agent 3 summary markdown, dropping everything
+        else. Agent 3 already digests the raw statistical tables into
+        Recommendations/Strategic Insights/Strategic Narrative/Cluster
+        Hypotheses -- sending those raw tables to this call too would be
+        genuine duplication (the same signal expressed twice, once as
+        numbers and once as Claude's own prior paraphrase of them). This
+        also sidesteps a blind summary[:N] truncation cutting off the
+        narrative/cluster-hypotheses sections, which sit at the very end of
+        the file and can be larger than N for a big summary. Returns ""
+        (caller falls back to summary[:6000]) if none of `headings` are
+        present -- e.g. a plain string with no "## " markup at all.
+        """
+        lines = summary.splitlines()
+        bounds: Dict[str, Tuple[int, int]] = {}
+        current: Optional[str] = None
+        start = 0
+        for i, line in enumerate(lines):
+            if line.startswith("## "):
+                if current is not None:
+                    bounds[current] = (start, i)
+                current = line.strip()
+                start = i
+        if current is not None:
+            bounds[current] = (start, len(lines))
+
+        parts = [
+            "\n".join(lines[bounds[heading][0]:bounds[heading][1]]).strip()
+            for heading in headings if heading in bounds
+        ]
+        return "\n\n".join(parts)
+
     def _get_claude_suggestion(
         self, heuristic_params: Dict[str, Any], summary: str
     ) -> Optional[Dict[str, Any]]:
         """Ask the Claude Code CLI (agents/claude_cli.py -- your subscription,
         not a separately-billed API key) to review the heuristic suggestion.
         Only ever called with a *fresh* summary (see decide_next_hyperparams's
-        fresh_summary gate) -- reads the complete summary (not a short
-        excerpt) since this fires once per new summary rather than every
-        iteration, including Agent 3's own LLM narrative/cluster-hypotheses
-        sections when present. Returns None (falling back to
-        heuristic_params unchanged, exactly as before this feature existed)
-        whenever the CLI is unavailable, the campaign budget is exhausted,
-        or the response isn't usable JSON -- never fabricated, never raises.
+        fresh_summary gate) -- reads just the already-distilled sections of
+        the summary (Recommendations, Strategic Insights, Strategic
+        Narrative, Cluster Hypotheses -- see _extract_summary_sections)
+        rather than the raw statistical tables Agent 3 already turned into
+        those sections, since this fires once per new summary rather than
+        every iteration. Returns None (falling back to heuristic_params
+        unchanged, exactly as before this feature existed) whenever the CLI
+        is unavailable, the campaign budget is exhausted, or the response
+        isn't usable JSON -- never fabricated, never raises.
         """
-        prompt = f"""You are reviewing a complete strategic summary from a neural network
-hyperparameter search campaign (including any strategic narrative and
-cluster hypotheses it already contains). Think through what it implies,
-then decide whether our heuristic next-step suggestion below should change.
+        distilled = self._extract_summary_sections(summary, [
+            "## Recommendations for Agent 1 (Data-Backed)",
+            "## Strategic Insights",
+            "## Strategic Narrative",
+            "## Cluster Hypotheses (Claude)",
+        ])
+        prompt = f"""You are reviewing a strategic summary from a neural network
+hyperparameter search campaign (its data-backed recommendations, strategic
+narrative, and cluster hypotheses). Think through what it implies, then
+decide whether our heuristic next-step suggestion below should change.
 
-Complete summary:
-{summary[:6000]}
+Summary:
+{distilled or summary[:6000]}
 
 Our heuristic suggestion for the next run:
 {heuristic_params}

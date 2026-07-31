@@ -97,3 +97,61 @@ def test_dry_run_excluded_from_elite_recommendations(tmp_path):
     # Status distribution reporting still legitimately counts the dry_run
     # report -- only the numeric aggregates exclude it.
     assert "- dry_run: 1" in text
+
+
+# --- _strip_markdown_section / _build_prompt_summary (prompt-leanness) ---
+
+def test_strip_markdown_section_removes_named_section_only(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    text = "## A\nkeep a\n\n## B\ndrop b\n\n## C\nkeep c\n"
+    result = agent3._strip_markdown_section(text, "## B")
+    assert "keep a" in result
+    assert "keep c" in result
+    assert "drop b" not in result
+    assert "## B" not in result
+
+
+def test_strip_markdown_section_noop_when_heading_absent(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    text = "## A\nkeep a\n"
+    assert agent3._strip_markdown_section(text, "## Not Present") == text
+
+
+def test_strip_markdown_section_handles_last_section(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    text = "## A\nkeep a\n\n## B\ndrop b\nmore b\n"
+    result = agent3._strip_markdown_section(text, "## B")
+    assert result.strip() == "## A\nkeep a"
+
+
+def test_build_prompt_summary_strips_charts_usage_and_boilerplate(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    full = (
+        "## Batch Scope\n- New reports: 3\n\n"
+        "![val_bpb trend](../visuals/x.png)\n\n"
+        "## LLM Usage This Campaign\n- 5 call(s), cumulative cost $0.50\n\n"
+        "## Behavioral Fingerprint Clusters (Tier 3)\n"
+        "- Volatility = total variation of each run's normalized attn_distance curve (0 = perfectly smooth/monotonic, higher = zig-zags more). Uses every fingerprint-bearing run.\n"
+        "- Spearman correlation: +0.1234\n"
+    )
+    result = agent3._build_prompt_summary(full, sorted_layers=[])
+    assert "New reports: 3" in result  # unrelated content preserved
+    assert "![" not in result
+    assert "LLM Usage This Campaign" not in result
+    assert "Volatility = total variation" not in result
+    assert "Spearman correlation: +0.1234" in result  # the actual number is kept
+
+
+def test_build_prompt_summary_condenses_layer_table(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    full = "## Batch Scope\n- x\n"
+    sorted_layers = [(str(i), [80.0] if i == 0 else [0.1]) for i in range(10)]
+    result = agent3._build_prompt_summary(full, sorted_layers)
+    assert "L0: 80.00%" in result
+    assert "9 other layer(s) at <0.5% share (dead weight)" in result
+
+
+def test_build_prompt_summary_no_layer_block_when_no_layers(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    result = agent3._build_prompt_summary("## Batch Scope\n- x\n", sorted_layers=[])
+    assert "Layer-Level Importance" not in result
