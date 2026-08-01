@@ -163,7 +163,15 @@ def propose_next(
         return proposal
 
     # -- Surrogate-driven: fit -> prune -> block -> EI over the active block. --
-    sm = surrogate.fit_surrogate(rows, feature_columns=params)
+    # min_n=cold_start_n (not fit_surrogate's own MIN_SURROGATE_N default):
+    # the cold-start loop above already gates on "n_usable >= cold_start_n"
+    # before ever reaching here, so cold_start_n is the one real, caller-
+    # configurable "how much data before we stop cold-starting" threshold --
+    # letting fit_surrogate silently apply a second, independent, hardcoded
+    # threshold underneath it means a caller that lowers cold_start_n (e.g.
+    # agents_config.yaml's agent1.surrogate_min_observations) doesn't
+    # actually get what it asked for.
+    sm = surrogate.fit_surrogate(rows, feature_columns=params, min_n=cold_start_n)
     if sm is None:
         return None
 

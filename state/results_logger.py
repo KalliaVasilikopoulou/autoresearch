@@ -30,6 +30,16 @@ COLUMNS = [
     "status",
     "holdout_val_bpb",
     "device",
+    # Tier 4 window-pattern tunable (see agents/agent1_training_specialist.py's
+    # SEARCH_SPACE/ARCH_SAFE_RANGES) -- was part of HYPERPARAM_COLUMNS
+    # (state/results_analysis.py) and proposed/tuned as a real search
+    # dimension the whole time, but never actually logged here. That silent
+    # gap meant search_planner.propose_next()'s n_usable count (rows with
+    # every HYPERPARAM_COLUMNS field present) was 0 for every historical
+    # row, forever -- the cold-start check (n_usable < cold_start_n) never
+    # passed, so the EI-guided surrogate search never activated even once;
+    # every proposal was Sobol random sampling mislabeled "surrogate".
+    "window_s_fraction",
 ]
 
 # Karpathy's published baseline for DEPTH=8 on the same dataset/budget.
@@ -100,6 +110,7 @@ def log_result(
         # for observability now, not used for filtering -- the DGX's GPUs
         # are homogeneous.
         "device": metrics.get("device", ""),
+        "window_s_fraction": hyperparams.get("window_s_fraction", ""),
     }
 
     with open(path, "a", newline="") as f:

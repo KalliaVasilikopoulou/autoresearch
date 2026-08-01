@@ -128,6 +128,47 @@ def test_propose_next_cold_start_exhausted_generates_extra_point_not_stalling(tm
     assert all(k in p3 for k in SEARCH_SPACE)
 
 
+def test_propose_next_transitions_out_of_cold_start_via_real_results_tsv_pipeline(tmp_path):
+    """Integration regression test for a real production bug: every other
+    propose_next test in this file builds `rows` as plain Python dicts via
+    _synthetic_rows(), which already includes every SEARCH_SPACE key --
+    that never exercised the real log_result -> results.tsv -> load_results
+    round trip. That round trip was silently dropping window_s_fraction
+    (a real HYPERPARAM_COLUMNS/SEARCH_SPACE dimension, but missing from
+    state/results_logger.py's COLUMNS), so n_usable (rows with every
+    HYPERPARAM_COLUMNS field present) stayed 0 forever no matter how much
+    real data accumulated -- the cold-start check never passed, in
+    production, across the whole project's history. This goes through the
+    real file-based pipeline end to end and confirms it now does.
+    """
+    from state.results_analysis import load_results
+    from state.results_logger import log_result
+
+    results_path = tmp_path / "results.tsv"
+    rng = random.Random(3)
+    lo, _hi = SEARCH_SPACE["n_layer"]
+    for i in range(20):
+        hp = _random_hp(rng)
+        val_bpb = 1.0 + 0.1 * (hp["n_layer"] - lo) + rng.uniform(-0.001, 0.001)
+        log_result(f"run_{i:04d}", hp, {"val_bpb": val_bpb, "status": "remote_ok"}, results_path=str(results_path))
+
+    rows = load_results(str(results_path))
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    result = propose_next(
+        rows=rows, current_best_hyperparams=_default_best_hyperparams(),
+        current_best_val_bpb=min(r["val_bpb"] for r in rows),
+        iteration=50, cold_start_n=15, state_path=str(tmp_path / "state.json"),
+        noise_floor_path=noise_floor_path, report_dir=str(tmp_path / "reports"),
+    )
+    assert result is not None
+    # Only the EI-driven (surrogate) branch ever writes a plan report --
+    # proves this took the real surrogate path, not cold-start Sobol.
+    assert (tmp_path / "reports" / "plan_0050.json").exists()
+
+    state = SearchPlannerState.load(str(tmp_path / "state.json"))
+    assert state.cold_start_used == 0  # cold-start was never entered
+
+
 # ---------------------------------------------------------------------------
 # propose_next -- surrogate-driven path
 # ---------------------------------------------------------------------------
