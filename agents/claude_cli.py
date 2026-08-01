@@ -93,7 +93,14 @@ def query(
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         payload = json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError, ValueError):
+    except Exception:
+        # Broad by design (matches is_cli_available()'s own convention just
+        # above): this must degrade to None on ANY failure, never crash the
+        # orchestrator loop. A narrower (TimeoutExpired, JSONDecodeError,
+        # OSError, ValueError) tuple missed a real one in production --
+        # result.stdout can come back None (not just malformed) on some
+        # process-termination edge cases, and json.loads(None) raises
+        # TypeError, which that tuple didn't cover.
         return None
 
     if payload.get("is_error") or payload.get("type") == "result" and payload.get("subtype", "").startswith("error"):

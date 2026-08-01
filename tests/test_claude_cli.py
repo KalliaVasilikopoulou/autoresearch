@@ -99,6 +99,17 @@ def test_query_returns_none_on_non_json_stdout(monkeypatch):
     assert claude_cli.query("hello", max_budget_usd=0.1) is None
 
 
+def test_query_returns_none_when_stdout_is_none(monkeypatch):
+    """Regression: subprocess.run can return a CompletedProcess with
+    stdout=None (seen in real production use) even without raising --
+    json.loads(None) raises TypeError, which the original except tuple
+    (TimeoutExpired, JSONDecodeError, OSError, ValueError) didn't cover,
+    crashing the orchestrator loop instead of degrading to None."""
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/fake/claude")
+    monkeypatch.setattr(claude_cli.subprocess, "run", _fake_run(stdout=None))
+    assert claude_cli.query("hello", max_budget_usd=0.1) is None
+
+
 def test_query_returns_none_on_timeout(monkeypatch):
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/fake/claude")
 
