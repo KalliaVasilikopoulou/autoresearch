@@ -215,3 +215,30 @@ def test_chart_val_bpb_trend_renders_without_holdout_data():
         all_metrics = [{"val_bpb": 1.0}, {"val_bpb": 0.9}]
         out = chart_val_bpb_trend(all_metrics, Path(d) / "nf.json", Path(d) / "out.png")
         assert out is not None and out.exists()
+
+
+def test_chart_val_bpb_trend_renders_with_annotation(tmp_path):
+    all_metrics = [{"val_bpb": 1.0 - 0.01 * i} for i in range(10)]
+    annotations = [{"report_index": 4, "label": "regime change"}]
+    out = chart_val_bpb_trend(all_metrics, tmp_path / "nf.json", tmp_path / "out.png", annotations=annotations)
+    assert out is not None and out.exists()
+
+
+def test_chart_val_bpb_trend_skips_malformed_or_out_of_range_annotations(tmp_path):
+    # Must not raise or corrupt the chart -- just silently skip anything
+    # that isn't a well-formed, in-range annotation.
+    all_metrics = [{"val_bpb": 1.0 - 0.01 * i} for i in range(5)]
+    annotations = [
+        {"report_index": "not an int", "label": "bad type"},
+        {"report_index": 2, "label": ""},          # empty label
+        {"report_index": 999, "label": "way out of range"},
+        {"label": "missing report_index"},
+    ]
+    out = chart_val_bpb_trend(all_metrics, tmp_path / "nf.json", tmp_path / "out.png", annotations=annotations)
+    assert out is not None and out.exists()
+
+
+def test_chart_val_bpb_trend_none_annotations_is_a_noop(tmp_path):
+    all_metrics = [{"val_bpb": 1.0}, {"val_bpb": 0.9}]
+    out = chart_val_bpb_trend(all_metrics, tmp_path / "nf.json", tmp_path / "out.png", annotations=None)
+    assert out is not None and out.exists()

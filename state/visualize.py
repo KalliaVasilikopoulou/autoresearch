@@ -268,6 +268,7 @@ def chart_val_bpb_trend(
     all_metrics: List[Dict[str, Any]],
     noise_floor_path: Path,
     path: Path,
+    annotations: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Path]:
     """The single most important chart: val_bpb per report index as muted
     dots, with a running-minimum "frontier" line emphasized in accent blue
@@ -279,6 +280,14 @@ def chart_val_bpb_trend(
     handful of final top-K candidates, see scripts/holdout_eval.py -- so a
     few extra points on this chart, not a chart of its own). None if there
     are no finite val_bpb entries yet.
+
+    annotations: optional campaign-level markers (see
+    state/campaign_annotations.json / Agent3ReportAnalyst._load_annotations)
+    -- e.g. "the search-strategy bug fix landed here" -- drawn as a neutral
+    dashed reference line + label, never a data color, so a real regime
+    change stays visible on the chart instead of silently mixing two
+    different eras of runs with no visual cue. Each needs a "report_index"
+    (int) and "label" (str); anything malformed is skipped, never guessed.
     """
     xs, ys = [], []
     holdout_xs, holdout_ys = [], []
@@ -317,6 +326,20 @@ def chart_val_bpb_trend(
         latest_best = frontier_y[-1]
         ax.axhspan(latest_best - 2 * sigma, latest_best + 2 * sigma, color=SEQUENTIAL_BLUE, alpha=0.08, zorder=1,
                    label=f"±2σ noise floor ({sigma:.4f})")
+
+    for ann in (annotations or []):
+        idx = ann.get("report_index")
+        label = ann.get("label")
+        if not isinstance(idx, int) or not isinstance(label, str) or not label:
+            continue
+        if idx < min(xs) or idx > max(xs):
+            continue  # outside the plotted range -- would render off-axis
+        ax.axvline(x=idx, color=INK_SECONDARY, linestyle="--", linewidth=1, alpha=0.6, zorder=3)
+        ax.annotate(
+            label, xy=(idx, 1.0), xycoords=("data", "axes fraction"),
+            xytext=(4, -4), textcoords="offset points",
+            fontsize=7, color=INK_SECONDARY, rotation=90, va="top", ha="left",
+        )
 
     ax.set_xlabel("report index (chronological)")
     ax.set_ylabel("val_bpb")

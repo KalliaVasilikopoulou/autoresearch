@@ -22,7 +22,7 @@ def _reset_caches(monkeypatch):
 
 
 def _fake_run(stdout: str = "", returncode: int = 0):
-    def run(args, capture_output=True, text=True, timeout=None):
+    def run(args, capture_output=True, text=True, timeout=None, **kwargs):
         return SimpleNamespace(args=args, stdout=stdout, stderr="", returncode=returncode)
     return run
 
@@ -113,7 +113,7 @@ def test_query_returns_none_when_stdout_is_none(monkeypatch):
 def test_query_returns_none_on_timeout(monkeypatch):
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/fake/claude")
 
-    def raise_timeout(args, capture_output=True, text=True, timeout=None):
+    def raise_timeout(args, capture_output=True, text=True, timeout=None, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
 
     monkeypatch.setattr(claude_cli.subprocess, "run", raise_timeout)
@@ -124,7 +124,7 @@ def test_query_passes_budget_and_model_flags_but_not_bare(monkeypatch):
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/fake/claude")
     captured = {}
 
-    def run(args, capture_output=True, text=True, timeout=None):
+    def run(args, capture_output=True, text=True, timeout=None, **kwargs):
         captured["args"] = args
         return SimpleNamespace(stdout=json.dumps({"result": "ok", "total_cost_usd": 0.001, "type": "result"}), stderr="", returncode=0)
 
@@ -140,6 +140,27 @@ def test_query_passes_budget_and_model_flags_but_not_bare(monkeypatch):
     assert "--max-budget-usd" in args and "0.15" in args
     assert "--model" in args and "opus" in args
     assert "--append-system-prompt" in args and "Be terse." in args
+
+
+def test_query_forces_utf8_decoding_not_platform_default(monkeypatch):
+    """Regression: subprocess.run(text=True) without an explicit encoding=
+    decodes stdout using the platform's default codepage -- cp1252 on
+    Windows, not UTF-8. Claude's generated prose routinely contains
+    characters outside cp1252's range (smart quotes, em-dashes, etc.),
+    which crashed subprocess.run's internal reader thread with
+    UnicodeDecodeError in real production use."""
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/fake/claude")
+    captured = {}
+
+    def run(args, capture_output=True, text=True, timeout=None, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(stdout=json.dumps({"result": "ok", "total_cost_usd": 0.001, "type": "result"}), stderr="", returncode=0)
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", run)
+    claude_cli.query("hello", max_budget_usd=0.1)
+
+    assert captured.get("encoding") == "utf-8"
+    assert captured.get("errors") == "replace"
 
 
 # --- call_with_budget --------------------------------------------------

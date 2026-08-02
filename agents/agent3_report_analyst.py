@@ -94,6 +94,13 @@ class Agent3ReportAnalyst:
         # identical hypotheses paid for in a row).
         self._cluster_signature_path = _state / "cluster_hypotheses_signature.json"
 
+        # Campaign-level markers for the val_bpb trend chart (e.g. "the
+        # search-strategy bug fix landed here") -- see _load_annotations.
+        # A real regime change (like a real dry_run/simulated status) is
+        # never removed from the underlying data, but it should stay
+        # visible rather than silently blending two different eras.
+        self.annotations_path = _state / "campaign_annotations.json"
+
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration."""
         if not os.path.exists(config_path):
@@ -591,6 +598,7 @@ class Agent3ReportAnalyst:
                 chart_path = chart_val_bpb_trend(
                     all_metrics, self.noise_floor_path,
                     self.visuals_dir / f"summary_{self.summary_counter:04d}_trend.png",
+                    annotations=self._load_annotations(),
                 )
                 if chart_path:
                     summary_lines.extend(["", f"![val_bpb trend](../visuals/{chart_path.name})"])
@@ -906,6 +914,28 @@ class Agent3ReportAnalyst:
             recommended_hyperparams={},
             reasoning=["Load markdown summary for full details"],
         )
+
+    def _load_annotations(self) -> List[Dict[str, Any]]:
+        """Campaign-level markers for the val_bpb trend chart -- a small,
+        manually-curated JSON file (state/campaign_annotations.json), not
+        auto-detected: inferring "when did the search strategy change" from
+        file timestamps/gaps is exactly the kind of guess this codebase
+        avoids elsewhere (see SYNTHETIC_STATUSES, noise_floor's min-n guard).
+        A real, known event gets recorded here once, deliberately, with a
+        report_index verified against the actual report history -- not
+        reconstructed automatically. Missing/corrupt file -> [] (no
+        annotations drawn), never an error.
+
+        Expected shape: {"annotations": [{"report_index": int, "label": str}, ...]}
+        """
+        if not self.annotations_path.exists():
+            return []
+        try:
+            data = json.loads(self.annotations_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        annotations = data.get("annotations")
+        return annotations if isinstance(annotations, list) else []
 
     def _fingerprint_clusters_signature(self, fingerprint_clusters: Dict[str, Any]) -> str:
         """Deterministic hash of the exact payload that would be sent to

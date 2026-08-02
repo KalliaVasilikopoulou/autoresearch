@@ -155,3 +155,60 @@ def test_build_prompt_summary_no_layer_block_when_no_layers(tmp_path):
     agent3 = _make_agent3(tmp_path)
     result = agent3._build_prompt_summary("## Batch Scope\n- x\n", sorted_layers=[])
     assert "Layer-Level Importance" not in result
+
+
+# --- _load_annotations (campaign-level chart markers) --------------------
+
+def test_load_annotations_missing_file_returns_empty_list(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    assert agent3._load_annotations() == []
+
+
+def test_load_annotations_corrupt_file_returns_empty_list(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    agent3.annotations_path.parent.mkdir(parents=True, exist_ok=True)
+    agent3.annotations_path.write_text("not valid json{{{")
+    assert agent3._load_annotations() == []
+
+
+def test_load_annotations_malformed_annotations_key_returns_empty_list(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    agent3.annotations_path.parent.mkdir(parents=True, exist_ok=True)
+    agent3.annotations_path.write_text(json.dumps({"annotations": "not a list"}))
+    assert agent3._load_annotations() == []
+
+
+def test_load_annotations_reads_real_entries(tmp_path):
+    agent3 = _make_agent3(tmp_path)
+    agent3.annotations_path.parent.mkdir(parents=True, exist_ok=True)
+    agent3.annotations_path.write_text(json.dumps({
+        "annotations": [{"report_index": 380, "label": "EI-guided search began"}]
+    }))
+    result = agent3._load_annotations()
+    assert result == [{"report_index": 380, "label": "EI-guided search began"}]
+
+
+def test_analyze_and_summarize_passes_annotations_to_trend_chart(tmp_path, monkeypatch):
+    """End-to-end: a real annotations file actually reaches the chart call,
+    not just _load_annotations in isolation."""
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    _write_report(reports_dir, "report_0000", val_bpb=1.0, status="remote_ok")
+
+    agent3 = _make_agent3(tmp_path)
+    agent3.generate_charts = True
+    agent3.annotations_path.parent.mkdir(parents=True, exist_ok=True)
+    agent3.annotations_path.write_text(json.dumps({
+        "annotations": [{"report_index": 0, "label": "marker"}]
+    }))
+
+    captured = {}
+    import agents.agent3_report_analyst as agent3_module
+
+    def fake_chart_val_bpb_trend(all_metrics, noise_floor_path, path, annotations=None):
+        captured["annotations"] = annotations
+        return None
+
+    monkeypatch.setattr(agent3_module, "chart_val_bpb_trend", fake_chart_val_bpb_trend)
+    agent3.analyze_and_summarize(["report_0000"])
+
+    assert captured["annotations"] == [{"report_index": 0, "label": "marker"}]

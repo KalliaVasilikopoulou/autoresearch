@@ -55,7 +55,7 @@ def is_cli_available() -> bool:
     try:
         result = subprocess.run(
             [path, "auth", "status"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
         payload = json.loads(result.stdout)
         _availability_cache = bool(payload.get("loggedIn"))
@@ -91,7 +91,16 @@ def query(
         args.extend(["--append-system-prompt", system_prompt])
 
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        # encoding="utf-8" (not the platform default -- cp1252 on Windows):
+        # the CLI's JSON payload carries Claude's actual generated prose,
+        # which routinely includes characters (smart quotes, em-dashes,
+        # etc.) outside cp1252's range. Decoding as cp1252 crashes
+        # subprocess.run's internal reader thread with UnicodeDecodeError
+        # (seen in production) -- errors="replace" as a last-resort safety
+        # net for any byte sequence that's still invalid even as UTF-8.
+        result = subprocess.run(
+            args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
         payload = json.loads(result.stdout)
     except Exception:
         # Broad by design (matches is_cli_available()'s own convention just
