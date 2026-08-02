@@ -46,7 +46,17 @@ LR_SAFE_RANGES = {
 # tracks them -- these are new exploration ranges, narrower than train.py's
 # own hard safety clamps (which remain the outer safety net regardless).
 ARCH_SAFE_RANGES = {
-    "n_layer": (4, 24), "n_embd": (128, 1024), "n_head": (1, 16),
+    # n_layer floor widened 4 -> 1 (dev/checks.txt follow-up): elite n_layer
+    # averages trended 11-12 -> 8 -> 6 across successive EI-guided batches,
+    # and the single best-ever run (val_bpb=1.206506) hit exactly 4, the old
+    # floor -- pipeline_validator was also flagging it pinned there for
+    # several consecutive iterations. train.py's own hard clamp already
+    # allows n_layer down to 1 (_clamp("n_layer", ..., 1, 48)) and every
+    # depth-dependent code path (has_ve's modulo arithmetic,
+    # _build_window_pattern) is already safe at n_layer=1, so this is
+    # purely widening the search's exploration range to match what the
+    # model can actually run, not a new safety boundary.
+    "n_layer": (1, 24), "n_embd": (128, 1024), "n_head": (1, 16),
     # Tier 4: fraction of layers using the short attention window (see
     # train.py's _build_window_pattern, which turns this into an actual S/L
     # pattern string). Continuous so the Sobol/EI surrogate can search it
