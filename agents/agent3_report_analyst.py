@@ -107,7 +107,7 @@ class Agent3ReportAnalyst:
             return {}
         if yaml is None:
             return {}
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
     def _count_existing_summaries(self) -> int:
@@ -137,7 +137,7 @@ class Agent3ReportAnalyst:
         for report_id in new_report_ids:
             report_path = self.reports_dir / f"{report_id}.md"
             if report_path.exists():
-                with open(report_path, "r") as f:
+                with open(report_path, "r", encoding="utf-8") as f:
                     new_reports.append((report_id, f.read()))
                 print(f"[Agent 3]   Loaded: {report_id}")
 
@@ -149,7 +149,7 @@ class Agent3ReportAnalyst:
                 self.summaries_dir / f"summary_{self.summary_counter - 1:04d}.md"
             )
             if prev_summary_path.exists():
-                with open(prev_summary_path, "r") as f:
+                with open(prev_summary_path, "r", encoding="utf-8") as f:
                     prev_summary = f.read()
                     prev_summary_id = f"summary_{self.summary_counter - 1:04d}"
                 print(f"[Agent 3]   Previous summary: {prev_summary_id}")
@@ -170,7 +170,7 @@ class Agent3ReportAnalyst:
         self._latest_summary_evidence = summary
 
         summary_path = self.summaries_dir / f"{summary_id}.md"
-        with open(summary_path, "w") as f:
+        with open(summary_path, "w", encoding="utf-8") as f:
             f.write(summary_content)
 
         self.summary_counter += 1
@@ -283,7 +283,7 @@ class Agent3ReportAnalyst:
         reports: List[Tuple[str, str]] = []
         for path in sorted(self.reports_dir.glob("report_*.md")):
             try:
-                reports.append((path.stem, path.read_text()))
+                reports.append((path.stem, path.read_text(encoding="utf-8")))
             except OSError:
                 continue
         return reports

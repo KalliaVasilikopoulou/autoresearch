@@ -249,6 +249,21 @@ def test_agent2_use_llm_true_includes_llm_text_in_report(tmp_path):
     assert "This run trained normally with no anomalies." in report_text
 
 
+def test_agent2_use_llm_true_writes_report_with_non_cp1252_unicode(tmp_path):
+    """Same regression as Agent 3's summary write -- report_path.write_text()
+    had no explicit encoding, defaulting to cp1252 on Windows and crashing
+    on real LLM-generated Unicode (see agents/agent2_xai_specialist.py)."""
+    agent2 = _make_agent2(tmp_path, use_llm=True)
+    interpretation = "val_bpb ≈ 1.0 — no anomalies detected."
+    with patch.object(claude_cli, "call_with_budget", return_value=interpretation):
+        evidence = agent2.analyze_result({
+            "run_id": "run_0000", "val_bpb": 1.0, "status": "ok",
+            "hyperparams": _base_hyperparams(), "metadata": {},
+        })  # must not raise
+    report_text = (agent2.reports_dir / f"{evidence.report_id}.md").read_text(encoding="utf-8")
+    assert interpretation in report_text
+
+
 def test_agent2_use_llm_true_reports_unavailable_when_call_returns_none(tmp_path):
     agent2 = _make_agent2(tmp_path, use_llm=True)
     with patch.object(claude_cli, "call_with_budget", return_value=None):
@@ -316,6 +331,32 @@ def test_agent3_use_llm_true_includes_narrative_and_logs_usage(tmp_path):
     text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text()
     assert "## Strategic Narrative" in text
     assert "We are converging steadily." in text
+
+
+def test_agent3_use_llm_true_writes_summary_with_non_cp1252_unicode_in_narrative(tmp_path):
+    """Regression: a real production crash. Writing the summary file used
+    open(path, "w") with no explicit encoding, which defaults to the
+    platform locale codepage (cp1252 on Windows) -- Claude's narrative
+    text routinely includes characters outside cp1252's range (this
+    exact "≈" approximately-equal-to sign is what crashed it), which
+    raised UnicodeEncodeError and killed the whole orchestrator run. The
+    summary write (and every other report/summary read/write in Agent
+    1/2/3) now uses encoding="utf-8" explicitly.
+    """
+    reports_dir = tmp_path / "reports" / "agent2_reports"
+    _write_fake_report(reports_dir, "report_0000", 1.0)
+    agent3 = _make_agent3(tmp_path, use_llm=True)
+
+    narrative_with_unicode = "n_layer≈6, n_embd≈840 — converging on architecture."
+
+    def fake_call(prompt, call_site, **kwargs):
+        return {"agent3_strategic_narrative": narrative_with_unicode}.get(call_site)
+
+    with patch.object(claude_cli, "call_with_budget", side_effect=fake_call):
+        summary = agent3.analyze_and_summarize(["report_0000"])  # must not raise
+
+    text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text(encoding="utf-8")
+    assert narrative_with_unicode in text
 
 
 def test_agent3_use_llm_true_narrative_unavailable_when_call_returns_none(tmp_path):

@@ -83,7 +83,7 @@ class Agent2XAISpecialist:
         """Load YAML configuration."""
         if not os.path.exists(config_path):
             return {}
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
     def _count_existing_reports(self) -> int:
@@ -169,7 +169,8 @@ class Agent2XAISpecialist:
                 val_bpb,
                 status=status,
                 run_metrics=run_metrics,
-            )
+            ),
+            encoding="utf-8",
         )
 
         self.report_counter += 1

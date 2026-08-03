@@ -120,7 +120,7 @@ class Orchestrator:
     def _load_orchestrator_config(self, config_path: str) -> Dict[str, Any]:
         if yaml is None or not Path(config_path).exists():
             return {}
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
         return config.get("orchestrator", {})
 
@@ -374,7 +374,7 @@ class Orchestrator:
         if yaml is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             yaml.dump(hyperparams, f)
 
     def _run_parallel_wave(
@@ -545,7 +545,7 @@ class Orchestrator:
 
         summary_path = self.reports_dir / "agent3_summaries" / f"{latest_id}.md"
         if summary_path.exists():
-            with open(summary_path, "r") as f:
+            with open(summary_path, "r", encoding="utf-8") as f:
                 return f.read()
         return None
 

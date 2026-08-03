@@ -250,7 +250,7 @@ def propose_next(
 
     report = render_report(iteration, sm, main_effect, blocks, variance_share, frozen, active_block, full)
     report_dir_path.mkdir(parents=True, exist_ok=True)
-    (report_dir_path / f"plan_{iteration:04d}.md").write_text(report)
+    (report_dir_path / f"plan_{iteration:04d}.md").write_text(report, encoding="utf-8")
     (report_dir_path / f"plan_{iteration:04d}.json").write_text(json.dumps({
         "iteration": iteration, "main_effect": main_effect, "blocks": blocks,
         "variance_share": {"|".join(k): v for k, v in variance_share.items()},

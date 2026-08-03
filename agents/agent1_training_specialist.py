@@ -185,14 +185,14 @@ class Agent1TrainingSpecialist:
             return {}
         if yaml is None:
             return {}
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
     def _init_hyperparams(self) -> Dict[str, Any]:
         """Initialize or load hyperparameters."""
         if self.model_config_path.exists():
             if yaml is not None:
-                with open(self.model_config_path, "r") as f:
+                with open(self.model_config_path, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f) or self._default_hyperparams()
         return self._default_hyperparams()
 
@@ -217,7 +217,7 @@ class Agent1TrainingSpecialist:
         """Save current hyperparams to YAML."""
         if yaml is None:
             return
-        with open(self.model_config_path, "w") as f:
+        with open(self.model_config_path, "w", encoding="utf-8") as f:
             yaml.dump(self.current_hyperparams, f)
 
     def decide_next_hyperparams(
