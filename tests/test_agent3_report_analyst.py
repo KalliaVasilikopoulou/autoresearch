@@ -7,7 +7,7 @@ own filter -- see Agent3ReportAnalyst._is_synthetic.
 
 import json
 
-from agents.agent3_report_analyst import Agent3ReportAnalyst
+from agents.agent3_report_analyst import Agent3ReportAnalyst, _read_text_tolerant
 
 
 def _base_hyperparams(**overrides):
@@ -212,3 +212,34 @@ def test_analyze_and_summarize_passes_annotations_to_trend_chart(tmp_path, monke
     agent3.analyze_and_summarize(["report_0000"])
 
     assert captured["annotations"] == [{"report_index": 0, "label": "marker"}]
+
+
+# --- _read_text_tolerant (real production crash: reading historical .md --
+# files written before the encoding="utf-8" fix landed, which are real
+# cp1252 bytes on disk, not UTF-8) -------------------------------------
+
+def test_read_text_tolerant_reads_utf8_files(tmp_path):
+    path = tmp_path / "report.md"
+    path.write_text("n_layer≈6 — real content", encoding="utf-8")
+    assert _read_text_tolerant(path) == "n_layer≈6 — real content"
+
+
+def test_read_text_tolerant_recovers_legacy_cp1252_files(tmp_path):
+    """Files written before the encoding fix are real cp1252 bytes on disk
+    (an em-dash is 0x97 -- the exact byte from the actual production
+    crash). Must recover the correct original content, not just avoid
+    crashing."""
+    path = tmp_path / "report.md"
+    text = "Converging steadily — no anomalies."
+    path.write_bytes(text.encode("cp1252"))
+    assert _read_text_tolerant(path) == text
+
+
+def test_read_text_tolerant_never_raises_on_undefined_cp1252_byte(tmp_path):
+    """0x81 is undefined in cp1252 too (the exact byte behind the earlier
+    real claude_cli.py crash) -- must degrade via errors="replace" rather
+    than raise UnicodeDecodeError a third time."""
+    path = tmp_path / "report.md"
+    path.write_bytes(b"before \x81 after")
+    result = _read_text_tolerant(path)  # must not raise
+    assert "before" in result and "after" in result

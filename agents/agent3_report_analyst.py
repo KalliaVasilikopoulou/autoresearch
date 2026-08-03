@@ -38,6 +38,25 @@ from state.visualize import (
 )
 
 
+def _read_text_tolerant(path: Path) -> str:
+    """Reads a report/summary .md file as UTF-8 -- what every write in this
+    project uses explicitly now -- falling back to cp1252 (Windows'
+    default locale codepage, and what files written before that encoding
+    fix landed actually contain on disk) so the historical backlog stays
+    readable instead of crashing. A final errors="replace" cp1252 pass is
+    the last resort for the handful of byte values cp1252 itself doesn't
+    define either (0x81, 0x8D, 0x8F, 0x90, 0x9D) -- never raises
+    UnicodeDecodeError.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        try:
+            return path.read_text(encoding="cp1252")
+        except UnicodeDecodeError:
+            return path.read_text(encoding="cp1252", errors="replace")
+
+
 class Agent3ReportAnalyst:
     """Analyzes and aggregates reports from Agent 2 into strategic summaries."""
 
@@ -137,8 +156,7 @@ class Agent3ReportAnalyst:
         for report_id in new_report_ids:
             report_path = self.reports_dir / f"{report_id}.md"
             if report_path.exists():
-                with open(report_path, "r", encoding="utf-8") as f:
-                    new_reports.append((report_id, f.read()))
+                new_reports.append((report_id, _read_text_tolerant(report_path)))
                 print(f"[Agent 3]   Loaded: {report_id}")
 
         # Load previous summary if exists
@@ -149,9 +167,8 @@ class Agent3ReportAnalyst:
                 self.summaries_dir / f"summary_{self.summary_counter - 1:04d}.md"
             )
             if prev_summary_path.exists():
-                with open(prev_summary_path, "r", encoding="utf-8") as f:
-                    prev_summary = f.read()
-                    prev_summary_id = f"summary_{self.summary_counter - 1:04d}"
+                prev_summary = _read_text_tolerant(prev_summary_path)
+                prev_summary_id = f"summary_{self.summary_counter - 1:04d}"
                 print(f"[Agent 3]   Previous summary: {prev_summary_id}")
 
         summary_id = f"summary_{self.summary_counter:04d}"
@@ -283,7 +300,7 @@ class Agent3ReportAnalyst:
         reports: List[Tuple[str, str]] = []
         for path in sorted(self.reports_dir.glob("report_*.md")):
             try:
-                reports.append((path.stem, path.read_text(encoding="utf-8")))
+                reports.append((path.stem, _read_text_tolerant(path)))
             except OSError:
                 continue
         return reports

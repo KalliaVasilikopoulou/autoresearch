@@ -18,7 +18,7 @@ from agents import remote_runner
 from agents.live_progress import MultiGpuProgressDisplay
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
-from agents.agent3_report_analyst import Agent3ReportAnalyst
+from agents.agent3_report_analyst import Agent3ReportAnalyst, _read_text_tolerant
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
 from state.state_manager import StateManager
 from state.results_logger import log_result
@@ -545,8 +545,7 @@ class Orchestrator:
 
         summary_path = self.reports_dir / "agent3_summaries" / f"{latest_id}.md"
         if summary_path.exists():
-            with open(summary_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return _read_text_tolerant(summary_path)
         return None
 
 
