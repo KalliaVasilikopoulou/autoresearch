@@ -41,8 +41,26 @@ agent1:
   # touched for that fallback to work.
   use_surrogate: true
   surrogate_min_observations: 15   # Sobol cold-start size before the RF fits
-  surrogate_cycle_runs: 10         # runs per block-rotation cycle (used once interaction blocking lands)
-  interaction_threshold: 0.15      # reserved for interaction-aware blocking (not used yet)
+  surrogate_cycle_runs: 10         # runs per block-rotation cycle
+  # Two params are tuned jointly when their interaction score is at least
+  # this fraction of the strongest observed interaction (union-find, see
+  # state/surrogate.py::blocks_from_interactions).
+  #
+  # Measured on 552 real runs: interaction strength is 0.0706 for
+  # n_layer x batch_size, 0.0534 for n_embd x batch_size, then drops ~2x to
+  # 0.0265 for everything else. Both strong pairs tie model size to batch
+  # size, which is exactly what a fixed wall-clock budget implies -- together
+  # they set how many optimization steps a run gets (batch_size vs num_steps
+  # is rho=-0.70, n_layer vs num_steps rho=-0.53).
+  #
+  # 0.15 sat below that long tail, so union-find chained 8 of the 11 params
+  # into ONE block and EI ended up varying 8 dimensions at once -- sparse
+  # coverage from 2000 candidates, and no real Gauss-Southwell benefit.
+  # Anything in 0.4-0.7 yields the identical split ([n_layer, n_embd,
+  # batch_size] + singletons), so this sits on a genuine structural boundary
+  # rather than a knife-edge. Re-derive if the search space or the training
+  # budget changes, since the size/batch coupling is budget-dependent.
+  interaction_threshold: 0.4
 
   # Tier 2 token-level XAI (see agents/xai_methods/token_methods.py and
   # dev/INNOVATION_PLAN.md). Costs real extra GPU time (roughly doubled
