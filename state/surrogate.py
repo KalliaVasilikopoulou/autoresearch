@@ -122,13 +122,25 @@ def normalized_value(param: str, value: float, bounds: Dict[str, Tuple[float, fl
     return (v - lo) / (hi - lo)
 
 
-def _denormalize(param: str, t: float, bounds: Dict[str, Tuple[float, float]]) -> float:
-    """Inverse of normalized_value: t in [0,1] -> a value within bounds."""
+def denormalize(param: str, t: float, bounds: Dict[str, Tuple[float, float]]) -> float:
+    """Inverse of normalized_value: t in [0,1] -> a value within bounds.
+
+    Public (like normalized_value, its exact inverse) because state/landscape.py
+    needs it to map PCA-inverse-transformed points back into real
+    hyperparameter space using this module's own log/linear convention --
+    reimplementing that mapping there would be two definitions of the same
+    thing, free to drift apart. t outside [0,1] deliberately extrapolates
+    past `bounds` rather than clamping; callers that need a legal value
+    clamp afterwards against their own hard limits.
+    """
     lo, hi = bounds[param]
     if param in LOG_SCALE_PARAMS and lo > 0:
         log_lo, log_hi = math.log(lo), math.log(hi)
         return math.exp(log_lo + t * (log_hi - log_lo))
     return lo + t * (hi - lo)
+
+
+_denormalize = denormalize  # pre-existing private name, kept for call sites/tests
 
 
 def coordinate_slice(

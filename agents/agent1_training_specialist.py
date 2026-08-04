@@ -213,12 +213,45 @@ class Agent1TrainingSpecialist:
             "ablation_k": self.ablation_k,
         }
 
-    def _save_hyperparams(self):
-        """Save current hyperparams to YAML."""
+    def _save_hyperparams(self, hyperparams: Optional[Dict[str, Any]] = None):
+        """Save hyperparams to YAML -- `hyperparams` when given, otherwise
+        this agent's own current_hyperparams.
+
+        The argument exists because train_model writes this file and then
+        tells train.py to read it, so whatever lands here IS what gets
+        trained. That was safe while Agent 1 was the only decider (its
+        decide_next_hyperparams assigns current_hyperparams to the very same
+        dict object it returns), but Agent 4 proposes probes from its own
+        dict -- so an argument-less save would have trained Agent 1's stale
+        center while results.tsv recorded Agent 4's proposal, mislabelling
+        every probe and poisoning the surrogate with it.
+        """
         if yaml is None:
             return
         with open(self.model_config_path, "w", encoding="utf-8") as f:
-            yaml.dump(self.current_hyperparams, f)
+            yaml.dump(self.current_hyperparams if hyperparams is None else hyperparams, f)
+
+    def relocate_search_center(self, hyperparams: Dict[str, Any]) -> None:
+        """Move the search to a different region of the space.
+
+        Called by the Orchestrator when Agent 4
+        (agents/agent4_landscape_explorer.py) commits to a new region. This
+        is the one concrete mechanism by which that decision changes anything:
+        agents/search_planner.py::propose_next pins
+        `center = dict(current_best_hyperparams)` on every call and only
+        varies the active Gauss-Southwell block around it, so the EI search
+        is structurally local and cannot leave a basin on its own -- moving
+        what it treats as "here" is the only way out.
+
+        Deliberately does NOT touch best_val_bpb: that stays the true
+        best-ever *measurement*, which is still the correct EI f_best target
+        and the correct reference for stagnation/stop conditions. Only the
+        search center relocates; the record of what has actually been
+        achieved is not rewritten.
+        """
+        self.current_hyperparams = dict(hyperparams)
+        self._save_hyperparams()
+        print(f"[Agent 1] Search center relocated to: {hyperparams}")
 
     def decide_next_hyperparams(
         self,
@@ -962,7 +995,8 @@ class Agent1TrainingSpecialist:
         lightweight simulated run so the multi-agent loop still produces
         meaningful artifacts in local or constrained environments.
         """
-        self._save_hyperparams()
+        # Persist exactly what we were asked to train -- see _save_hyperparams.
+        self._save_hyperparams(hyperparams)
 
         print(f"[Agent 1] Starting training with: {hyperparams}")
 

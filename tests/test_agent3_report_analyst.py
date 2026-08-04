@@ -243,3 +243,99 @@ def test_read_text_tolerant_never_raises_on_undefined_cp1252_byte(tmp_path):
     path.write_bytes(b"before \x81 after")
     result = _read_text_tolerant(path)  # must not raise
     assert "before" in result and "after" in result
+
+
+# --- optimization landscape chart (state/landscape.py) -------------------
+
+def _write_results_tsv(path, n_rows):
+    """A real results.tsv written through the actual logger, so this test
+    exercises the same COLUMNS/schema the production path does rather than a
+    hand-rolled TSV that could drift from it."""
+    from state.results_logger import log_result
+    for i in range(n_rows):
+        log_result(
+            run_id=f"run_{i:04d}",
+            hyperparams={
+                "n_layer": 4 + (i % 9), "n_embd": 256 + (i % 6) * 64, "n_head": 4 + (i % 3) * 2,
+                "window_s_fraction": 0.2 + (i % 5) * 0.15,
+                "embedding_lr": 0.05 * (1 + i % 7), "unembedding_lr": 0.001 * (1 + i % 4),
+                "matrix_lr": 0.005 * (1 + i % 6), "scalar_lr": 0.02 * (1 + i % 5),
+                "weight_decay": 0.01 * (i % 8), "warmup_ratio": 0.02 * (i % 6),
+                "batch_size": 2048 * (1 + i % 4),
+            },
+            metrics={"val_bpb": 1.2 + 0.03 * (i % 11), "status": "remote_ok"},
+            results_path=str(path),
+        )
+
+
+def _make_agent3_with_charts(tmp_path):
+    config_path = tmp_path / "agents_config.yaml"
+    config_path.write_text("""
+agent3:
+  batch_size: 1
+  use_llm: false
+  generate_charts: true
+""".strip(), encoding="utf-8")
+    return Agent3ReportAnalyst(
+        config_path=str(config_path), reports_dir=str(tmp_path / "reports"),
+        state_dir=str(tmp_path / "state"), root_dir=str(tmp_path),
+    )
+
+
+def test_landscape_section_absent_when_results_tsv_missing(tmp_path):
+    """No results.tsv at all -- the section simply doesn't exist, no
+    exception and no broken markdown."""
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000", val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3_with_charts(tmp_path)
+    summary = agent3.analyze_and_summarize(["report_0000"])
+    text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text(encoding="utf-8")
+    assert "## Optimization Landscape" not in text
+
+
+def test_landscape_section_absent_when_too_few_real_runs(tmp_path):
+    """Below the surrogate's minimum, there is nothing honest to draw."""
+    _write_results_tsv(tmp_path / "results.tsv", n_rows=5)
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000", val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3_with_charts(tmp_path)
+    summary = agent3.analyze_and_summarize(["report_0000"])
+    text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text(encoding="utf-8")
+    assert "## Optimization Landscape" not in text
+
+
+def test_landscape_section_and_chart_appear_with_enough_real_runs(tmp_path):
+    _write_results_tsv(tmp_path / "results.tsv", n_rows=30)
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000", val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3_with_charts(tmp_path)
+    summary = agent3.analyze_and_summarize(["report_0000"])
+    text = (tmp_path / "reports" / "agent3_summaries" / f"{summary.summary_id}.md").read_text(encoding="utf-8")
+
+    assert "## Optimization Landscape" in text
+    assert "![Optimization landscape](../visuals/" in text
+    charts = list((tmp_path / "reports" / "visuals").glob("*_landscape.png"))
+    assert len(charts) == 1 and charts[0].stat().st_size > 0
+
+
+def test_landscape_chart_receives_agent4_region_flags(tmp_path, monkeypatch):
+    """End-to-end: a real region-flags file on disk actually reaches the
+    chart call, not just load_region_flags in isolation."""
+    _write_results_tsv(tmp_path / "results.tsv", n_rows=30)
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000", val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3_with_charts(tmp_path)
+    agent3.region_flags_path.parent.mkdir(parents=True, exist_ok=True)
+    agent3.region_flags_path.write_text(json.dumps({"regions": [
+        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting", "since_iteration": 30}
+    ]}), encoding="utf-8")
+
+    captured = {}
+    import agents.agent3_report_analyst as agent3_module
+
+    def fake_chart(landscape, path, region_flags=None):
+        captured["region_flags"] = region_flags
+        return None
+
+    monkeypatch.setattr(agent3_module, "chart_optimization_landscape", fake_chart)
+    agent3.analyze_and_summarize(["report_0000"])
+
+    assert captured["region_flags"] == [
+        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting", "since_iteration": 30}
+    ]

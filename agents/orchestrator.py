@@ -19,6 +19,7 @@ from agents.live_progress import MultiGpuProgressDisplay
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst, _read_text_tolerant
+from agents.agent4_landscape_explorer import COMMIT, Agent4LandscapeExplorer
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
 from state.state_manager import StateManager
 from state.results_logger import log_result
@@ -74,7 +75,23 @@ class Orchestrator:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.agent1 = Agent1TrainingSpecialist(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
         self.agent2 = Agent2XAISpecialist(config_path, root_dir=root_dir, reports_dir=reports_dir)
-        self.agent3 = Agent3ReportAnalyst(config_path, state_dir=state_dir, reports_dir=reports_dir)
+        self.agent3 = Agent3ReportAnalyst(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
+        # Agent 4 owns hyperparameter decisions only inside its own bounded
+        # windows; outside them it is entirely inert. Constructed even when
+        # disabled so `self.agent4.enabled` is the single switch rather than
+        # a None check scattered through the loop.
+        self.agent4 = Agent4LandscapeExplorer(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
+
+        # Whichever agent actually decided the current iteration's
+        # hyperparameters -- read by the pipeline_validator call that follows
+        # each decision, so the validator always checks the real decision log
+        # instead of assuming Agent 1 produced it.
+        self._active_decision_log: Optional[Dict[str, Any]] = None
+        self._active_decisions_dir: Path = self.agent1.decisions_dir
+        # Iteration of Agent 4's last check. Starts at 0 so the first check
+        # lands one full check_interval in, never at campaign start (where
+        # there is no recent history to judge stagnation from).
+        self._agent4_last_check = 0
 
         # Set the moment Agent 3 creates a new LLM-backed summary
         # (_process_training_result), consumed by whichever hyperparameter
@@ -167,6 +184,11 @@ class Orchestrator:
             print(f"[Orchestrator] Iteration {iteration + 1}")
             print(f"{'='*60}")
 
+            # Asked before dispatch so an opening window can cap this wave's
+            # size to Agent 4's probe batch (a wave boundary has to be a
+            # decision boundary for the abandon rule to be exact).
+            self._maybe_open_agent4_window(iteration)
+
             wave_result = self._run_parallel_wave(iteration, report_batch, max_iterations)
             if wave_result is not None:
                 iteration, report_batch, halted = wave_result
@@ -187,12 +209,12 @@ class Orchestrator:
                 latest_result = recent_results[-1]
                 latest_val_bpb = latest_result.get("val_bpb")
             best_before_decision = self.agent1.best_val_bpb
-            new_hyperparams = self.agent1.decide_next_hyperparams(
-                latest_summary=latest_summary,
-                evidence=recent_evidence,
+            new_hyperparams = self._decide_next_hyperparams(
                 iteration=iteration,
-                latest_val_bpb=latest_val_bpb,
+                latest_summary=latest_summary,
+                recent_evidence=recent_evidence,
                 recent_results=recent_results,
+                latest_val_bpb=latest_val_bpb,
                 fresh_summary=fresh_summary,
             )
 
@@ -220,8 +242,8 @@ class Orchestrator:
                   f"(interval={self.token_xai_interval}, new_best_just_set={new_best_just_set})")
 
             issues = pipeline_validator.validate_agent1_decision(
-                self.agent1.last_decision_log, recent_evidence, latest_summary,
-                decisions_dir=self.agent1.decisions_dir,
+                self._active_decision_log, recent_evidence, latest_summary,
+                decisions_dir=self._active_decisions_dir,
             )
             if self._handle_issues(iteration, issues):
                 break
@@ -238,6 +260,11 @@ class Orchestrator:
             if halted:
                 break
 
+            # Sequential path: a probe "wave" is just N consecutive
+            # iterations, so the boundary check runs every iteration and
+            # evaluate_batch itself decides when it has a full batch.
+            self._agent4_evaluate(iteration)
+
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
 
@@ -251,6 +278,76 @@ class Orchestrator:
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
         return summary
+
+    def _maybe_open_agent4_window(self, iteration: int) -> bool:
+        """Ask Agent 4, on its own cadence, whether the search looks trapped.
+        Returns True if it took control. A "no" costs zero iterations.
+
+        The cadence is "at least check_interval iterations since the last
+        check", NOT `iteration % check_interval == 0`. Under multi-GPU
+        parallelism the loop counter advances by the wave size, not by 1, so
+        a modulo test silently skips whole checks: at max_parallel_runs=4 the
+        counter goes 28 -> 32 and never sees 30 at all. Since wave size also
+        varies with how many GPUs happen to be free, that made the check
+        schedule effectively random -- a whole campaign could pass without
+        Agent 4 ever engaging.
+        """
+        if not self.agent4.enabled or self.agent4.active:
+            return self.agent4.active
+        if iteration - self._agent4_last_check < self.agent4.check_interval:
+            return False
+        self._agent4_last_check = iteration
+        return self.agent4.consider_intervention(
+            iteration, self.agent1.current_hyperparams, self.agent1.best_val_bpb,
+        )
+
+    def _decide_next_hyperparams(
+        self,
+        iteration: int,
+        latest_summary: Optional[str],
+        recent_evidence: List[Dict[str, Any]],
+        recent_results: List[Dict[str, Any]],
+        latest_val_bpb: Optional[float],
+        fresh_summary: bool,
+        slot: int = 0,
+    ) -> Optional[Dict[str, Any]]:
+        """Route this iteration's decision to whoever owns it -- Agent 4
+        during an open exploration window, Agent 1 otherwise.
+
+        Both the sequential loop and the parallel wave dispatcher funnel
+        through here so the window behaves identically either way, and both
+        record which decision log the validator should then check.
+        """
+        if self.agent4.active:
+            new_hyperparams = self.agent4.propose_probe(iteration, slot=slot)
+            self._active_decision_log = self.agent4.last_decision_log
+            self._active_decisions_dir = self.agent4.decisions_dir
+            print(f"[Orchestrator] Iteration {iteration} decided by Agent 4 "
+                  f"(exploration window, {self.agent4.budget_left} iteration(s) of budget left)")
+            return new_hyperparams
+
+        new_hyperparams = self.agent1.decide_next_hyperparams(
+            latest_summary=latest_summary,
+            evidence=recent_evidence,
+            iteration=iteration,
+            latest_val_bpb=latest_val_bpb,
+            recent_results=recent_results,
+            fresh_summary=fresh_summary,
+        )
+        self._active_decision_log = self.agent1.last_decision_log
+        self._active_decisions_dir = self.agent1.decisions_dir
+        return new_hyperparams
+
+    def _agent4_evaluate(self, iteration: int) -> None:
+        """Probe-wave boundary: let Agent 4 read its batch and act. A COMMIT
+        is the only verdict that changes anything outside Agent 4 itself --
+        it relocates Agent 1's search center, which is what makes the whole
+        mechanism more than a reporting exercise."""
+        if not self.agent4.active:
+            return
+        verdict = self.agent4.evaluate_batch(iteration)
+        if verdict == COMMIT and self.agent4.committed_hyperparams:
+            self.agent1.relocate_search_center(self.agent4.committed_hyperparams)
 
     def _handle_issues(self, iteration: int, issues: List[pipeline_validator.Issue]) -> bool:
         """Prints + persists validator issues. Returns True when the
@@ -311,6 +408,21 @@ class Orchestrator:
         self.state_mgr.update_val_bpb(result_payload.run_id, result_payload.val_bpb)
         log_result(result_payload.run_id, hyperparams, train_result, results_path=str(self.results_path))
         print(f"[Orchestrator] Result logged: {result_payload.run_id}")
+
+        # Inside an exploration window this run was a probe -- feed its
+        # measured val_bpb back so Agent 4 can judge the region at the next
+        # wave boundary. A no-op (and harmless) outside a window.
+        if self.agent4.active:
+            self.agent4.record_result(result_payload.val_bpb)
+            # Agent 1 normally records a new best inside decide_next_hyperparams,
+            # which it never reaches during a window -- so without this, a new
+            # all-time best discovered by a probe would be thrown away, leaving
+            # EI aiming at a stale f_best for the rest of the campaign.
+            if (isinstance(result_payload.val_bpb, (int, float))
+                    and result_payload.val_bpb < self.agent1.best_val_bpb):
+                print(f"[Orchestrator] Agent 4 probe set a new best: "
+                      f"{result_payload.val_bpb:.6f} (was {self.agent1.best_val_bpb:.6f})")
+                self.agent1.best_val_bpb = result_payload.val_bpb
 
         issues = pipeline_validator.validate_training_result(train_result, hyperparams)
         if self._handle_issues(iteration, issues):
@@ -414,6 +526,14 @@ class Orchestrator:
             return None
 
         wave_size = min(len(candidates), max_iterations - iteration)
+        if self.agent4.active:
+            # A wave boundary has to be a decision boundary: Agent 4 abandons
+            # a region when every probe in one batch comes back bad, so a
+            # wave wider than probe_wave_size would blur that test, and one
+            # wider than the remaining budget would overshoot the window.
+            wave_size = min(wave_size, self.agent4.probe_wave_size, self.agent4.budget_left)
+            if wave_size < 1:
+                return None
         print(f"[Orchestrator] Parallel wave: {len(candidates)} GPU(s) available -- "
               f"dispatching {wave_size} concurrent run(s) on GPUs {[c['index'] for c in candidates[:wave_size]]}")
         wave_start = time.time()
@@ -439,13 +559,14 @@ class Orchestrator:
             if fresh_summary:
                 print(f"[Orchestrator] *** Fresh summary available -- Agent 1 will use LLM-informed "
                       f"reasoning for iteration {iteration_for_slot} ***")
-            new_hyperparams = self.agent1.decide_next_hyperparams(
-                latest_summary=latest_summary,
-                evidence=recent_evidence,
+            new_hyperparams = self._decide_next_hyperparams(
                 iteration=iteration_for_slot,
-                latest_val_bpb=latest_val_bpb,
+                latest_summary=latest_summary,
+                recent_evidence=recent_evidence,
                 recent_results=recent_results,
+                latest_val_bpb=latest_val_bpb,
                 fresh_summary=fresh_summary,
+                slot=i,
             )
             if new_hyperparams is None:
                 print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")
@@ -457,8 +578,8 @@ class Orchestrator:
             new_hyperparams["token_xai_enabled"] = token_xai_due
 
             issues = pipeline_validator.validate_agent1_decision(
-                self.agent1.last_decision_log, recent_evidence, latest_summary,
-                decisions_dir=self.agent1.decisions_dir,
+                self._active_decision_log, recent_evidence, latest_summary,
+                decisions_dir=self._active_decisions_dir,
             )
             if self._handle_issues(iteration_for_slot, issues):
                 decision_halt = True
@@ -530,6 +651,10 @@ class Orchestrator:
             hp, train_result = results_by_iteration[it]
             slot_halt, report_batch = self._process_training_result(it, hp, train_result, report_batch)
             halt = halt or slot_halt
+
+        # One wave == one probe batch, so this is exactly the boundary at
+        # which Agent 4 abandons / commits / continues.
+        self._agent4_evaluate(max(results_by_iteration) if results_by_iteration else iteration)
 
         wave_elapsed = time.time() - wave_start
         print(f"[Orchestrator] Wave complete: {len(slots)} run(s) in {_format_duration(wave_elapsed)}")

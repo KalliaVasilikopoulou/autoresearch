@@ -837,3 +837,159 @@ def chart_noise_floor_trend(history: List[Dict[str, Any]], path: Path) -> Option
     ax.grid(axis="y", color=GRIDLINE, linewidth=0.8, zorder=0)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     return _finalize(fig, path, title="Noise floor over time")
+
+
+# ---------------------------------------------------------------------------
+# Part D -- optimization landscape (state/landscape.py)
+# ---------------------------------------------------------------------------
+
+# Predicted terrain gets its own fixed hue, deliberately chosen from the
+# categorical theme rather than the sequential/diverging ramps: height already
+# encodes predicted val_bpb, so color here is doing pure "which point set is
+# this" work. Purple is distinct from the blue real runs, from every
+# STATUS_COLORS entry, and from DIVERGING_POS/NEG -- so it can never be
+# misread as a good/bad judgement.
+PREDICTED_TERRAIN = CATEGORICAL[6]  # "#4a3aa7"
+
+# Confidence maps to opacity, floored/capped so the least-certain terrain is
+# still faintly visible and the most-certain never reads as solid (which is
+# reserved for measured runs).
+PREDICTED_ALPHA_RANGE = (0.15, 0.85)
+
+# Region flags written by Agent 4 (state/landscape.py::REGION_FLAGS). Fixed
+# marker + color per flag, same "one lookup table, never improvised" pattern
+# as STATUS_COLORS.
+REGION_FLAG_STYLES = {
+    "investigating":        {"marker": "o", "color": INK_SECONDARY, "label": "investigating"},
+    "currently_exploiting": {"marker": "*", "color": STATUS_COLORS["good"], "label": "exploiting now"},
+    "no_optimum":           {"marker": "x", "color": INK_MUTED, "label": "no optimum found"},
+    "local_optimum":        {"marker": "^", "color": DIVERGING_POS, "label": "local optimum"},
+    "exploitation_paused":  {"marker": "s", "color": INK_MUTED, "label": "exploitation paused"},
+}
+_REGION_FLAG_FALLBACK = {"marker": "P", "color": INK_MUTED, "label": "flagged"}
+
+
+def _hex_to_rgb(value: str) -> Tuple[float, float, float]:
+    value = value.lstrip("#")
+    return tuple(int(value[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def chart_optimization_landscape(
+    landscape: Optional[Dict[str, Any]],
+    path: Path,
+    region_flags: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Path]:
+    """The optimization landscape as terrain: a 2D PCA-compressed floor of
+    the tuned hyperparameters, with val_bpb as height.
+
+    Two overlaid sources, per state/landscape.py::build_landscape:
+      - measured runs, drawn solid in the sequential blue;
+      - the surrogate's predicted surface over never-tried configurations,
+        drawn in one fixed hue whose *opacity* is its prediction confidence
+        (across-tree spread) -- faint where the model is guessing.
+
+    Region flags from Agent 4 (local optimum / exploitation paused / no
+    optimum / currently exploiting) are placed by re-projecting their raw
+    hyperparameters onto this landscape's current PCA basis; a flag that
+    can't be projected is skipped rather than drawn somewhere invented.
+
+    Returns None (never a fabricated chart) when there's no landscape.
+
+    Read this as an approximation, not ground truth: compressing 11
+    dimensions to 2 and inverse-transforming back is lossy, so the surface
+    is a projection of the surrogate's belief. The title carries that
+    caveat and the explained-variance fraction that quantifies it.
+    """
+    if not landscape:
+        return None
+    real_points = landscape.get("real_points") or []
+    grid_x = landscape.get("grid_x") or []
+    grid_y = landscape.get("grid_y") or []
+    grid_z = landscape.get("grid_z_mean") or []
+    if not real_points or not grid_x or not grid_y or not grid_z:
+        return None
+
+    import numpy as np  # local: only this chart needs it, matching module convention
+
+    fig = plt.figure(figsize=(8, 6), dpi=150)
+    fig.patch.set_facecolor(SURFACE)
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_facecolor(SURFACE)
+    # _new_figure is 2D-only (it styles left/bottom spines); replicate the
+    # equivalent recessive styling for the three 3D panes by hand.
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.set_pane_color((*_hex_to_rgb(SURFACE), 1.0))
+        axis._axinfo["grid"].update(color=GRIDLINE, linewidth=0.6)
+        axis.line.set_color(BASELINE)
+        axis.label.set_color(INK_SECONDARY)
+    ax.tick_params(colors=INK_SECONDARY, labelsize=8)
+
+    # -- predicted terrain: one surface, per-face alpha = confidence --------
+    mesh_x, mesh_y = np.meshgrid(np.array(grid_x), np.array(grid_y))
+    mesh_z = np.array(grid_z)
+    confidence = np.array(landscape.get("grid_confidence") or np.full(mesh_z.shape, 0.5))
+    lo, hi = PREDICTED_ALPHA_RANGE
+    alphas = lo + np.clip(confidence, 0.0, 1.0) * (hi - lo)
+    rgb = _hex_to_rgb(PREDICTED_TERRAIN)
+    facecolors = np.empty(mesh_z.shape + (4,))
+    facecolors[..., 0], facecolors[..., 1], facecolors[..., 2] = rgb
+    facecolors[..., 3] = alphas
+    ax.plot_surface(
+        mesh_x, mesh_y, mesh_z, facecolors=facecolors, shade=False,
+        linewidth=0, antialiased=True, rstride=1, cstride=1, zorder=1,
+    )
+
+    # -- measured runs: solid, opaque, on top -------------------------------
+    ax.scatter(
+        [p["x"] for p in real_points], [p["y"] for p in real_points], [p["z"] for p in real_points],
+        color=SEQUENTIAL_BLUE, s=26, alpha=1.0, depthshade=False, zorder=5,
+    )
+
+    # -- Agent 4 region flags ------------------------------------------------
+    drawn_flags = {}
+    if region_flags:
+        from state.landscape import project_point
+        # Flags float above everything (terrain and measured runs alike) with
+        # a stem dropped to the terrain: at a marker's own height inside the
+        # cloud they'd read as data points, and 3D perspective makes a bare
+        # floating marker's (x, y) genuinely ambiguous.
+        z_floor = min(float(np.min(mesh_z)), min(p["z"] for p in real_points))
+        z_ceiling = max(float(np.max(mesh_z)), max(p["z"] for p in real_points))
+        z_flag = z_ceiling + (z_ceiling - z_floor) * 0.12
+        for entry in region_flags:
+            flag = entry.get("flag")
+            point = project_point(entry.get("hyperparams") or {}, landscape)
+            if point is None:
+                continue  # unplaceable -- skip rather than guess a position
+            style = REGION_FLAG_STYLES.get(flag, _REGION_FLAG_FALLBACK)
+            ax.plot([point[0], point[0]], [point[1], point[1]], [z_floor, z_flag],
+                    color=style["color"], linewidth=1.0, alpha=0.55, zorder=6)
+            ax.scatter([point[0]], [point[1]], [z_flag], marker=style["marker"],
+                       color=style["color"], s=140, depthshade=False, zorder=7)
+            drawn_flags[flag] = style
+
+    # -- legend: identity is never color-alone ------------------------------
+    handles = [
+        plt.Line2D([], [], marker="o", linestyle="none", color=SEQUENTIAL_BLUE,
+                   markersize=7, label=f"measured runs (n={len(real_points)})"),
+        plt.Line2D([], [], marker="s", linestyle="none", color=PREDICTED_TERRAIN,
+                   markersize=8, alpha=0.7, label="surrogate prediction (opacity = confidence)"),
+    ]
+    for flag, style in drawn_flags.items():
+        handles.append(plt.Line2D([], [], marker=style["marker"], linestyle="none",
+                                  color=style["color"], markersize=8, label=style["label"]))
+    ax.legend(handles=handles, loc="upper left", frameon=False, fontsize=7,
+              labelcolor=INK_SECONDARY, bbox_to_anchor=(0.0, 1.0))
+
+    ax.set_xlabel("PCA component 1 (compressed hyperparameters)", fontsize=8)
+    ax.set_ylabel("PCA component 2", fontsize=8)
+    ax.set_zlabel("val_bpb (lower is better)", fontsize=8)
+    # Fixed viewing angle so charts from different points in the campaign are
+    # visually comparable to each other rather than arbitrarily rotated.
+    ax.view_init(elev=25, azim=-60)
+
+    variance = sum(landscape.get("explained_variance_ratio") or [])
+    title = (f"Optimization landscape — approximate (PCA-compressed, "
+             f"{landscape.get('n_real', len(real_points))} real runs, "
+             f"{variance:.0%} of hyperparameter variance explained)")
+    return _finalize(fig, path, title=title)

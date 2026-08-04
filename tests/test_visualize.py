@@ -7,6 +7,7 @@ that valid synthetic data actually renders without error.
 """
 from state.visualize import (
     chart_ei_candidates,
+    chart_optimization_landscape,
     chart_fingerprint_adjustments_trend,
     chart_interaction_matrix,
     chart_noise_floor_trend,
@@ -241,4 +242,84 @@ def test_chart_val_bpb_trend_skips_malformed_or_out_of_range_annotations(tmp_pat
 def test_chart_val_bpb_trend_none_annotations_is_a_noop(tmp_path):
     all_metrics = [{"val_bpb": 1.0}, {"val_bpb": 0.9}]
     out = chart_val_bpb_trend(all_metrics, tmp_path / "nf.json", tmp_path / "out.png", annotations=None)
+    assert out is not None and out.exists()
+
+
+# ---------------------------------------------------------------------------
+# chart_optimization_landscape
+# ---------------------------------------------------------------------------
+
+def _fake_landscape(resolution=3):
+    """A hand-built landscape dict in state/landscape.py::build_landscape's
+    exact output shape -- keeps this a pure chart test (no sklearn fit, no
+    real results.tsv), the same way the other chart tests here hand-build
+    their inputs."""
+    grid = [float(i) for i in range(resolution)]
+    return {
+        "real_points": [
+            {"x": 0.1, "y": 0.2, "z": 1.30, "hyperparams": {"n_layer": 6}},
+            {"x": 1.4, "y": 0.8, "z": 1.21, "hyperparams": {"n_layer": 8}},
+            {"x": 0.9, "y": 1.7, "z": 1.45, "hyperparams": {"n_layer": 4}},
+        ],
+        "grid_x": grid,
+        "grid_y": grid,
+        "grid_z_mean": [[1.3 + 0.01 * (r + c) for c in range(resolution)] for r in range(resolution)],
+        "grid_z_std": [[0.01 * (r + c) for c in range(resolution)] for r in range(resolution)],
+        "grid_confidence": [[(r + c) / (2 * resolution) for c in range(resolution)] for r in range(resolution)],
+        "grid_hyperparams": [[{"n_layer": 6} for _ in range(resolution)] for _ in range(resolution)],
+        "explained_variance_ratio": [0.42, 0.19],
+        "n_real": 3,
+        "feature_columns": ["n_layer"],
+        "bounds": {"n_layer": [4, 8]},
+        "pca_mean": [0.5],
+        "pca_components": [[1.0], [0.0]],
+    }
+
+
+def test_chart_optimization_landscape_none_when_landscape_none(tmp_path):
+    assert chart_optimization_landscape(None, tmp_path / "out.png") is None
+
+
+def test_chart_optimization_landscape_none_when_landscape_empty(tmp_path):
+    assert chart_optimization_landscape({}, tmp_path / "out.png") is None
+
+
+def test_chart_optimization_landscape_none_when_no_real_points(tmp_path):
+    landscape = _fake_landscape()
+    landscape["real_points"] = []
+    assert chart_optimization_landscape(landscape, tmp_path / "out.png") is None
+
+
+def test_chart_optimization_landscape_renders(tmp_path):
+    out = chart_optimization_landscape(_fake_landscape(), tmp_path / "out.png")
+    assert out is not None and out.exists()
+
+
+def test_chart_optimization_landscape_renders_with_region_flags(tmp_path):
+    region_flags = [
+        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting", "since_iteration": 30},
+        {"hyperparams": {"n_layer": 4}, "flag": "local_optimum", "since_iteration": 12},
+        {"hyperparams": {"n_layer": 8}, "flag": "exploitation_paused", "since_iteration": 20},
+    ]
+    out = chart_optimization_landscape(_fake_landscape(), tmp_path / "out.png", region_flags=region_flags)
+    assert out is not None and out.exists()
+
+
+def test_chart_optimization_landscape_tolerates_unknown_flag_value(tmp_path):
+    """An unrecognized flag string must fall back to a default marker rather
+    than raising -- the flag vocabulary can grow on Agent 4's side without
+    breaking every historical chart."""
+    region_flags = [{"hyperparams": {"n_layer": 6}, "flag": "some_future_flag"}]
+    out = chart_optimization_landscape(_fake_landscape(), tmp_path / "out.png", region_flags=region_flags)
+    assert out is not None and out.exists()
+
+
+def test_chart_optimization_landscape_skips_unprojectable_flags(tmp_path):
+    """A flag whose hyperparams don't cover the landscape's feature columns
+    can't be placed -- it's dropped, never drawn at a guessed position."""
+    region_flags = [
+        {"hyperparams": {"something_else": 1}, "flag": "local_optimum"},
+        {"flag": "no_optimum"},  # no hyperparams at all
+    ]
+    out = chart_optimization_landscape(_fake_landscape(), tmp_path / "out.png", region_flags=region_flags)
     assert out is not None and out.exists()

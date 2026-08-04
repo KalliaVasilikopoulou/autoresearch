@@ -120,6 +120,113 @@ agent3:
   # token_xai_interval cadence trigger (agents/orchestrator.py).
   min_cluster_observations: 8
 
+# AGENT 4: OPTIMIZATION LANDSCAPE EXPLORER
+#
+# Every other search path in this system is local: agents/search_planner.py
+# pins its EI center at the current best on every call and only varies the
+# active Gauss-Southwell block around it, so nothing here can leave a basin
+# once the campaign settles into one. Agent 4 is that missing capability.
+# Periodically it checks whether the frontier is still moving; if it is, it
+# returns control immediately having spent nothing. If it isn't, it takes a
+# bounded budget of iterations to probe the least-explored region of the
+# landscape and decides whether to relocate the whole search there.
+agent4:
+  enabled: true
+
+  # How often (in iterations) Agent 4 checks whether the search looks
+  # trapped. A check that finds a healthy frontier costs zero iterations.
+  check_interval: 30
+
+  # Maximum iterations one exploration window may consume. 9 = three probe
+  # waves of 3, so the budget divides evenly into whole decision batches
+  # with no orphan iteration left over.
+  window_iterations: 9
+
+  # Probes dispatched per batch. This is also the abandon rule -- a region
+  # is condemned when every probe in one batch comes back bad -- so a probe
+  # wave is exactly one decision boundary. Deliberately one setting rather
+  # than two: the orchestrator caps multi-GPU wave size to this while a
+  # window is open, so the abandon test stays exact under parallelism as
+  # well as sequentially, which it could not if the two could diverge.
+  probe_wave_size: 3
+
+  # A probe counts as "bad" if its val_bpb exceeds the departed region's
+  # elite reference (median of its top quartile) by more than this fraction.
+  bad_tolerance: 0.05
+
+  # --- the commit bar -----------------------------------------------------
+  # Committing relocates the ENTIRE campaign's focus and is expensive to
+  # undo, so all three of these must hold: enough runs, a top-quartile
+  # median beating the departed region's by commit_margin, and the whole
+  # sample's median beating it too. The third clause matters more than it
+  # looks: top_quartile_by_val_bpb returns max(1, int(n * 0.25)) entries, so
+  # at window-sized samples "top quartile" is literally the single best run
+  # -- without a distributional check, one lucky draw could move the whole
+  # search.
+  #
+  # commit_margin is CALIBRATED AGAINST THE MEASURED NOISE FLOOR, not picked
+  # as a round number. sigma is 0.003187 (state/noise_floor.json) = 0.24% of
+  # a typical val_bpb, so a percentage bar here is worth far more sigma than
+  # it looks. An earlier 0.03 was ~11.6 sigma, putting the bar at 1.1962 --
+  # below every one of 514 historical runs including the all-time best
+  # (1.2065). Agent 4 would have explored at every check and been
+  # mathematically unable to ever act on what it found.
+  #
+  # 0.006 is ~2.3 sigma (bar ~1.2258, cleared by ~2.3% of historical runs).
+  # The lower bound on this number is set by min_runs_before_commit: at 6
+  # runs, top_quartile_by_val_bpb returns max(1, int(6*0.25)) = exactly ONE
+  # run, so this clause is a single-run comparison carrying a full +/-sigma
+  # of measurement noise. Below ~2 sigma the campaign would be relocating on
+  # noise. Raising min_runs_before_commit to 8+ would make the quartile 2+
+  # runs and justify a smaller margin, at the cost of most of the window
+  # budget going to one region.
+  #
+  # Deliberately relaxed from 3.9 sigma: the error actually being suffered is
+  # the false NEGATIVE (the frontier has not moved in 303 runs), while a
+  # false positive costs roughly one check_interval of detour. Note the
+  # detour is not automatically clawed back -- a heavily-sampled region has
+  # low surrogate uncertainty, and Agent 4 picks candidates by HIGH
+  # uncertainty, so it will not naturally navigate back to an abandoned good
+  # region. Independent protection comes from the second commit clause
+  # (median of all probes vs the origin's median), which is a full-sample
+  # test and is unaffected by this margin.
+  commit_margin: 0.006
+  min_runs_before_commit: 6
+
+  # Runs in a region before leaving it can honestly be called a "local
+  # optimum" rather than merely "exploitation paused". A short window does
+  # not license the stronger claim.
+  heavy_exploitation_n: 20
+
+  # How wide a "region" is, as a fraction of the landscape's PCA grid extent
+  # -- the same 2D space state/visualize.py draws, so a region means the
+  # same thing to the code and on the chart. Measured against the real 514-run
+  # history: 0.15 swept in 63% of the entire campaign as one "region", which
+  # turns the new-vs-origin comparison into new-vs-everything and defeats the
+  # point. 0.05 captures ~15% (77 runs) -- an actual neighborhood, still large
+  # enough for a stable top-quartile reference.
+  region_radius: 0.05
+
+  # Frontier is "stagnant" when the best-so-far improved by less than
+  # stagnation_min_improvement (relative, so the bar means the same thing at
+  # val_bpb 1.8 as at 1.2) over the last stagnation_lookback runs.
+  stagnation_lookback: 10
+  stagnation_min_improvement: 0.005
+
+  # statistics | hybrid | llm
+  #   statistics -- fully deterministic, zero LLM cost.
+  #   hybrid     -- decisions stay deterministic; the LLM only writes the
+  #                 prose decision summary each window reads back for
+  #                 context (~2-4 calls per 30 iterations).
+  #   llm        -- the LLM additionally gets a veto on a commit. It can
+  #                 only block one the statistics already approved, never
+  #                 approve one on its own, and a failed/over-budget call
+  #                 falls back to the deterministic verdict.
+  llm_mode: hybrid
+
+  # Resolution of the predicted-surface grid shared with the landscape chart.
+  grid_resolution: 24
+
 # LLM / COPILOT INTEGRATION (dev/checks.txt item 4)
 # Backs agent1.use_llm / agent2.use_llm / agent3.use_llm. Calls the Claude
 # Code CLI (agents/claude_cli.py) -- the subscription you're already logged

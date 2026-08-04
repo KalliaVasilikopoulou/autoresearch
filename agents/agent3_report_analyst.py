@@ -16,14 +16,16 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents import claude_cli
 from agents.protocols import SummaryEvidence
-from agents.agent1_training_specialist import LR_KEYS
+from agents.agent1_training_specialist import LR_KEYS, SEARCH_SPACE
 from state import llm_usage
 from state.clustering import (
     cluster_attention_trajectories,
     cluster_fingerprints,
     trajectory_smoothness_correlation,
 )
-from state.results_analysis import SYNTHETIC_STATUSES, top_quartile_by_val_bpb
+from state.landscape import build_landscape, load_region_flags
+from state.results_analysis import SYNTHETIC_STATUSES, load_results, top_quartile_by_val_bpb
+from state.surrogate import fit_surrogate
 from state.visualize import (
     chart_attention_trajectory_clusters,
     chart_fingerprint_adjustments_trend,
@@ -31,6 +33,7 @@ from state.visualize import (
     chart_hyperparameter_importance_evolution,
     chart_layer_importance_distribution,
     chart_noise_floor_trend,
+    chart_optimization_landscape,
     chart_pipeline_issues_trend,
     chart_status_distribution,
     chart_token_fingerprint_scalars_evolution,
@@ -65,10 +68,14 @@ class Agent3ReportAnalyst:
         config_path: str = "agents_config.yaml",
         state_dir: Optional[str] = None,
         reports_dir: Optional[str] = None,
+        root_dir: Optional[str] = None,
     ):
-        """state_dir/reports_dir let callers (tests, Orchestrator) redirect
-        every file this class touches instead of always hitting the repo
-        root. Defaults preserve the original cwd-relative behavior exactly.
+        """state_dir/reports_dir/root_dir let callers (tests, Orchestrator)
+        redirect every file this class touches instead of always hitting the
+        repo root. Defaults preserve the original cwd-relative behavior
+        exactly. root_dir (same meaning as Agent1TrainingSpecialist's) locates
+        results.tsv, which this class only needs for the optimization-landscape
+        chart -- every other statistic here comes from agent2_reports/*.md.
         """
         self.config = self._load_config(config_path)
         self.agent3_config = self.config.get("agent3", {})
@@ -90,6 +97,11 @@ class Agent3ReportAnalyst:
         # agents/pipeline_validator.py's per-run issue logs.
         self.decisions_dir = _reports / "agent1_decisions"
         self.validation_dir = _reports / "pipeline_validation"
+        # Optimization-landscape chart inputs: the raw run history (the only
+        # thing here read from results.tsv rather than agent2_reports/*.md)
+        # and Agent 4's region flags, drawn onto the landscape when present.
+        self.results_path = (Path(root_dir) if root_dir else Path(".")) / "results.tsv"
+        self.region_flags_path = _state / "agent4_region_flags.json"
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()
@@ -640,6 +652,24 @@ class Agent3ReportAnalyst:
                     summary_lines.extend(["", f"![Run status distribution](../visuals/{chart_path.name})"])
             except Exception as _e:
                 print(f"[Agent 3] Chart generation (status) failed: {_e}")
+            try:
+                # The one chart here sourced from results.tsv rather than
+                # agent2_reports/*.md -- the surrogate has to be fitted on the
+                # same rows it was trained on for the predicted surface to
+                # mean anything. Measured at ~0.25s (fit) + 0.02s (landscape)
+                # + 0.2s (render) on 510 real runs, so it needs no throttling
+                # at this cadence; if that ever changes, the
+                # _fingerprint_clusters_signature/_load_last_cluster_signature
+                # sha256 pattern in this file is the ready-made skip mechanism.
+                landscape_path = self._build_landscape_chart()
+                if landscape_path:
+                    summary_lines.extend([
+                        "",
+                        "## Optimization Landscape",
+                        f"![Optimization landscape](../visuals/{landscape_path.name})",
+                    ])
+            except Exception as _e:
+                print(f"[Agent 3] Chart generation (optimization landscape) failed: {_e}")
 
         summary_lines.extend([
             "",
@@ -953,6 +983,32 @@ class Agent3ReportAnalyst:
             return []
         annotations = data.get("annotations")
         return annotations if isinstance(annotations, list) else []
+
+    def _build_landscape_chart(self) -> Optional[Path]:
+        """PCA-compressed 3D view of the search: measured runs plus the
+        surrogate's predicted surface over never-tried configurations, with
+        Agent 4's region flags overlaid.
+
+        Returns None -- and adds no summary section -- whenever any input is
+        genuinely missing (no results.tsv, too few real runs to fit a
+        surrogate, scikit-learn absent). Same "no section exists for missing
+        data" contract every other chart block in this class follows.
+
+        hard_bounds is SEARCH_SPACE (the legal range), deliberately not the
+        surrogate's narrower observed range: the predicted half of this chart
+        exists precisely to show combinations that sit outside what has been
+        tried so far.
+        """
+        rows = load_results(str(self.results_path))
+        surrogate_model = fit_surrogate(rows)
+        if surrogate_model is None:
+            return None
+        landscape = build_landscape(rows, surrogate_model, hard_bounds=SEARCH_SPACE)
+        return chart_optimization_landscape(
+            landscape,
+            self.visuals_dir / f"summary_{self.summary_counter:04d}_landscape.png",
+            region_flags=load_region_flags(self.region_flags_path),
+        )
 
     def _fingerprint_clusters_signature(self, fingerprint_clusters: Dict[str, Any]) -> str:
         """Deterministic hash of the exact payload that would be sent to
