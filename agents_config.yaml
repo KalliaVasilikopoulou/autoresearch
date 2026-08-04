@@ -19,7 +19,14 @@ agent1:
   cost_limit_usd: 50.0
 
   # Training time budget per model (seconds)
-  training_budget_seconds: 300
+  # SSH-timeout base ONLY -- it does NOT set training length. The budget is
+  # prepare.py's TOKEN_BUDGET (12.5M tokens); train.py stops on tokens, not
+  # seconds. Wall-clock therefore varies with throughput and server load:
+  # median ~5 min, p90 ~10 min, ~19 min at the slowest throughput observed,
+  # with a hard 1800s safety cap in train.py. This is set above that cap plus
+  # eval/ablation overhead (~230s measured) so the SSH channel never gives up
+  # on a run that is still legitimately working.
+  training_budget_seconds: 2000
 
   # Safe operating ranges for each of train.py's 4 LR groups (see
   # GPT.setup_optimizer in train.py). Values are clamped to these ranges
@@ -75,6 +82,25 @@ agent1:
   # and fingerprinting into one process with no checkpoint save/reload, so
   # the actual best run can't be retroactively fingerprinted).
   token_xai_interval: 5
+
+  # Score the held-out shard (prepare.py's HOLDOUT_SHARD, which the search
+  # never trains or selects on) whenever a run sets a new best val_bpb.
+  #
+  # Why it matters: every accept/reject decision this campaign makes is
+  # against ONE pinned validation shard, and it has now made 500+ of them --
+  # a multiple-comparisons problem. With sigma=0.003187, the expected
+  # inflation of "best of N" from noise alone is about sigma*sqrt(2*ln N)
+  # ~= 0.011 bpb at N=564, against an elite-to-best gap of ~0.041. So a
+  # meaningful slice of the apparent lead could be selection luck. The
+  # holdout shard is the instrument that tells the difference, and until
+  # this flag existed it was only reachable via a manual end-of-campaign
+  # script (scripts/holdout_eval.py) -- so drift was never actually tracked.
+  #
+  # Cost is one extra eval pass, and only on a genuine new best (none in the
+  # last 300+ runs), so it is effectively free. train.py makes the
+  # comparison itself, in-process, because once a run ends its model is gone
+  # and a record-setting config can never be re-scored afterwards.
+  holdout_on_new_best: true
 
   # token_xai_seq_len/token_xai_n_batches ARE read by train.py directly from
   # model_hyperparams.yaml (same as ablation_k below), not from this file --

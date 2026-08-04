@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -139,6 +140,13 @@ class Orchestrator:
         # sampling policy, not a hyperparameter search decision.
         self.token_xai_interval = int(self.agent1.agent1_config.get("token_xai_interval", 5))
 
+        # Same shape of policy: whether a run that sets a new best should also
+        # be scored on the held-out shard, so selection bias against the one
+        # pinned validation shard is tracked continuously instead of only by
+        # a manual end-of-campaign script. See _set_holdout_threshold.
+        self.holdout_on_new_best = bool(
+            self.agent1.agent1_config.get("holdout_on_new_best", True))
+
         # Deterministic pipeline validation (agents/pipeline_validator.py):
         # timestamped run directories, never cleared on startup -- that
         # history is exactly what catches intermittent bugs -- pruned to the
@@ -255,6 +263,7 @@ class Orchestrator:
             new_hyperparams["token_xai_enabled"] = token_xai_due
             print(f"[Orchestrator] token_xai_enabled={token_xai_due} "
                   f"(interval={self.token_xai_interval}, new_best_just_set={new_best_just_set})")
+            self._set_holdout_threshold(new_hyperparams)
 
             issues = pipeline_validator.validate_agent1_decision(
                 self._active_decision_log, recent_evidence, latest_summary,
@@ -293,6 +302,35 @@ class Orchestrator:
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
         return summary
+
+    def _set_holdout_threshold(self, hyperparams: Dict[str, Any]) -> None:
+        """Ask train.py to also score the held-out shard if this run turns out
+        to beat the campaign's best.
+
+        The search compares every run against ONE pinned validation shard, and
+        this campaign has now made 500+ accept/reject decisions against it --
+        a multiple-comparisons problem prepare.py's HOLDOUT_SHARD exists
+        specifically to detect (a config can look better on that shard than it
+        really is). Until now the holdout was only reachable via a manual
+        end-of-campaign script, so drift was never actually tracked.
+
+        Passing a threshold rather than a boolean is what makes this exact:
+        whether a run is a new best isn't known until its val_bpb exists, and
+        by then train.py's process is over and the model is gone (no
+        checkpoint save/reload). train.py evaluates val_bpb and this
+        comparison in the same process, so the holdout number always comes
+        from the very model that set the record.
+
+        Costs one extra eval pass, and only on a genuine new best -- which
+        for this campaign means roughly never (the best has not moved in 300+
+        runs). No threshold is set until a finite best exists, so a fresh
+        campaign doesn't holdout-eval its opening runs against infinity.
+        """
+        if not self.holdout_on_new_best:
+            return
+        best = self.agent1.best_val_bpb
+        if isinstance(best, (int, float)) and math.isfinite(best):
+            hyperparams["holdout_eval_if_below"] = float(best)
 
     def _maybe_open_agent4_window(self, iteration: int) -> bool:
         """Ask Agent 4, on its own cadence, whether the search looks trapped.
@@ -591,6 +629,7 @@ class Orchestrator:
             new_best_just_set = latest_val_bpb is not None and latest_val_bpb < best_before_decision
             token_xai_due = (iteration_for_slot % self.token_xai_interval == 0) or new_best_just_set
             new_hyperparams["token_xai_enabled"] = token_xai_due
+            self._set_holdout_threshold(new_hyperparams)
 
             issues = pipeline_validator.validate_agent1_decision(
                 self._active_decision_log, recent_evidence, latest_summary,

@@ -986,7 +986,8 @@ class Agent1TrainingSpecialist:
         return recommendations
 
     def train_model(
-        self, hyperparams: Dict[str, Any], dry_run: bool = False, iteration: int = 0
+        self, hyperparams: Dict[str, Any], dry_run: bool = False, iteration: int = 0,
+        gpu_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Train model and return metrics.
@@ -1016,6 +1017,14 @@ class Agent1TrainingSpecialist:
                 print("[Agent 1] Remote GPU server configured — running training remotely")
                 metrics = run_training_remote(
                     hyperparams_local_path=str(self.model_config_path),
+                    # None (the default) keeps the existing auto-discovery.
+                    # An explicit index matters for measurement rather than
+                    # search: scripts/noise_floor.py has to spread its repeats
+                    # across GPUs deliberately, because auto-discovery sorts by
+                    # free memory and so parks every sequential repeat on the
+                    # same device -- which is how the campaign ended up with a
+                    # sigma that captured only within-GPU noise.
+                    gpu_index=gpu_index,
                     # +120s slack: covers the head-ablation study train.py now
                     # runs after its official eval, plus SSH/data overhead.
                     timeout=self.training_budget + 120,
@@ -1092,6 +1101,7 @@ class Agent1TrainingSpecialist:
         "num_params_m:": ("num_params_M", float),
         "depth:": ("depth", int),
         "holdout_val_bpb:": ("holdout_val_bpb", float),
+        "budget_shortfall_pct:": ("budget_shortfall_pct", float),
     }
 
     # Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`

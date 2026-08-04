@@ -27,6 +27,25 @@ except ImportError:
 
 MIN_SURROGATE_N = 15
 
+# A run is "compute-starved" when it completed this fraction fewer training
+# steps than its OWN hyperparameters predict it should have. Measured on 581
+# real runs: num_steps is 91% predictable from the config alone (OOB R2=0.909),
+# so a large shortfall is not the config being slow -- it is the run having
+# been robbed of compute by something outside the experiment.
+#
+# On this shared university DGX that something is other tenants. Watching one
+# hour of identical-config repeats, GPUs went from all-idle to four occupied
+# and step counts fell 1688 -> 1304 (-23%) on the SAME config, moving val_bpb
+# by 0.028 -- roughly the entire elite-to-best gap of the campaign. 29% of
+# historical runs are >10% short, 14% are >20% short.
+#
+# Such a run's val_bpb is a real number, but it answers "how good is this
+# config when robbed of a fifth of its training?" -- not the question the
+# search is asking. Mixing it into the statistics is the same category of
+# error as mixing in a dry_run placeholder, which state/results_analysis.py's
+# SYNTHETIC_STATUSES already refuses to do.
+STEP_DEFICIT_THRESHOLD = 0.20
+
 # Params whose useful range spans orders of magnitude -- sensitivity/slicing
 # treats these on a log scale, everything else linearly.
 LOG_SCALE_PARAMS = {"embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr", "batch_size"}
@@ -66,12 +85,104 @@ def _rows_to_xy(rows: List[Dict[str, Any]], feature_columns: Sequence[str]):
     return np.array(xs), np.array(ys)
 
 
+def step_deficits(
+    rows: List[Dict[str, Any]],
+    feature_columns: Sequence[str] = HYPERPARAM_COLUMNS,
+    min_n: int = MIN_SURROGATE_N,
+    random_state: int = 0,
+) -> Optional[List[Optional[float]]]:
+    """Per-row fractional shortfall of num_steps against what that row's own
+    hyperparameters predict. Positive = fewer steps than deserved.
+
+    Aligned with `rows`; an entry is None where the row can't be judged (no
+    num_steps, or a missing feature). Returns None entirely when sklearn is
+    absent or too few judgeable rows exist -- never a guess.
+
+    Predicting from the config is the crux: a genuinely slow configuration
+    has a correspondingly low prediction and so shows no deficit. Only a run
+    slower than its own config warrants is flagged, which is what separates
+    "this architecture is expensive" (real signal, keep) from "this run was
+    fighting three other tenants for the GPU" (measurement failure, drop).
+
+    Out-of-bag predictions are used, so no row is judged by a model that
+    trained on it.
+    """
+    if not SURROGATE_DEPS_AVAILABLE:
+        return None
+    judgeable = [
+        i for i, r in enumerate(rows)
+        if isinstance(r.get("num_steps"), (int, float))
+        and math.isfinite(r["num_steps"]) and r["num_steps"] > 0
+        and all(c in r for c in feature_columns)
+    ]
+    if len(judgeable) < min_n:
+        return None
+
+    x = np.array([[float(rows[i][c]) for c in feature_columns] for i in judgeable])
+    y = np.array([float(rows[i]["num_steps"]) for i in judgeable])
+    model = RandomForestRegressor(n_estimators=300, random_state=random_state,
+                                  n_jobs=-1, oob_score=True)
+    model.fit(x, y)
+    predicted = np.asarray(model.oob_prediction_)
+
+    out: List[Optional[float]] = [None] * len(rows)
+    for slot, row_idx in enumerate(judgeable):
+        p = predicted[slot]
+        if not np.isfinite(p) or p <= 0:
+            continue
+        out[row_idx] = float((p - y[slot]) / p)
+    return out
+
+
+def without_compute_starved(
+    rows: List[Dict[str, Any]],
+    feature_columns: Sequence[str] = HYPERPARAM_COLUMNS,
+    threshold: float = STEP_DEFICIT_THRESHOLD,
+    min_n: int = MIN_SURROGATE_N,
+    verbose: bool = False,
+) -> List[Dict[str, Any]]:
+    """`rows` minus the runs robbed of a `threshold` fraction of their steps.
+
+    Degrades to returning `rows` unchanged whenever the judgement can't be
+    made (no sklearn, too little history, no num_steps logged) -- the same
+    "omit rather than fabricate" contract the rest of this module follows.
+    A row that cannot be judged is kept, never dropped on suspicion.
+    """
+    # Direct evidence first, and it needs no model: a run reporting
+    # budget_shortfall_pct > 0 hit train.py's wall-clock safety cap and
+    # never consumed its TOKEN_BUDGET, so it measured a different (smaller)
+    # amount of training than every run it would be compared against. Under
+    # the token budget this is the ONLY starvation signal that matters --
+    # num_steps becomes a deterministic function of batch_size, so the
+    # inferred step-deficit below has nothing left to detect. It stays for
+    # the wall-clock-budget history, where it is the only signal available.
+    def _truncated(row: Dict[str, Any]) -> bool:
+        s = row.get("budget_shortfall_pct")
+        return isinstance(s, (int, float)) and math.isfinite(s) and s > 0.0
+
+    rows_after_direct = [r for r in rows if not _truncated(r)]
+
+    deficits = step_deficits(rows_after_direct, feature_columns=feature_columns, min_n=min_n)
+    if deficits is None:
+        if verbose and len(rows_after_direct) != len(rows):
+            print(f"[surrogate] Excluded {len(rows) - len(rows_after_direct)}/{len(rows)} run(s) "
+                  f"that hit the wall-clock safety cap before finishing their token budget")
+        return rows_after_direct
+    kept = [r for r, d in zip(rows_after_direct, deficits) if d is None or d < threshold]
+    if verbose and len(kept) != len(rows):
+        print(f"[surrogate] Excluded {len(rows) - len(kept)}/{len(rows)} compute-starved run(s) "
+              f"(>{threshold:.0%} fewer training steps than their config predicts -- "
+              f"contended GPU, not a property of the hyperparameters)")
+    return kept
+
+
 def fit_surrogate(
     rows: List[Dict[str, Any]],
     feature_columns: Sequence[str] = HYPERPARAM_COLUMNS,
     min_n: int = MIN_SURROGATE_N,
     n_estimators: int = 200,
     random_state: int = 0,
+    exclude_compute_starved: bool = True,
 ) -> Optional[SurrogateModel]:
     """Fits a Random Forest over rows with ALL feature_columns present and a
     finite val_bpb. Returns None (never raises, never fabricates a fit) if
@@ -79,6 +190,12 @@ def fit_surrogate(
     """
     if not SURROGATE_DEPS_AVAILABLE:
         return None
+    if exclude_compute_starved:
+        # Fit the objective on runs that actually got the compute their
+        # config called for. Without this the model learns "this region is
+        # bad" from runs that were merely unlucky about server load.
+        rows = without_compute_starved(rows, feature_columns=feature_columns,
+                                       min_n=min_n, verbose=True)
     x, y = _rows_to_xy(rows, feature_columns)
     if len(y) < min_n:
         return None

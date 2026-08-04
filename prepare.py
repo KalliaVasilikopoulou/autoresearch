@@ -28,7 +28,33 @@ import torch
 # ---------------------------------------------------------------------------
 
 MAX_SEQ_LEN = 2048       # context length
-TIME_BUDGET = 300        # training time budget in seconds (5 minutes)
+# THE budget: every run trains on exactly this many tokens. Because
+# _document_batches walks a deterministic, pre-shuffled stream from
+# shard_00000, a fixed token count means every run sees byte-identical data --
+# no separate "small dataset" file is needed, the stopping condition IS the
+# dataset.
+#
+# This replaced a 300s wall-clock budget, which made val_bpb depend on how
+# busy the shared DGX happened to be. Measured: identical configs an hour
+# apart differed by 25% in step count as other tenants arrived, moving val_bpb
+# by 0.028 -- about the entire elite-to-best gap of a 586-run campaign, and
+# ~3x the run-to-run sigma. Under a token budget contention costs wall-clock
+# only; the result is reproducible. It also de-distorts the LR schedule, which
+# is driven by `progress` and was previously advancing on wall-clock (so a
+# contended run decayed its LR across fewer steps).
+#
+# 12.5M is the historical median tokens-per-run, chosen so the median run
+# still takes ~5 minutes (p90 ~10 min, worst ~19 min at the slowest observed
+# throughput).
+TOKEN_BUDGET = 12_500_000
+
+# Safety valve only -- NOT the objective. A run that hits this stopped early
+# and did not see its full token budget, so its val_bpb is not comparable to
+# a complete run; train.py reports budget_shortfall_pct so it can be excluded
+# rather than silently compared.
+MAX_TRAIN_SECONDS = 1800
+
+TIME_BUDGET = MAX_TRAIN_SECONDS  # backwards-compatible alias for the safety cap
 EVAL_TOKENS = 40 * 524288  # number of tokens for val eval
 
 # ---------------------------------------------------------------------------

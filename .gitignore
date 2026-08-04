@@ -26,6 +26,11 @@ dev/
 results.tsv
 legacy_results.tsv/
 
+# Archived campaigns (results.tsv + reports/ + state snapshots from a
+# completed run, kept for later comparison). Hundreds of MB of real GPU
+# output -- recoverable on disk, never in git.
+archive/
+
 # Logs folder (training runs, diagnostics)
 logs/
 

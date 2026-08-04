@@ -45,7 +45,10 @@ def _attn_func(q, k, v, window_size):
         y = F.scaled_dot_product_attention(q2, k2, v2, attn_mask=mask)
     return y.transpose(1, 2)        # [B, T, Hq, D]
 
-from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb, get_token_bytes
+from prepare import (
+    MAX_SEQ_LEN, MAX_TRAIN_SECONDS, TOKEN_BUDGET, Tokenizer, make_dataloader,
+    evaluate_bpb, get_token_bytes,
+)
 
 # ---------------------------------------------------------------------------
 # GPT Model
@@ -661,11 +664,16 @@ x, y, epoch = next(train_loader)  # prefetch first batch
 print("[train.py] First batch prefetched successfully")
 sys.stdout.flush()
 
-print(f"Time budget: {TIME_BUDGET}s")
+print(f"Token budget: {TOKEN_BUDGET:,} tokens (safety cap {MAX_TRAIN_SECONDS}s)")
 print(f"Gradient accumulation steps: {grad_accum_steps}")
 sys.stdout.flush()
 
-# Schedules (all based on progress = training_time / TIME_BUDGET)
+# Schedules (all based on progress = tokens_seen / TOKEN_BUDGET). Deliberately
+# tokens, not wall-clock: a contended run used to advance its LR schedule on
+# elapsed seconds, so it decayed the learning rate across fewer optimizer
+# steps than an uncontended one -- the schedule itself varied with how busy
+# the shared server was. Against a token budget, two runs of the same config
+# follow the identical schedule regardless of load.
 
 def get_lr_multiplier(progress):
     if progress < WARMUP_RATIO:
@@ -708,7 +716,8 @@ while True:
         x, y, epoch = next(train_loader)
 
     # Progress and schedules
-    progress = min(total_training_time / TIME_BUDGET, 1.0)
+    tokens_seen = (step + 1) * TOTAL_BATCH_SIZE
+    progress = min(tokens_seen / TOKEN_BUDGET, 1.0)
     lrm = get_lr_multiplier(progress)
     muon_momentum = get_muon_momentum(step)
     muon_weight_decay = get_weight_decay(progress)
@@ -741,13 +750,13 @@ while True:
     pct_done = 100 * progress
     tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
     mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
-    remaining = max(0, TIME_BUDGET - total_training_time)
+    remaining = max(0, TOKEN_BUDGET - tokens_seen)
 
     # Visual progress bar (ASCII blocks)
     if step % 5 == 0:
         bar_filled = int(pct_done / 5)
         bar = '[' + '=' * bar_filled + '-' * (20 - bar_filled) + ']'
-        print(f"{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}% | remaining: {remaining:6.1f}s")
+        print(f"{bar} {pct_done:5.1f}% | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | tok/sec: {tok_per_sec:,} | mfu: {mfu:5.1f}% | remaining: {remaining/1e6:5.2f}M tok")
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
@@ -759,13 +768,27 @@ while True:
 
     step += 1
 
-    # Time's up — but only stop after warmup steps so we don't count compilation
-    if step > 10 and total_training_time >= TIME_BUDGET:
+    # Budget spent — but only stop after warmup steps so we don't count compilation.
+    if step > 10 and tokens_seen >= TOKEN_BUDGET:
+        break
+
+    # Safety valve, NOT the objective: a pathologically slow config (or a
+    # badly contended GPU) must not stall the campaign indefinitely. A run
+    # that ends here has NOT seen its full token budget, so its val_bpb is
+    # not comparable to a complete run -- budget_shortfall_pct below is what
+    # lets the search exclude it rather than silently rank it.
+    if step > 10 and total_training_time >= MAX_TRAIN_SECONDS:
+        print(f"\n[train.py] WARNING: hit the {MAX_TRAIN_SECONDS}s safety cap after "
+              f"{tokens_seen/1e6:.2f}M of {TOKEN_BUDGET/1e6:.2f}M tokens -- this run is "
+              f"INCOMPLETE and its val_bpb is not comparable to a full-budget run.")
         break
 
 print()  # newline after \r training log
 
 total_tokens = step * TOTAL_BATCH_SIZE
+# 0.0 for a run that consumed its whole budget; >0 means it was cut short by
+# the safety cap and must be excluded from comparisons, not ranked.
+budget_shortfall_pct = max(0.0, 100.0 * (TOKEN_BUDGET - total_tokens) / TOKEN_BUDGET)
 
 # Final eval. evaluate_bpb (prepare.py) now prints its own progress bar
 # (same reasoning as the training loop's: this is a ~10k-step loop with
@@ -792,6 +815,7 @@ print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
 print(f"mfu_percent:      {steady_state_mfu:.2f}")
 print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
+print(f"budget_shortfall_pct: {budget_shortfall_pct:.2f}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
 
@@ -806,10 +830,33 @@ print(f"depth:            {DEPTH}")
 # ---------------------------------------------------------------------------
 
 try:
-    _do_holdout = False
+    _cfg_holdout = {}
     if os.path.exists(_hp_path):
         with open(_hp_path) as _f:
-            _do_holdout = bool((_yaml.safe_load(_f) or {}).get("holdout_eval", False))
+            _cfg_holdout = _yaml.safe_load(_f) or {}
+    # (a) explicit opt-in, used by scripts/holdout_eval.py for a batch of
+    #     final top-K candidates.
+    _do_holdout = bool(_cfg_holdout.get("holdout_eval", False))
+    # (b) continuous drift tracking: the orchestrator passes the campaign's
+    #     best-so-far val_bpb, and holdout is evaluated only when THIS run
+    #     beat it -- i.e. exactly on a new best. Deciding it here rather
+    #     than in the orchestrator is what makes it exact: train.py fuses
+    #     training and eval into one process with no checkpoint
+    #     save/reload, so once a run ends its model is gone and a new best
+    #     can never be re-evaluated after the fact. (token_xai_enabled
+    #     works around that same constraint by approximating -- it
+    #     fingerprints the NEXT run after a new best. Here we don't have
+    #     to approximate, because val_bpb is already known at this point
+    #     in the same process.)
+    _threshold = _cfg_holdout.get("holdout_eval_if_below")
+    if not _do_holdout and _threshold is not None:
+        try:
+            _do_holdout = float(val_bpb) < float(_threshold)
+            if _do_holdout:
+                print(f"[holdout_eval] New best ({val_bpb:.6f} < {float(_threshold):.6f}) "
+                      f"-- evaluating the held-out shard too")
+        except (TypeError, ValueError):
+            _do_holdout = False
     if _do_holdout:
         from prepare import evaluate_bpb_holdout
         model.eval()

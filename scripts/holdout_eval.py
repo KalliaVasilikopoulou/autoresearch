@@ -31,6 +31,46 @@ RUN_ID_PREFIX = "holdout_check"
 REPORT_PATH = Path("reports/holdout_eval_report.md")
 
 
+def check_holdout_shard_available():
+    """Is the pinned holdout shard actually present where training runs?
+
+    Returns True/False, or None when it can't be determined (paramiko
+    missing, remote not configured -- i.e. training runs locally).
+
+    This exists because of a real, expensive failure: train.py wraps its
+    holdout evaluation in a try/except that prints and continues, so a
+    missing shard_06541.parquet doesn't fail a run -- it just silently omits
+    holdout_val_bpb. The first real attempt at this check burned 7 full
+    training runs before anyone noticed every one of them had come back
+    without the number, and the cause turned out to be that the shard had
+    never been downloaded at all (prepare.py gained the HOLDOUT_SHARD line
+    after this machine's data was prepared). A two-second test beats
+    discovering that 50 minutes in.
+    """
+    try:
+        import paramiko  # noqa: F401
+        from agents.remote_runner import _connect_with_retry, _load_cfg, is_remote_configured
+        from prepare import HOLDOUT_SHARD
+    except ImportError:
+        return None
+    if not is_remote_configured():
+        return None
+
+    cfg = _load_cfg()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        _connect_with_retry(client, cfg, timeout=30)
+        path = f"~/.cache/autoresearch/data/shard_{HOLDOUT_SHARD:05d}.parquet"
+        _, stdout, _ = client.exec_command(f"test -f {path} && echo PRESENT || echo ABSENT", timeout=30)
+        return stdout.read().decode("utf-8", errors="replace").strip().endswith("PRESENT")
+    except Exception as e:
+        print(f"[holdout_eval] Could not verify the holdout shard remotely ({e}) -- continuing anyway")
+        return None
+    finally:
+        client.close()
+
+
 def _dedupe_top_k(rows, top_k):
     """Top-K distinct configs by ascending val_bpb (dedupe by hyperparams so
     repeated noise-floor runs of one config don't crowd out K distinct ones).
@@ -64,6 +104,19 @@ def main():
               f"{args.results_path} — need at least 2 to compare. Run a couple of "
               f"real, distinct search iterations first.")
         sys.exit(1)
+
+    # Pre-flight before committing K training runs (~5 min each).
+    present = check_holdout_shard_available()
+    if present is False:
+        from prepare import HOLDOUT_SHARD
+        print(f"[holdout_eval] ABORTING: shard_{HOLDOUT_SHARD:05d}.parquet is not present on the "
+              f"training machine, so every run would come back without a holdout_val_bpb "
+              f"(train.py logs the failure and continues rather than erroring).\n"
+              f"[holdout_eval] Fix it with:  python -c \"from prepare import "
+              f"download_single_shard, HOLDOUT_SHARD; download_single_shard(HOLDOUT_SHARD)\"")
+        sys.exit(1)
+    if present:
+        print("[holdout_eval] Pre-flight OK: holdout shard is present on the training machine.")
 
     print(f"[holdout_eval] Re-checking top-{len(candidates)} configs on the holdout shard...")
     agent1 = Agent1TrainingSpecialist(config_path=args.config)
@@ -132,7 +185,7 @@ def main():
     report = "\n".join(lines) + "\n"
 
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(report)
+    REPORT_PATH.write_text(report, encoding="utf-8")
     print(f"\n{report}")
     print(f"[holdout_eval] Report written to {REPORT_PATH}")
 

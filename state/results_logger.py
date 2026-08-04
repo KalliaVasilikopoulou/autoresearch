@@ -29,6 +29,9 @@ COLUMNS = [
     "depth",
     "status",
     "holdout_val_bpb",
+    # >0 means the run hit the wall-clock safety cap before consuming its
+    # full TOKEN_BUDGET -- an incomplete measurement, not a worse config.
+    "budget_shortfall_pct",
     "device",
     # Tier 4 window-pattern tunable (see agents/agent1_training_specialist.py's
     # SEARCH_SPACE/ARCH_SAFE_RANGES) -- was part of HYPERPARAM_COLUMNS
@@ -104,6 +107,7 @@ def log_result(
         "depth": metrics.get("depth", hyperparams.get("n_layer", "")),
         "status": metrics.get("status", ""),
         "holdout_val_bpb": metrics.get("holdout_val_bpb", ""),
+        "budget_shortfall_pct": metrics.get("budget_shortfall_pct", ""),
         # Multi-GPU parallel search: which remote GPU index produced this
         # run (see agents/remote_runner.py::run_training_remote). Blank for
         # local/dry-run/simulated runs, which have no such concept. Logged

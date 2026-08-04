@@ -673,6 +673,7 @@ _OUTPUT_FIELDS = {
     "mfu_percent:": ("mfu_percent", float),
     "total_tokens_m:": ("total_tokens_M", float),
     "num_steps:": ("num_steps", int),
+    "budget_shortfall_pct:": ("budget_shortfall_pct", float),
     "num_params_m:": ("num_params_M", float),
     "depth:": ("depth", int),
     "holdout_val_bpb:": ("holdout_val_bpb", float),
