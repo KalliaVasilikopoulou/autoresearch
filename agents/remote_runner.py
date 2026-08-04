@@ -38,6 +38,43 @@ except ImportError:
     _DOTENV_AVAILABLE = False
 
 
+# A campaign runs for hours against a shared server over a network that
+# occasionally hiccups. A single dropped TCP connect used to be fatal (see
+# _connect_with_retry), so every connect goes through a short retry first --
+# these are blips measured in seconds, not outages.
+CONNECT_ATTEMPTS = 3
+CONNECT_BACKOFF_S = 5
+
+
+def _connect_with_retry(client, cfg: Dict[str, Any], timeout: int = 30,
+                        attempts: int = CONNECT_ATTEMPTS,
+                        backoff_s: float = CONNECT_BACKOFF_S) -> None:
+    """client.connect(...) with a few retries on transient network failures.
+
+    Exists because a real 150-iteration campaign died on one
+    `TimeoutError: [WinError 10060]` from sync_remote_code, moments after two
+    other SSH calls to the same host had succeeded -- i.e. a momentary blip,
+    not an unreachable server. Re-raises the last exception once the attempts
+    are spent, so a genuinely-down host still surfaces as an error rather
+    than being retried forever.
+    """
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            client.connect(
+                hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
+                password=cfg["password"] or None, timeout=timeout,
+            )
+            return
+        except (socket.timeout, socket.error, OSError, EOFError) as e:
+            last = e
+            if attempt < attempts:
+                print(f"[RemoteRunner] Connection attempt {attempt}/{attempts} failed "
+                      f"({type(e).__name__}: {e}) -- retrying in {backoff_s:.0f}s")
+                time.sleep(backoff_s)
+    raise last
+
+
 def _load_cfg() -> Dict[str, Any]:
     """Load remote connection settings from .env (if present)."""
     if _DOTENV_AVAILABLE:
@@ -85,10 +122,7 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[s
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
-            password=cfg["password"] or None, timeout=30,
-        )
+        _connect_with_retry(client, cfg, timeout=30)
         client.get_transport().set_keepalive(30)
         _, stdout, _ = client.exec_command(
             "nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu "
@@ -218,10 +252,7 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
-            password=cfg["password"] or None, timeout=30,
-        )
+        _connect_with_retry(client, cfg, timeout=30)
         client.get_transport().set_keepalive(30)
 
         _, stdout, _ = client.exec_command(
@@ -324,27 +355,34 @@ def _release_sync_lock(client, remote_repo: str) -> None:
         pass
 
 
-def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> None:
+def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """git stash + pull --ff-only on the remote clone, guarded by a remote
     mkdir-based lock (see _acquire_sync_lock) so two uncoordinated callers
     -- a parallel wave, a single sequential run, or an entirely separate
     process -- never race on the same working tree.
+
+    Returns True when the remote tree was synced, False on any connection or
+    command failure. This used to raise, and was the ONE connect site in this
+    module that did -- discover_available_gpus and run_training_remote both
+    already caught everything and degraded ("callers degrade to the
+    single-GPU fallback, never crash"). That inconsistency killed a real
+    150-iteration campaign on a single transient TimeoutError. Callers must
+    still decide what a False means for them: it is emphatically NOT
+    "carry on and train anyway", since an unreachable server cannot run
+    anything.
     """
     if not _PARAMIKO_AVAILABLE:
-        return
+        return False
     cfg = cfg or _load_cfg()
     remote_repo = cfg["repo"]
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=cfg["host"], port=cfg["port"], username=cfg["user"],
-            password=cfg["password"] or None, timeout=30,
-        )
+        _connect_with_retry(client, cfg, timeout=30)
         client.get_transport().set_keepalive(30)
 
         lock_acquired = _acquire_sync_lock(client, remote_repo)
-        try:
+        try:  # noqa: SIM105 -- inner lock release, see outer handler below
             print("[RemoteRunner] Pulling latest code on remote ...")
             stash_cmd = f'bash -lc "cd {remote_repo} && git stash 2>&1"'
             _, stash_o, _ = client.exec_command(stash_cmd)
@@ -360,6 +398,10 @@ def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> None:
         finally:
             if lock_acquired:
                 _release_sync_lock(client, remote_repo)
+        return True
+    except Exception as e:
+        print(f"[RemoteRunner] Remote code sync failed: {type(e).__name__}: {e}")
+        return False
     finally:
         client.close()
 

@@ -38,6 +38,10 @@ state/search_planner_state.json
 state/llm_usage.json
 state/parallel_hyperparams/
 state/cluster_hypotheses_signature.json
+# Agent 4's region verdicts (local optimum / dead end / currently exploiting),
+# rewritten on every decision. Runtime state, unlike the hand-curated
+# state/campaign_annotations.json above, which stays tracked.
+state/agent4_region_flags.json
 
 # Runtime-generated hyperparams (written by Agent 1 every iteration, synced
 # to the remote server via SFTP directly — not via git)

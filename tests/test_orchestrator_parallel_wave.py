@@ -137,7 +137,7 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
-    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
     # orch.run() below now also does a startup stale-process check -- must
     # never make a real SSH call in tests (this repo's real .env has real
     # credentials, so an unmocked call here would actually reach the DGX).
@@ -184,7 +184,7 @@ def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monke
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
-    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
 
     dispatched_gpus = []
 
@@ -258,3 +258,66 @@ def test_kill_stale_remote_training_reports_none_found(tmp_path, monkeypatch, ca
     orch._kill_stale_remote_training()
 
     assert "None found." in capsys.readouterr().out
+
+
+# --- transient/persistent remote failure (real production crash) --------
+# A campaign died on one `TimeoutError: [WinError 10060]` raised by
+# sync_remote_code inside _run_parallel_wave. Discovery and stale-process
+# cleanup -- two other SSH calls to the same host -- had both just succeeded,
+# so this was a network blip taking down hours of work.
+
+def _stub_remote(monkeypatch, gpus=None):
+    monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: gpus or TWO_GPUS)
+
+
+def test_wave_skips_instead_of_crashing_when_sync_fails(tmp_path, monkeypatch):
+    orch = _make_orchestrator(tmp_path)
+    _stub_remote(monkeypatch)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: False)
+    monkeypatch.setattr(remote_runner, "run_training_remote", lambda **k: (_ for _ in ()).throw(
+        AssertionError("must not dispatch training to an unreachable server")))
+    monkeypatch.setattr("agents.orchestrator.time.sleep", lambda s: None)
+
+    result = orch._run_parallel_wave(0, [], 10)
+
+    assert result is None          # skipped, campaign continues
+    assert orch._remote_unreachable_streak == 1
+
+
+def test_a_successful_sync_resets_the_failure_streak(tmp_path, monkeypatch):
+    """The counter tracks an ongoing outage, not a lifetime total -- an
+    occasional blip must never accumulate into a spurious halt."""
+    orch = _make_orchestrator(tmp_path)
+    orch._remote_unreachable_streak = 2
+    _stub_remote(monkeypatch)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
+    monkeypatch.setattr(remote_runner, "run_training_remote", lambda **k: {
+        "val_bpb": 1.3, "training_time": 1.0, "status": "remote_ok", "device": k["gpu_index"]})
+
+    orch._run_parallel_wave(0, [], 10)
+
+    assert orch._remote_unreachable_streak == 0
+
+
+def test_campaign_halts_rather_than_fabricating_results_during_an_outage(tmp_path, monkeypatch):
+    """Every path past a dead server fabricates rather than measures --
+    Agent1.train_model's last resort is _simulate_training_result, whose
+    val_bpb is a hand-tuned formula. Stopping with the iteration budget
+    intact beats filling results.tsv with invented numbers."""
+    from agents.orchestrator import REMOTE_FAILURE_HALT_STREAK
+
+    orch = _make_orchestrator(tmp_path)
+    _stub_remote(monkeypatch)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: False)
+    monkeypatch.setattr("agents.orchestrator.time.sleep", lambda s: None)
+
+    halted = False
+    for _ in range(REMOTE_FAILURE_HALT_STREAK):
+        result = orch._run_parallel_wave(0, [], 10)
+        if result is not None:
+            _iteration, _batch, halted = result
+
+    assert halted is True
+    assert load_results(str(tmp_path / "results.tsv")) == []  # nothing invented

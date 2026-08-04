@@ -253,7 +253,7 @@ def test_wave_size_is_capped_to_the_probe_batch_during_a_window(tmp_path, monkey
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: FOUR_GPUS)
-    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
 
     dispatched = []
 
@@ -276,7 +276,7 @@ def test_wave_size_is_unconstrained_without_a_window(tmp_path, monkeypatch):
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
     monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: FOUR_GPUS)
-    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: None)
+    monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
 
     dispatched = []
 

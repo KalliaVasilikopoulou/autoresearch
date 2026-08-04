@@ -25,6 +25,17 @@ from state.state_manager import StateManager
 from state.results_logger import log_result
 
 
+# Consecutive unreachable-remote waves before the campaign stops. A shared
+# server on a flaky network is expected to blip (remote_runner retries each
+# connect a few times already); a sustained outage is not something to grind
+# through, because every path past it fabricates rather than measures --
+# Agent1.train_model's last-resort fallback is _simulate_training_result,
+# whose val_bpb is a hand-tuned formula, not a measurement. Stopping with the
+# iteration budget intact beats filling results.tsv with invented numbers.
+REMOTE_FAILURE_HALT_STREAK = 3
+REMOTE_RETRY_SLEEP_S = 60
+
+
 def _format_duration(seconds: float) -> str:
     """Human-readable wall-clock duration for terminal/log output --
     "12.3s", "5m 12s", or "1h 03m 12s" depending on magnitude, instead of a
@@ -88,6 +99,10 @@ class Orchestrator:
         # instead of assuming Agent 1 produced it.
         self._active_decision_log: Optional[Dict[str, Any]] = None
         self._active_decisions_dir: Path = self.agent1.decisions_dir
+        # Consecutive waves that couldn't reach the remote server. Reset on
+        # any successful sync -- this counts an ongoing outage, not a
+        # lifetime total.
+        self._remote_unreachable_streak = 0
         # Iteration of Agent 4's last check. Starts at 0 so the first check
         # lands one full check_interval in, never at campaign start (where
         # there is no recent history to judge stagnation from).
@@ -595,7 +610,24 @@ class Orchestrator:
         if not slots:
             return (iteration, report_batch, True) if decision_halt else None
 
-        remote_runner.sync_remote_code()
+        if not remote_runner.sync_remote_code():
+            # Can't reach the server, so it cannot run anything either.
+            # Skipping the wave is the only honest option: dispatching now
+            # would just produce a wave of remote_error rows. The consecutive-
+            # failure guard in _process_training_result stops the campaign if
+            # this keeps happening rather than letting it grind on.
+            print("[Orchestrator] Remote code sync failed -- skipping this wave "
+                  "(no training dispatched, no iterations consumed)")
+            self._remote_unreachable_streak += 1
+            if self._remote_unreachable_streak >= REMOTE_FAILURE_HALT_STREAK:
+                print(f"[Orchestrator] HALTING: remote server unreachable "
+                      f"{self._remote_unreachable_streak} times in a row. Nothing has been "
+                      f"trained and no iterations were consumed -- fix connectivity and "
+                      f"restart; the campaign resumes from results.tsv.")
+                return (iteration, report_batch, True)
+            time.sleep(REMOTE_RETRY_SLEEP_S)
+            return None
+        self._remote_unreachable_streak = 0
 
         # Each GPU gets its own pinned terminal line for the duration of the
         # wave (see agents/live_progress.py) -- without this, every thread's
