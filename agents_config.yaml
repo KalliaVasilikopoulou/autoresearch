@@ -1,5 +1,58 @@
 # Multi-Agent NN Parameter Optimization Configuration
 # ===================================================
+#
+# CALIBRATION REFERENCE -- read this before changing any val_bpb threshold.
+# =========================================================================
+# Re-derived 2026-08-05 against state/noise_floor.json and the 582 finite runs
+# in archive/campaign-20260804-timebudget/results.tsv.
+#
+# There are TWO scales in this system and using the wrong one is the single
+# most common way a threshold here ends up meaningless.
+#
+#   sigma        = 0.000797   (0.061% of a typical val_bpb = 1.3027)
+#                  Repeatability of ONE config. state/noise_floor.json, n=10,
+#                  round-robined across GPUs. Use for: "did the frontier
+#                  move", "is this parameter's effect measurable", anything
+#                  comparing a run to itself or to the best-ever.
+#
+#   sigma_region = 0.0028     (3.5 x sigma)
+#                  Spread of val_bpb among DIFFERENT configs inside one
+#                  region (region_radius = 0.05 in normalized 11-D). Use for:
+#                  "is this probe bad", "is region A better than region B",
+#                  anything comparing two different configurations.
+#
+# Why two: the token budget collapsed sigma ~11x (every run now gets identical
+# tokens regardless of GPU speed, so the "slow GPU fits fewer steps" confound
+# is gone -- it was worth std 0.00919 under the old time budget). But
+# within-region spread is real hyperparameter variation, not measurement
+# noise, and it did NOT collapse. A region-level threshold sized in sigma is
+# ~4x too sensitive; one sized in sigma_region and quoted as sigma looks
+# absurdly loose. Both mistakes are in this file's history.
+#
+# sigma_region is measured, not assumed: within-region std at radius 0.04-0.05
+# is 0.0028 after regressing out log(num_steps) (which controls the time-budget
+# artifact in the archived data), rising sharply to 0.0131 at radius 0.08 and
+# 0.0251 at 0.10. That jump is a real structure boundary -- below ~0.05 a
+# region is one basin, above it you are averaging several. Re-derive once a
+# token-budget campaign has a few hundred runs of its own.
+#
+# TWO RULES IN THIS FILE ARE STRUCTURALLY BROKEN, not merely mis-tuned.
+# Measured against real history, no value of either discriminates:
+#
+#   bad_tolerance (probe vs the CAMPAIGN-wide elite) -- SINCE REMOVED.
+#   Sweeping it 17x, from 0.05 to 0.003, moved "fraction of runs called bad"
+#   only from 55% to 85%: it measured "is this run not elite" (true for most
+#   runs by construction), not "is this region bad". Worse, Agent 4 fell back
+#   to the campaign-wide reference whenever a neighbourhood had < 4 historical
+#   runs, which on a fresh campaign is always. Retirement is now RELATIVE
+#   between live regions (retire_margin_sigma), and the setting was deleted
+#   rather than demoted, since nothing read it.
+#
+#   stagnation_min_improvement: reads "stagnant" at 89-92% of iterations for
+#   every threshold from 0.001 to 0.005. The frontier genuinely does not move
+#   in most 10-run windows, so gating exploration on it is a weak trigger at
+#   any setting. This is why exploration is continuously scheduled by the
+#   allocator rather than triggered reactively by this signal.
 
 # AGENT 1: Training Specialist
 agent1:
@@ -17,6 +70,23 @@ agent1:
 
   # Stop when total API cost exceeds this amount (USD)
   cost_limit_usd: 50.0
+
+  # --- stall / stagnation, both calibrated: see the CALIBRATION REFERENCE ---
+  # How much better than the best of the preceding max_stalled_iterations runs
+  # the latest run must be, in ABSOLUTE val_bpb, for the search not to count
+  # as stalled. This compares different configurations, so the yardstick is
+  # sigma_region (0.0028): 0.005 = 1.8 sigma_region, a real but reachable
+  # demand. In sigma it would read as 6.3, which is what made it look
+  # mis-set -- it is not, it is just measured on the other scale.
+  min_improvement: 0.005
+  max_stalled_iterations: 3
+
+  # _detect_stagnation's margin, as a multiple of sigma (0.000797). This
+  # replaced a hardcoded 0.01, which is 12.6 sigma today -- so a genuine
+  # 6-sigma gain was recorded as "no progress" and routed the search into
+  # _radical_change. Sigma has already moved ~11x once (time budget -> token
+  # budget); a multiple keeps meaning the same thing when it moves again.
+  stagnation_sigma_multiple: 2.0
 
   # Training time budget per model (seconds)
   # SSH-timeout base ONLY -- it does NOT set training length. The budget is
@@ -164,112 +234,126 @@ agent3:
   # token_xai_interval cadence trigger (agents/orchestrator.py).
   min_cluster_observations: 8
 
-# AGENT 4: OPTIMIZATION LANDSCAPE EXPLORER
+# AGENT 4: REGION PROPOSER AND LIFECYCLE JUDGE
 #
-# Every other search path in this system is local: agents/search_planner.py
-# pins its EI center at the current best on every call and only varies the
-# active Gauss-Southwell block around it, so nothing here can leave a basin
-# once the campaign settles into one. Agent 4 is that missing capability.
-# Periodically it checks whether the frontier is still moving; if it is, it
-# returns control immediately having spent nothing. If it isn't, it takes a
-# bounded budget of iterations to probe the least-explored region of the
-# landscape and decides whether to relocate the whole search there.
+# Two jobs: decide where a newly-freed GPU should start looking, and decide
+# when a running region has earned a lifecycle change. It does NOT propose
+# training configurations -- that is Agent 1 scoped to a region
+# (Agent1TrainingSpecialist.search_region), with the allocator
+# (agents/allocator.py) deciding which region each GPU serves each wave.
+#
+# It used to be a temporary override of a single search: watch for stagnation,
+# seize every GPU for a bounded "window", probe one region, hand control back.
+# Exploration and exploitation were phases and the trigger was reactive, so on
+# a short campaign the better region was found with no budget left to exploit
+# it. Several regions now run at once and exploration is scheduled
+# continuously instead of triggered.
 agent4:
   enabled: true
 
-  # How often (in iterations) Agent 4 checks whether the search looks
-  # trapped. A check that finds a healthy frontier costs zero iterations.
-  check_interval: 30
-
-  # Maximum iterations one exploration window may consume. 9 = three probe
-  # waves of 3, so the budget divides evenly into whole decision batches
-  # with no orphan iteration left over.
-  window_iterations: 9
-
-  # Probes dispatched per batch. This is also the abandon rule -- a region
-  # is condemned when every probe in one batch comes back bad -- so a probe
-  # wave is exactly one decision boundary. Deliberately one setting rather
-  # than two: the orchestrator caps multi-GPU wave size to this while a
-  # window is open, so the abandon test stays exact under parallelism as
-  # well as sequentially, which it could not if the two could diverge.
-  probe_wave_size: 3
-
-  # A probe counts as "bad" if its val_bpb exceeds the departed region's
-  # elite reference (median of its top quartile) by more than this fraction.
-  bad_tolerance: 0.05
-
-  # --- the commit bar -----------------------------------------------------
-  # Committing relocates the ENTIRE campaign's focus and is expensive to
-  # undo, so all three of these must hold: enough runs, a top-quartile
-  # median beating the departed region's by commit_margin, and the whole
-  # sample's median beating it too. The third clause matters more than it
-  # looks: top_quartile_by_val_bpb returns max(1, int(n * 0.25)) entries, so
-  # at window-sized samples "top quartile" is literally the single best run
-  # -- without a distributional check, one lucky draw could move the whole
-  # search.
+  # --- how many regions stay alive -----------------------------------------
+  # The allocator opens a new region when it has a spare GPU and fewer than
+  # this are live, and never fragments past it.
   #
-  # commit_margin is CALIBRATED AGAINST THE MEASURED NOISE FLOOR, not picked
-  # as a round number. sigma is 0.003187 (state/noise_floor.json) = 0.24% of
-  # a typical val_bpb, so a percentage bar here is worth far more sigma than
-  # it looks. An earlier 0.03 was ~11.6 sigma, putting the bar at 1.1962 --
-  # below every one of 514 historical runs including the all-time best
-  # (1.2065). Agent 4 would have explored at every check and been
-  # mathematically unable to ever act on what it found.
+  # 4 is tied to orchestrator.max_parallel_runs: with more regions than GPUs
+  # the surplus is permanently paused, which is capacity accounting dressed
+  # up as a search decision.
   #
-  # 0.006 is ~2.3 sigma (bar ~1.2258, cleared by ~2.3% of historical runs).
-  # The lower bound on this number is set by min_runs_before_commit: at 6
-  # runs, top_quartile_by_val_bpb returns max(1, int(6*0.25)) = exactly ONE
-  # run, so this clause is a single-run comparison carrying a full +/-sigma
-  # of measurement noise. Below ~2 sigma the campaign would be relocating on
-  # noise. Raising min_runs_before_commit to 8+ would make the quartile 2+
-  # runs and justify a smaller margin, at the cost of most of the window
-  # budget going to one region.
+  # There is deliberately no min_regions companion. A new region can only be
+  # opened when a GPU is free, so a floor would be unenforceable exactly when
+  # it mattered -- and a setting that reads as live while doing nothing is
+  # worse than no setting, because it gets tuned.
+  max_regions: 4
+
+  # --- lifecycle, all counted in RUNS THIS REGION SPENT --------------------
+  # Not in orchestrator iterations: a region holding two GPUs accumulates
+  # twice as fast as one holding a single GPU, so an iteration count would
+  # judge two regions on different amounts of evidence while looking like one
+  # rule.
   #
-  # Deliberately relaxed from 3.9 sigma: the error actually being suffered is
-  # the false NEGATIVE (the frontier has not moved in 303 runs), while a
-  # false positive costs roughly one check_interval of detour. Note the
-  # detour is not automatically clawed back -- a heavily-sampled region has
-  # low surrogate uncertainty, and Agent 4 picks candidates by HIGH
-  # uncertainty, so it will not naturally navigate back to an abandoned good
-  # region. Independent protection comes from the second commit clause
-  # (median of all probes vs the origin's median), which is a full-sample
-  # test and is unaffected by this margin.
-  commit_margin: 0.006
-  min_runs_before_commit: 6
+  # A region is not judged at all until it has this many measured runs -- and
+  # a crashed/OOM run is not a measurement, it is an absence of one.
+  min_runs_before_judgement: 5
 
-  # Runs in a region before leaving it can honestly be called a "local
-  # optimum" rather than merely "exploitation paused". A short window does
-  # not license the stronger claim.
-  heavy_exploitation_n: 20
+  # No improvement in this many runs -> exploitation_paused, and the
+  # allocator looks for somewhere better. Recoverable on purpose: "we have
+  # not improved here lately" and "there is nothing here" are different
+  # claims and only the first is supported at 5 runs. If nothing better
+  # exists, Agent4.resume_best_paused brings it straight back.
+  stuck_runs_pause: 5
 
-  # How wide a "region" is, as a fraction of the landscape's PCA grid extent
-  # -- the same 2D space state/visualize.py draws, so a region means the
-  # same thing to the code and on the chart. Measured against the real 514-run
-  # history: 0.15 swept in 63% of the entire campaign as one "region", which
-  # turns the new-vs-origin comparison into new-vs-everything and defeats the
-  # point. 0.05 captures ~15% (77 runs) -- an actual neighborhood, still large
-  # enough for a stable top-quartile reference.
+  # No improvement in this many -> local_optimum, retired for good. This is
+  # the stronger claim and it needs the longer record.
+  stuck_runs_retire: 15
+
+  # --- what counts as better / worse ---------------------------------------
+  # sigma_region: spread of val_bpb among DIFFERENT configs inside one region
+  # (measured: 0.0028 at region_radius 0.05, after regressing out
+  # log(num_steps) to control the archived data's time-budget artifact). Every
+  # threshold below compares one configuration against another, so this -- not
+  # the noise floor's sigma = 0.000797 -- is the right yardstick. Using sigma
+  # here would make all of them ~4x too sensitive. See the CALIBRATION
+  # REFERENCE at the top of this file.
+  sigma_region: 0.0028
+
+  # A region is retired as no_optimum when its elite score sits this many
+  # sigma_region behind the best LIVE region's. Relative, never absolute: an
+  # absolute bar against a campaign-wide elite measures "is this run not
+  # elite" (true for most runs by construction), not "is this region bad".
+  # 3.0 sigma_region = 0.0084 bpb.
+  retire_margin_sigma: 3.0
+
+  # How much better a run must be than the region's previous best to count as
+  # an improvement at all, in sigma_region. Feeds
+  # Region.runs_since_improvement, whose default of 0.0 would count pure
+  # noise as progress and so never register a region as stuck.
+  improvement_sigma: 1.0
+
+  # --- geometry ------------------------------------------------------------
+  # How wide a "region" is, in NORMALIZED 11-D HYPERPARAMETER DISTANCE
+  # (state/regions.py::distance), divided by sqrt(11) so it sits on a 0-1
+  # scale. THE UNITS CHANGED: this used to be a fraction of the 2-D PCA grid
+  # extent. That projection explained 0.296 of the variance on a 500-run
+  # campaign, so it could not answer "are these two the same place" -- fine
+  # when one candidate region was tested at a time, unusable now that the
+  # question is asked constantly. The PCA is a visualization again.
+  #
+  # The value survives the change of units by coincidence, but it is
+  # re-derived, not carried over. Within-region val_bpb spread is 0.0028 at
+  # radius 0.04-0.05, 0.0131 at 0.08, 0.0251 at 0.10. That 4.7x jump between
+  # 0.05 and 0.08 is a real structure boundary: below it a region is one
+  # basin, above it you are averaging several together. 0.05 also leaves ~10
+  # historical neighbours in a 582-run campaign.
   region_radius: 0.05
 
-  # Frontier is "stagnant" when the best-so-far improved by less than
-  # stagnation_min_improvement (relative, so the bar means the same thing at
-  # val_bpb 1.8 as at 1.2) over the last stagnation_lookback runs.
-  stagnation_lookback: 10
-  stagnation_min_improvement: 0.005
+  # Regions whose ANCHORS come within this distance are merged
+  # (RegionRegistry.merge_overlapping). Each region's local search walks its
+  # own center downhill and nothing stops two of them walking into the same
+  # basin; left alone that silently halves the parallelism -- two GPUs, two
+  # planner states, one basin. Half of region_radius, so a merge means their
+  # neighbourhoods overlap across most of their mass rather than merely
+  # touching at the edge.
+  merge_radius: 0.025
+
+
+  # Resolution of the predicted-surface grid shared with the landscape chart.
+  # Agent 4 reads grid_z_std (where nobody has looked) and grid_z_mean (where
+  # a rival optimum might be) off it to anchor two of its three proposal
+  # criteria.
+  grid_resolution: 24
 
   # statistics | hybrid | llm
   #   statistics -- fully deterministic, zero LLM cost.
   #   hybrid     -- decisions stay deterministic; the LLM only writes the
-  #                 prose decision summary each window reads back for
-  #                 context (~2-4 calls per 30 iterations).
-  #   llm        -- the LLM additionally gets a veto on a commit. It can
-  #                 only block one the statistics already approved, never
-  #                 approve one on its own, and a failed/over-budget call
-  #                 falls back to the deterministic verdict.
+  #                 prose record of each lifecycle decision.
+  #   llm        -- reserved; currently behaves as hybrid.
+  #
+  # The LLM is deliberately off the decision path here. Measured on the
+  # archived campaign, LLM-decided runs beat their local 10-run median 89% of
+  # the time but had less than half the spread (std 0.054 vs 0.125), were
+  # WORSE at the 5th percentile, and never set the record -- it is a variance
+  # reducer, not an optimum finder. Record-keeping is the job that suits it.
   llm_mode: hybrid
-
-  # Resolution of the predicted-surface grid shared with the landscape chart.
-  grid_resolution: 24
 
 # LLM / COPILOT INTEGRATION (dev/checks.txt item 4)
 # Backs agent1.use_llm / agent2.use_llm / agent3.use_llm. Calls the Claude

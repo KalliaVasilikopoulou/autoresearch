@@ -482,6 +482,27 @@ FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
 DEPTH = 8               # number of transformer layers
 DEVICE_BATCH_SIZE = 1    # per-device batch size (2->1 for extreme memory efficiency; 1*2048 = 2K tokens per fwdbwd)
 
+# Reproducibility. SEED controls exactly one thing: the initial weights drawn
+# by GPT.init_weights(). The data stream is deterministic (prepare.py's
+# _document_batches walks shards in sorted order and TOKEN_BUDGET cuts at a
+# fixed point) and the packing dataloader draws no randomness, so nothing else
+# in a run depends on it.
+#
+# It is a RECORDED NUISANCE VARIABLE, never a search dimension: it is
+# deliberately absent from agent1's SEARCH_SPACE and from
+# results_analysis.HYPERPARAM_COLUMNS. Searching over seeds would find the
+# luckiest initialization, which is precisely the overfitting the search is
+# trying to avoid -- the correct treatment is to average over seeds, not to
+# optimize over them.
+#
+# It was hardcoded to 42 until now, which meant every run in the campaign
+# shared one initialization and no measurement of seed-to-seed spread was
+# possible. Note also that a shared seed is NOT a shared initialization across
+# architectures: changing n_layer/n_embd/n_head changes how many values are
+# drawn and in what shapes, so only runs at identical architecture are truly
+# paired.
+SEED = 42
+
 # ---------------------------------------------------------------------------
 # Override hyperparameters from model_hyperparams.yaml (written by Agent 1)
 # All other training constants above are kept as Karpathy's calibrated defaults.
@@ -569,10 +590,12 @@ try:
         if "window_s_fraction" in _hp:
             _window_s_fraction = _clamp("window_s_fraction", float(_hp["window_s_fraction"]), 0.0, 1.0)
         WINDOW_PATTERN = _build_window_pattern(DEPTH, _window_s_fraction)
+        if "seed" in _hp:
+            SEED = _clamp("seed", int(_hp["seed"]), 0, 2**31 - 1)
         print(f"[hyperparams] DEPTH={DEPTH} N_HEAD={N_HEAD} target_n_embd={_target_embd} "
               f"EMBEDDING_LR={EMBEDDING_LR} UNEMBEDDING_LR={UNEMBEDDING_LR} MATRIX_LR={MATRIX_LR} SCALAR_LR={SCALAR_LR} "
               f"WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO} TOTAL_BATCH_SIZE={TOTAL_BATCH_SIZE} "
-              f"WINDOW_PATTERN={WINDOW_PATTERN} (window_s_fraction={_window_s_fraction})")
+              f"WINDOW_PATTERN={WINDOW_PATTERN} (window_s_fraction={_window_s_fraction}) SEED={SEED}")
 except Exception as _e:
     print(f"[hyperparams] Could not load model_hyperparams.yaml: {_e} — using defaults")
 
@@ -603,8 +626,8 @@ if _clamp_records:
 # ---------------------------------------------------------------------------
 
 t_start = time.time()
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed(SEED)
 torch.set_float32_matmul_precision("high")
 device = torch.device("cuda")
 autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -818,6 +841,11 @@ print(f"num_steps:        {step}")
 print(f"budget_shortfall_pct: {budget_shortfall_pct:.2f}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
+# Reported back, not just requested: results.tsv logs the seed train.py
+# ACTUALLY ran with (same pattern as `depth`), so a run can never be attributed
+# to an initialization it did not use -- e.g. if the hyperparams file failed to
+# load and the default silently applied.
+print(f"seed:             {SEED}")
 
 # ---------------------------------------------------------------------------
 # Held-out shard check (opt-in, off by default). The search loop's val_bpb

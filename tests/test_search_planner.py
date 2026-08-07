@@ -348,3 +348,30 @@ def test_render_report_contains_expected_sections():
     assert "frozen (< 2σ)" in report
     assert "(active this cycle)" in report
     assert '"a": 1.0' in report
+
+
+def test_crashed_runs_do_not_advance_the_cold_start(tmp_path):
+    """A remote_error row logs val_bpb=inf. Counting those as "usable" let a
+    network outage end the cold start without collecting any data -- and
+    since _rows_to_xy correctly drops non-finite rows, fit_surrogate would
+    then return None on 0 points and the campaign would fall onto the
+    heuristic path permanently. Observed for real: 8 consecutive dispatches
+    failed to connect and every one of them counted.
+    """
+    from agents import search_planner
+
+    params = list(HYPERPARAM_COLUMNS)
+    base = {c: 1.0 for c in params}
+    base.update({"n_layer": 8, "n_embd": 512, "n_head": 4, "batch_size": 8192})
+    rows = [dict(base, val_bpb=float("inf")) for _ in range(20)]
+
+    proposal = search_planner.propose_next(
+        rows=rows, current_best_hyperparams=dict(base), current_best_val_bpb=float("inf"),
+        iteration=0, cold_start_n=15,
+        state_path=str(tmp_path / "planner.json"),
+        noise_floor_path=str(tmp_path / "noise.json"),
+        report_dir=str(tmp_path / "reports"), generate_charts=False,
+    )
+    assert proposal is not None, "must still be cold-starting, not fall through"
+    state = json.loads((tmp_path / "planner.json").read_text())
+    assert state["cold_start_used"] == 1

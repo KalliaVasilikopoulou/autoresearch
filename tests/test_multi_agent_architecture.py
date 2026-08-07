@@ -192,9 +192,15 @@ agent1:
             latest_summary=None,
             evidence=None,
             stuck_signal=False,
-            latest_val_bpb=0.995,
+            latest_val_bpb=0.9995,
             iteration=10,
-            recent_results=[{"val_bpb": 1.0}, {"val_bpb": 0.995}, {"val_bpb": 0.995}],
+            # Steps of 0.0005 = 0.63 sigma against the measured noise floor
+            # (state/noise_floor.json, std = 0.000797). This fixture used to
+            # step by 0.005, which only read as "flat" because
+            # _detect_stagnation compared against a hardcoded 0.01 -- 12.6
+            # sigma, so a genuine 6-sigma gain counted as no progress. The
+            # threshold is a sigma multiple now, and this data is flat under it.
+            recent_results=[{"val_bpb": 1.0}, {"val_bpb": 0.9995}, {"val_bpb": 0.9995}],
         )
 
     assert new_hyperparams is not None

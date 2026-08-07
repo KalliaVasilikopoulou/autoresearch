@@ -23,7 +23,8 @@ from state.clustering import (
     cluster_fingerprints,
     trajectory_smoothness_correlation,
 )
-from state.landscape import build_landscape, load_region_flags
+from state.landscape import build_landscape
+from state.regions import RegionRegistry
 from state.results_analysis import SYNTHETIC_STATUSES, load_results, top_quartile_by_val_bpb
 from state.surrogate import fit_surrogate
 from state.visualize import (
@@ -101,7 +102,10 @@ class Agent3ReportAnalyst:
         # thing here read from results.tsv rather than agent2_reports/*.md)
         # and Agent 4's region flags, drawn onto the landscape when present.
         self.results_path = (Path(root_dir) if root_dir else Path(".")) / "results.tsv"
-        self.region_flags_path = _state / "agent4_region_flags.json"
+        # One region store for the whole system (state/regions.py). Agent 3
+        # only reads it -- the chart annotation is a view of the registry,
+        # never a second copy of it.
+        self.registry_path = _state / "regions.json"
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
 
         self.summary_counter = self._count_existing_summaries()
@@ -889,9 +893,19 @@ class Agent3ReportAnalyst:
                 "- By call site: " + ", ".join(f"{site}={count}" for site, count in sorted(by_site.items()))
             )
 
+        summary_lines.extend(self._region_summary_lines())
+
         summary_lines.extend([
             "",
             "## Recommendations for Agent 1 (Data-Backed)",
+            "",
+            "> These are computed from the CAMPAIGN-WIDE elite. With several",
+            "> regions searched at once they are a description of the campaign,",
+            "> not an instruction for any one region -- averaging four regions'",
+            "> optima produces a configuration belonging to none of them. Per-",
+            "> region state is in the section above; each region's own search",
+            "> is driven by its own surrogate acquisition, not by these numbers.",
+            "",
             f"- Recommendation sample size (elite runs): {len(elite)}",
         ])
         if recommended:
@@ -1007,8 +1021,57 @@ class Agent3ReportAnalyst:
         return chart_optimization_landscape(
             landscape,
             self.visuals_dir / f"summary_{self.summary_counter:04d}_landscape.png",
-            region_flags=load_region_flags(self.region_flags_path),
+            region_flags=RegionRegistry(str(self.registry_path)).flags_snapshot(),
         )
+
+    def _region_summary_lines(self) -> List[str]:
+        """A per-region table: how much budget each region has spent, how good
+        it is, and where it stands in its lifecycle.
+
+        This is the part of a summary that means something under multi-region
+        search. Every other aggregate in this file pools all regions together,
+        which is right for describing the campaign and wrong for deciding
+        anything about one region -- "n_layer averaged over the elite" mixes
+        regions that disagree. Read straight from the registry rather than
+        recomputed from results.tsv, so the flags shown are the ones the
+        allocator actually acted on.
+        """
+        try:
+            rows = RegionRegistry(str(self.registry_path)).summary_rows()
+        except Exception as e:  # pragma: no cover - reporting must never halt a campaign
+            print(f"[Agent 3] Could not read the region registry: {e}")
+            return []
+        if not rows:
+            return []
+
+        lines = [
+            "",
+            "## Regions",
+            "",
+            "| region | flag | origin | runs | measured | best val_bpb | elite score | since |",
+            "|---|---|---|---:|---:|---:|---:|---:|",
+        ]
+        def _num(value: Any) -> str:
+            """A region with no finite run yet has no score -- printed as n/a
+            rather than as a zero, which would read as a perfect result."""
+            return f"{value:.6f}" if isinstance(value, float) else "n/a"
+
+        for row in sorted(rows, key=lambda r: (r["elite_score"] is None, r["elite_score"] or 0.0)):
+            lines.append(
+                f"| {row['region_id']} | {row['flag']} | {row['origin']} "
+                f"| {row['n_runs']} | {row['n_measured']} "
+                f"| {_num(row['best_val_bpb'])} | {_num(row['elite_score'])} "
+                f"| run {row['flag_since_run']} |"
+            )
+
+        live = [r for r in rows if r["flag"] == "currently_exploiting"]
+        lines += [
+            "",
+            f"- {len(live)} region(s) currently being searched, {len(rows)} tracked in total.",
+            "- A region's runs are what IT spent: a crashed run counts toward budget "
+            "consumed and not toward evidence, which is why `runs` and `measured` differ.",
+        ]
+        return lines
 
     def _fingerprint_clusters_signature(self, fingerprint_clusters: Dict[str, Any]) -> str:
         """Deterministic hash of the exact payload that would be sent to

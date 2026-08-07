@@ -15,7 +15,6 @@ explicit gpu_index/hp_remote_name/run_label so multiple concurrent calls
 device.
 """
 
-import json
 import math
 import os
 import socket
@@ -23,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agents import train_output
 from agents.live_progress import MultiGpuProgressDisplay
 
 try:
@@ -44,6 +44,56 @@ except ImportError:
 # these are blips measured in seconds, not outages.
 CONNECT_ATTEMPTS = 3
 CONNECT_BACKOFF_S = 5
+
+# THE SERVER RATE-LIMITS SSH CONNECTIONS. Measured 2026-08-05 against
+# dgx.ceid.upatras.gr: a first TCP connect completes in 1.0s and returns a
+# valid SSH banner; the next two time out at 15s; connections are accepted
+# again after roughly 60-90s of quiet. It is a SYN-level block (WinError
+# 10060, TCP handshake never completes), so it is a firewall/rate limiter in
+# front of sshd rather than anything sshd itself reports.
+#
+# That is fatal to the obvious implementation of a multi-GPU wave, which used
+# to open SEVEN connections within a few seconds: a campaign-start stale
+# check, a per-wave stale check, GPU discovery, the code sync, and then one
+# per concurrent training run. The first succeeded and the rest were dropped,
+# so every wave lost most of its slots to `remote_error` -- two full 4-slot
+# waves produced nothing but val_bpb=inf rows.
+#
+# The fix is to stop opening connections, not to retry harder into a closed
+# window: one paramiko SSHClient carries many independent channels over a
+# single TCP connection, so a whole wave now shares one. open_client() below
+# creates it and every function here accepts it. Retrying was never going to
+# work -- CONNECT_ATTEMPTS x CONNECT_BACKOFF_S spans ~90s, about the width of
+# the block itself, and each retry restarts it.
+CONNECT_BACKOFF_MULTIPLIER = 3.0
+
+
+def open_client(cfg: Optional[Dict[str, Any]] = None, timeout: int = 30):
+    """One connected, keepalive'd SSHClient the caller owns and must close.
+
+    Pass it to discover_available_gpus / sync_remote_code /
+    kill_stale_training_processes / run_training_remote so an entire wave
+    costs ONE connection instead of one per call -- see the rate-limit note
+    above for why that is not merely an optimization.
+    """
+    if not _PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko is not installed. Run: pip install paramiko python-dotenv")
+    cfg = cfg or _load_cfg()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        _connect_with_retry(client, cfg, timeout=timeout)
+    except Exception:
+        # Close the half-built client before re-raising. Callers that let
+        # this propagate never receive it and so cannot close it themselves,
+        # and a campaign retries this every wave for hours.
+        client.close()
+        raise
+    # A wave holds this open across several minutes of training; without a
+    # keepalive an idle-connection timeout on the network path (NAT gateway
+    # or firewall) silently drops it mid-run.
+    client.get_transport().set_keepalive(30)
+    return client
 
 
 def _connect_with_retry(client, cfg: Dict[str, Any], timeout: int = 30,
@@ -72,6 +122,11 @@ def _connect_with_retry(client, cfg: Dict[str, Any], timeout: int = 30,
                 print(f"[RemoteRunner] Connection attempt {attempt}/{attempts} failed "
                       f"({type(e).__name__}: {e}) -- retrying in {backoff_s:.0f}s")
                 time.sleep(backoff_s)
+                # Exponential, not flat: the failure this actually hits is a
+                # rate-limit window ~60-90s wide (see the note by
+                # CONNECT_BACKOFF_MULTIPLIER), and three flat 5s retries all
+                # land inside it. 5 -> 15 -> 45 spans it instead.
+                backoff_s *= CONNECT_BACKOFF_MULTIPLIER
     raise last
 
 
@@ -101,7 +156,7 @@ def is_remote_configured() -> bool:
     return bool(cfg["host"] and cfg["user"] and cfg["repo"] and cfg["password"])
 
 
-def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None, client=None) -> List[Dict[str, Any]]:
     """Query the remote server's GPUs live via nvidia-smi and return the
     ones currently free enough to use. No static exclusion list -- purely
     driven by freshly-queried utilization/free-memory against
@@ -119,11 +174,17 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[s
     util_threshold = float(os.getenv("REMOTE_GPU_UTIL_THRESHOLD_PCT", "10"))
     min_free_mb = float(os.getenv("REMOTE_GPU_MIN_FREE_MB", "8000"))
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # An explicit client is reused and left open for its owner; None means
+    # this call opens and closes its own. See CONNECT_BACKOFF_MULTIPLIER:
+    # the server rate-limits connects, so callers doing several of these in
+    # quick succession must share one.
+    owns_client = client is None
+    # The connect itself must be INSIDE the try: this function's contract is
+    # "[] on any connection/parse failure, never raise" -- callers degrade to
+    # the single-GPU fallback on the strength of that.
     try:
-        _connect_with_retry(client, cfg, timeout=30)
-        client.get_transport().set_keepalive(30)
+        if owns_client:
+            client = open_client(cfg)
         _, stdout, _ = client.exec_command(
             "nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu "
             "--format=csv,noheader,nounits",
@@ -134,7 +195,8 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[s
         print(f"[RemoteRunner] GPU discovery failed: {e}")
         return []
     finally:
-        client.close()
+        if owns_client and client is not None:
+            client.close()
 
     gpus = []
     for line in output.splitlines():
@@ -214,7 +276,8 @@ def _release_gpu_lock(client, gpu_index: int, remote_repo: str) -> None:
         pass
 
 
-def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout: int = 30) -> List[Dict[str, Any]]:
+def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout: int = 30,
+                                  client=None) -> List[Dict[str, Any]]:
     """Find and clean up any leftover train.py process from a previous,
     not-cleanly-stopped run of this project on the remote server, before a
     new campaign starts. Called once at Orchestrator startup, never
@@ -249,12 +312,10 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
         return []
     remote_repo = cfg["repo"].rstrip("/")
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    owns_client = client is None
     try:
-        _connect_with_retry(client, cfg, timeout=30)
-        client.get_transport().set_keepalive(30)
-
+        if owns_client:
+            client = open_client(cfg)
         _, stdout, _ = client.exec_command(
             "nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits", timeout=timeout,
         )
@@ -302,7 +363,8 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
         print(f"[RemoteRunner] Stale-process check failed: {e}")
         return []
     finally:
-        client.close()
+        if owns_client and client is not None:
+            client.close()
 
 
 def _acquire_sync_lock(client, remote_repo: str, max_wait_seconds: float = 60.0,
@@ -355,7 +417,7 @@ def _release_sync_lock(client, remote_repo: str) -> None:
         pass
 
 
-def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> bool:
+def sync_remote_code(cfg: Optional[Dict[str, Any]] = None, client=None) -> bool:
     """git stash + pull --ff-only on the remote clone, guarded by a remote
     mkdir-based lock (see _acquire_sync_lock) so two uncoordinated callers
     -- a parallel wave, a single sequential run, or an entirely separate
@@ -375,12 +437,12 @@ def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> bool:
         return False
     cfg = cfg or _load_cfg()
     remote_repo = cfg["repo"]
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    owns_client = client is None
+    # Inside the try for the same reason as discover_available_gpus: this
+    # returns False on an unreachable host rather than raising.
     try:
-        _connect_with_retry(client, cfg, timeout=30)
-        client.get_transport().set_keepalive(30)
-
+        if owns_client:
+            client = open_client(cfg)
         lock_acquired = _acquire_sync_lock(client, remote_repo)
         try:  # noqa: SIM105 -- inner lock release, see outer handler below
             print("[RemoteRunner] Pulling latest code on remote ...")
@@ -403,7 +465,8 @@ def sync_remote_code(cfg: Optional[Dict[str, Any]] = None) -> bool:
         print(f"[RemoteRunner] Remote code sync failed: {type(e).__name__}: {e}")
         return False
     finally:
-        client.close()
+        if owns_client and client is not None:
+            client.close()
 
 
 def run_training_remote(
@@ -414,6 +477,7 @@ def run_training_remote(
     run_label: Optional[str] = None,
     skip_sync: bool = False,
     display: Optional[MultiGpuProgressDisplay] = None,
+    client=None,
 ) -> Dict[str, Any]:
     """
     Upload hyperparams YAML to the remote server and run train.py there.
@@ -511,19 +575,18 @@ def run_training_remote(
     if not skip_sync:
         sync_remote_code(cfg)
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # This used to call client.connect() raw -- no retry at all, unlike every
+    # other connect in this module. Under the server's connect rate limit that
+    # meant a wave's concurrent slots failed instantly and permanently. They
+    # now share the caller's connection when given one, and otherwise go
+    # through open_client's retry.
+    owns_client = client is None
     lock_acquired = False
 
     try:
-        _print(f"Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} ...")
-        client.connect(
-            hostname=cfg["host"],
-            port=cfg["port"],
-            username=cfg["user"],
-            password=cfg["password"] or None,
-            timeout=30,
-        )
+        if owns_client:
+            _print(f"Connecting to {cfg['user']}@{cfg['host']}:{cfg['port']} ...")
+            client = open_client(cfg)
         # A training session can hold this connection open for several
         # minutes; without a keepalive, an idle-connection timeout anywhere
         # between here and the remote server (a NAT gateway or firewall on
@@ -661,55 +724,27 @@ def run_training_remote(
     finally:
         if lock_acquired:
             _release_gpu_lock(client, gpu_index, remote_repo)
-        client.close()
+        if owns_client and client is not None:
+            client.close()
 
 
 # Mapping from train.py output key -> metrics dict key
-_OUTPUT_FIELDS = {
-    "val_bpb:": ("val_bpb", float),
-    "training_seconds:": ("training_time", float),
-    "total_seconds:": ("total_seconds", float),
-    "peak_vram_mb:": ("peak_vram_mb", float),
-    "mfu_percent:": ("mfu_percent", float),
-    "total_tokens_m:": ("total_tokens_M", float),
-    "num_steps:": ("num_steps", int),
-    "budget_shortfall_pct:": ("budget_shortfall_pct", float),
-    "num_params_m:": ("num_params_M", float),
-    "depth:": ("depth", int),
-    "holdout_val_bpb:": ("holdout_val_bpb", float),
-}
-
-
-# Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`
-# carry real per-run evidence as a JSON blob rather than a single scalar.
-_JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps", "token_fingerprint"}
-
-
 def _parse_output(stdout: str) -> Dict[str, Any]:
-    """Extract all metrics from train.py's final summary block."""
+    """Extract all metrics from train.py's final summary block.
+
+    The field map and the scanning itself live in agents/train_output.py, shared
+    with Agent1TrainingSpecialist._parse_training_output -- see that module for
+    why they must not be two hand-synced copies.
+
+    Only the defaults below are specific to this path: a remote run carries a
+    transport `status`, and `training_time` is seeded to None because this
+    function is also called on PARTIAL output when an SSH channel drops
+    mid-summary, where the key may legitimately never appear.
+    """
     metrics: Dict[str, Any] = {
         "val_bpb": float("inf"),
         "training_time": None,
         "status": "remote_ok",
     }
-    for line in stdout.splitlines():
-        if ":" in line:
-            prefix, _, rest = line.partition(":")
-            key = prefix.strip()
-            if key in _JSON_OUTPUT_KEYS:
-                try:
-                    metrics[key] = json.loads(rest.strip())
-                except (json.JSONDecodeError, ValueError):
-                    pass
-                continue
-
-        key = line.split()[0].lower() if line.split() else ""
-        if key in _OUTPUT_FIELDS:
-            dest, cast = _OUTPUT_FIELDS[key]
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    metrics[dest] = cast(parts[1])
-                except (ValueError, IndexError):
-                    pass
+    metrics.update(train_output.parse(stdout))
     return metrics

@@ -20,7 +20,6 @@ raises when scikit-learn is missing, but every function that needs it
 returns None rather than fabricating a landscape.
 """
 
-import json
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -45,16 +44,10 @@ MIN_LANDSCAPE_N = 15            # mirrors state/surrogate.py::MIN_SURROGATE_N
 DEFAULT_GRID_RESOLUTION = 24    # 24x24 = 576 cells -- milliseconds when batch-predicted
 GRID_PADDING_FRACTION = 0.15    # pad the real points' PCA extent before gridding
 
-# The flag vocabulary Agent 4 writes and the landscape chart draws. Kept here
-# (not on Agent 4) because both the writer and the reader need it, and a
-# typo'd flag string on one side would otherwise fail silently.
-REGION_FLAGS = (
-    "investigating",         # Agent 4 is probing this region right now
-    "currently_exploiting",  # the search center lives here
-    "no_optimum",            # probed, every probe came back bad
-    "local_optimum",         # heavily exploited, then beaten by a better region
-    "exploitation_paused",   # heavily exploited, set aside but not ruled out
-)
+# The flag vocabulary lives in state/regions.py now, with the registry that
+# owns it. It was defined here when this module also stored the flags; a
+# module that only draws them holding a second copy of the list is exactly how
+# "investigating" survived here after it stopped existing anywhere else.
 
 
 def _usable_rows(
@@ -282,28 +275,10 @@ def region_members(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Region flags: written by Agent 4, drawn by the landscape chart.
-# ---------------------------------------------------------------------------
-
-def load_region_flags(path: Any) -> List[Dict[str, Any]]:
-    """Tolerant read -- a missing, unreadable, or malformed file yields [],
-    never an exception and never a fabricated flag (same convention as
-    Agent3ReportAnalyst._load_annotations)."""
-    p = Path(path)
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeDecodeError):
-        return []
-    regions = data.get("regions") if isinstance(data, dict) else None
-    if not isinstance(regions, list):
-        return []
-    return [r for r in regions if isinstance(r, dict) and "hyperparams" in r]
-
-
-def save_region_flags(path: Any, regions: List[Dict[str, Any]]) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"regions": regions}, indent=2, sort_keys=True), encoding="utf-8")
+# Region flags used to be loaded and saved here, in
+# state/agent4_region_flags.json. They now live in state/regions.py, which is
+# the single store: it owns region identity (a fixed anchor plus normalized
+# 11-D distance) as well as the flag, so there is no second file free to
+# disagree about what counts as the same place. The landscape chart takes the
+# flags it draws as a parameter -- RegionRegistry.flags_snapshot() produces
+# exactly the shape it already expected.

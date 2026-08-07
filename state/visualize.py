@@ -856,15 +856,21 @@ PREDICTED_TERRAIN = CATEGORICAL[6]  # "#4a3aa7"
 # reserved for measured runs).
 PREDICTED_ALPHA_RANGE = (0.15, 0.85)
 
-# Region flags written by Agent 4 (state/landscape.py::REGION_FLAGS). Fixed
+# Region flags written by the registry (state/regions.py). Fixed
 # marker + color per flag, same "one lookup table, never improvised" pattern
 # as STATUS_COLORS.
+# Keys are state/regions.py's lifecycle flags. "investigating" used to be
+# here too and is gone with the exploration-window model: a region being
+# searched is simply "currently_exploiting" now, since several are searched at
+# once and there is no transient "we are checking this one out" state. "merged"
+# never reaches a chart -- RegionRegistry.flags_snapshot() omits absorbed
+# regions, whose anchor is by definition on top of the survivor's.
 REGION_FLAG_STYLES = {
-    "investigating":        {"marker": "o", "color": INK_SECONDARY, "label": "investigating"},
     "currently_exploiting": {"marker": "*", "color": STATUS_COLORS["good"], "label": "exploiting now"},
     "no_optimum":           {"marker": "x", "color": INK_MUTED, "label": "no optimum found"},
     "local_optimum":        {"marker": "^", "color": DIVERGING_POS, "label": "local optimum"},
     "exploitation_paused":  {"marker": "s", "color": INK_MUTED, "label": "exploitation paused"},
+    "capacity_paused":      {"marker": "d", "color": INK_SECONDARY, "label": "paused: no GPU free"},
 }
 _REGION_FLAG_FALLBACK = {"marker": "P", "color": INK_MUTED, "label": "flagged"}
 

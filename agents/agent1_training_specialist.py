@@ -1,12 +1,13 @@
 """Agent 1: Training Specialist - Decides hyperparameters and trains models."""
 
+import contextlib
 import math
 import os
 import random
 import subprocess
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Iterator, List, Optional, Tuple
 import json
 
 try:
@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
 from agents import claude_cli
+from agents import train_output
 
 
 # The 4 learning-rate groups train.py's optimizer actually exposes (matches
@@ -68,6 +70,11 @@ ARCH_SAFE_RANGES = {
 OTHER_SAFE_RANGES = {"weight_decay": (0.0, 0.5), "warmup_ratio": (0.0, 0.2), "batch_size": (2048, 32768)}
 SEARCH_SPACE = {**LR_SAFE_RANGES, **ARCH_SAFE_RANGES, **OTHER_SAFE_RANGES}
 
+# The campaign's default initial-weight seed (train.py's own SEED default, kept
+# in sync here because Agent 1 is what writes it into model_hyperparams.yaml).
+# Deliberately NOT in SEARCH_SPACE: see _default_hyperparams.
+DEFAULT_SEED = 42
+
 # Tier 4 (see dev/INNOVATION_PLAN.md): thresholds for turning a token-level
 # behavioral fingerprint (agents/xai_methods/token_methods.py) into
 # directional nudges on the architecture search. Starting points, not
@@ -113,6 +120,16 @@ class Agent1TrainingSpecialist:
         self.training_budget = self.agent1_config.get("training_budget_seconds", 300)
         self.min_improvement = self.agent1_config.get("min_improvement", 0.005)
         self.max_stalled_iterations = self.agent1_config.get("max_stalled_iterations", 3)
+        # "Improved" has to be defined against the measured noise floor, not
+        # as a round number. _detect_stagnation used a hardcoded 0.01, which
+        # at the current sigma (0.00919, state/noise_floor.json) is 1.09
+        # sigma -- so a run that was purely luckier than the last one cleared
+        # it, and a genuine 1-sigma gain did not. Expressed as a multiple of
+        # sigma it keeps meaning the same thing when the noise floor is
+        # re-measured (it has already moved ~3x once, when the campaign
+        # switched from a time budget to a token budget).
+        self.stagnation_sigma_multiple = float(
+            self.agent1_config.get("stagnation_sigma_multiple", 2.0))
         self.summary_strength = float(self.agent1_config.get("summary_strength", 2.0))
         self.lr_bounds: Dict[str, tuple] = {
             key: (
@@ -149,6 +166,10 @@ class Agent1TrainingSpecialist:
         self._search_planner_state_path = str(_state / "search_planner_state.json")
         self._noise_floor_path = str(_state / "noise_floor.json")
         self._search_plan_report_dir = str(_reports / "agent1_search_plan")
+        # Root for per-region planner state (state/regions.py). Each region
+        # searched concurrently gets its own SearchPlannerState file under
+        # here -- see search_region() for why they must not share one.
+        self._region_planner_state_dir = str(_state / "search_planner")
 
         # LLM/copilot integration (dev/checks.txt item 4): shared campaign
         # budget across agent1/2/3, tracked via agents/claude_cli.py and
@@ -165,6 +186,21 @@ class Agent1TrainingSpecialist:
         self.current_hyperparams = self._init_hyperparams()
         self.total_api_cost = 0.0
         self.best_val_bpb = float("inf")
+        # Set only inside search_region(): several regions decided in one
+        # wave would otherwise each overwrite model_hyperparams.yaml, leaving
+        # the file describing whichever region happened to be decided last.
+        self._suppress_hyperparams_save = False
+        # The region this decision belongs to, or None on the single-search
+        # path. Read by the stagnation/stop/stuck checks, which all mean
+        # something different inside a region than across the campaign.
+        self._active_region = None
+        # Set by a region-scoped decision when that region looks stalled or
+        # stuck. Reported rather than acted on: inside a region these are
+        # LIFECYCLE facts for the allocator to judge (pause it, retire it,
+        # open something else), not a licence to jump the search center
+        # somewhere random or to stop the whole campaign.
+        self.last_region_stalled = False
+        self.last_region_stuck = False
 
         # Decision log (see agents/pipeline_validator.py): a total, recorded
         # disposition for every tunable parameter every iteration, so "was
@@ -211,6 +247,17 @@ class Agent1TrainingSpecialist:
             "warmup_ratio": 0.0,
             "weight_decay": 0.2,
             "ablation_k": self.ablation_k,
+            # Initial-weight seed. Carried explicitly so every proposal states
+            # which initialization it was measured under, instead of that being
+            # an unrecorded property of train.py's source.
+            #
+            # NOT a search dimension -- it is absent from SEARCH_SPACE, so every
+            # adjustment path here passes it through untouched and
+            # _build_decision_log records it as "pass-through (not a tunable
+            # search parameter)". Optimizing over seeds would select the
+            # luckiest initialization; the correct treatment is to average over
+            # them (see scripts/seed_variance.py).
+            "seed": DEFAULT_SEED,
         }
 
     def _save_hyperparams(self, hyperparams: Optional[Dict[str, Any]] = None):
@@ -227,6 +274,12 @@ class Agent1TrainingSpecialist:
         every probe and poisoning the surrogate with it.
         """
         if yaml is None:
+            return
+        # An explicit argument is always honored: train_model passes the exact
+        # dict it is about to train, and that must reach disk even when a
+        # region-scoped decision is in progress. Only the argument-less
+        # "persist my current center" call is suppressed -- see search_region.
+        if hyperparams is None and self._suppress_hyperparams_save:
             return
         with open(self.model_config_path, "w", encoding="utf-8") as f:
             yaml.dump(self.current_hyperparams if hyperparams is None else hyperparams, f)
@@ -252,6 +305,86 @@ class Agent1TrainingSpecialist:
         self.current_hyperparams = dict(hyperparams)
         self._save_hyperparams()
         print(f"[Agent 1] Search center relocated to: {hyperparams}")
+
+    #: Keys the Orchestrator stamps onto a proposal fresh every iteration --
+    #: which region it belongs to, whether to run token-level XAI, and the
+    #: threshold below which train.py should also score the holdout shard.
+    #: They describe one dispatch, not a configuration, so they are stripped
+    #: before a proposal becomes a region's stored center. Left in, they make
+    #: regions.json read as a snapshot of orchestration state, and a stale
+    #: holdout_eval_if_below could survive into a later run on the one path
+    #: that does not overwrite it (no finite best yet).
+    ORCHESTRATION_KEYS = ("region_id", "token_xai_enabled", "holdout_eval_if_below")
+
+    @contextlib.contextmanager
+    def search_region(self, region, save_hyperparams: bool = False) -> Iterator[None]:
+        """Run one decision *as* a given region (state/regions.py::Region),
+        then hand the search state back.
+
+        This is what makes several regions searchable at once by a single
+        Agent 1. Four pieces of state are region-scoped for the duration:
+
+          - `current_hyperparams` -> the region's own drifting center, so
+            every adjustment path (surrogate, evidence, heuristic, radical
+            change -- all of which read `self.current_hyperparams`) operates
+            on this region and not on some other region's last proposal;
+          - the planner state path -> the region's own file, which is the
+            entire point: agents/search_planner.py keeps ONE cold-start
+            counter, ONE frozen set and ONE active Gauss-Southwell block per
+            state file. Shared, four concurrent regions would fight over one
+            block rotation and one region's frozen parameters would silently
+            freeze them everywhere else;
+          - the plan report dir -> likewise per region, since
+            _surrogate_adjustment reads back `plan_{iteration}.json` to
+            explain its own decision and two regions deciding the same
+            iteration number would otherwise overwrite each other's;
+          - `best_val_bpb` -> the region's own best, because that value is
+            used for exactly one thing downstream (EI's `f_best`, see
+            search_planner.propose_next). With the campaign-wide best, EI
+            inside any region that isn't the champion sees essentially zero
+            improvement probability everywhere and its argmax degenerates
+            into noise. A local trust region needs a local reference.
+
+        A genuine campaign record found inside a region still propagates out
+        on exit -- the region's search is local, but "the best model anyone
+        has trained" is not a per-region fact.
+
+        save_hyperparams is False by default: writing model_hyperparams.yaml
+        is meaningless when several regions are deciding back-to-back within
+        one wave (the orchestrator writes a per-run YAML per GPU instead, see
+        Orchestrator._write_temp_hyperparams). It exists for the sequential
+        single-GPU path, which does still train from that file.
+        """
+        prev_center = self.current_hyperparams
+        prev_state_path = self._search_planner_state_path
+        prev_report_dir = self._search_plan_report_dir
+        prev_best = self.best_val_bpb
+        prev_save = self._suppress_hyperparams_save
+        prev_region = self._active_region
+
+        self._active_region = region
+        self.last_region_stalled = False
+        self.last_region_stuck = False
+        self.current_hyperparams = dict(region.center)
+        self._search_planner_state_path = region.planner_state_path(self._region_planner_state_dir)
+        self._search_plan_report_dir = region.report_dir(prev_report_dir)
+        region_best = region.best_val_bpb
+        self.best_val_bpb = region_best if region_best is not None else float("inf")
+        self._suppress_hyperparams_save = not save_hyperparams
+        try:
+            yield
+        finally:
+            # The proposal this decision produced becomes the region's new
+            # center -- that drift is the region exploiting itself, and it is
+            # why identity lives in the (immovable) anchor instead.
+            region.center = {k: v for k, v in self.current_hyperparams.items()
+                             if k not in self.ORCHESTRATION_KEYS}
+            self.current_hyperparams = prev_center
+            self._search_planner_state_path = prev_state_path
+            self._search_plan_report_dir = prev_report_dir
+            self.best_val_bpb = min(prev_best, self.best_val_bpb)
+            self._suppress_hyperparams_save = prev_save
+            self._active_region = prev_region
 
     def decide_next_hyperparams(
         self,
@@ -304,6 +437,20 @@ class Agent1TrainingSpecialist:
 
         detected_stagnation = self._detect_stagnation(recent_results, latest_val_bpb)
         effective_stuck_signal = stuck_signal or detected_stagnation
+
+        # A stuck region is a lifecycle fact, not a licence to teleport.
+        # _radical_change picks a random n_layer/n_embd, which lands the
+        # search outside the very region it was scoped to -- so within a
+        # region the signal is recorded for the allocator and the local
+        # surrogate search continues. Retiring or pausing the region is a
+        # decision made from this flag, one level up, where the alternatives
+        # (open a new region, move its GPUs to a better one) actually exist.
+        if self._active_region is not None and effective_stuck_signal:
+            self.last_region_stuck = True
+            print(f"[Agent 1] Region {self._active_region.region_id} looks stuck -- "
+                  f"reported to the allocator; continuing its local search rather "
+                  f"than jumping the center out of the region")
+            effective_stuck_signal = False
 
         # PRIMARY: the Tier 1 surrogate (Sobol cold start -> EI acquisition,
         # see agents/search_planner.py), unless stuck -- radical_change stays
@@ -454,6 +601,12 @@ class Agent1TrainingSpecialist:
             "path_taken": path_taken,
             "evidence_considered": len(evidence) if evidence else 0,
             "summary_considered": bool(latest_summary),
+            # Which region's search produced this decision, or None on the
+            # single-search path. pipeline_validator filters its lookback on
+            # this: "pinned at its boundary for 6 consecutive iterations" is a
+            # statement about one search, and under multi-region search
+            # consecutive iterations belong to different ones.
+            "region_id": self._active_region.region_id if self._active_region else None,
             "params": params_log,
             "lr_clamps": dict(self._last_lr_clamps),
             "fingerprint_adjustments": list(self._last_fingerprint_adjustments),
@@ -519,12 +672,49 @@ class Agent1TrainingSpecialist:
             self._last_surrogate_phase = "cold_start"
         return result
 
+    def _sigma(self) -> float:
+        """The measured val_bpb noise floor, via search_planner's loader so
+        there is one definition of it (and one warning when it's missing)."""
+        from agents.search_planner import _load_sigma
+
+        return _load_sigma(self._noise_floor_path)
+
+    def _region_val_bpbs(self) -> Optional[List[float]]:
+        """This region's own measured runs, oldest first -- or None when no
+        region scope is in effect.
+
+        Every trend check below has to read this rather than the
+        orchestrator's `recent_results`, which is the last few runs of the
+        WHOLE campaign. Under a multi-GPU wave those come from different
+        regions, so comparing them to each other measures the difference
+        between two places in the space and calls it a trend.
+        """
+        if self._active_region is None:
+            return None
+        return list(self._active_region.val_bpbs)
+
     def _should_stop_early(
         self,
         recent_results: Optional[list],
         latest_val_bpb: Optional[float],
     ) -> bool:
-        """Stop once the recent trend has stalled for enough iterations."""
+        """Stop once the recent trend has stalled for enough iterations.
+
+        Returns False unconditionally inside a region scope, and records
+        `last_region_stalled` instead. This function's True stops the ENTIRE
+        campaign; one region running out of road is not that. Which region to
+        pause or retire is the allocator's decision, made from the flag, and
+        the other regions keep running meanwhile.
+        """
+        region_values = self._region_val_bpbs()
+        if region_values is not None:
+            self.last_region_stalled = self._stalled(region_values, latest_val_bpb)
+            if self.last_region_stalled:
+                print(f"[Agent 1] Region {self._active_region.region_id} has stalled "
+                      f"({len(region_values)} run(s), no gain over the last "
+                      f"{self.max_stalled_iterations}) -- reporting it, not stopping the campaign")
+            return False
+
         if not recent_results:
             return False
 
@@ -546,14 +736,34 @@ class Agent1TrainingSpecialist:
         finite_values = [value for value in values if math.isfinite(value)]
         if len(finite_values) < self.max_stalled_iterations + 1:
             return False
+        return self._stalled(finite_values, latest_val_bpb)
+
+    def _stalled(self, values: List[float], latest_val_bpb: Optional[float]) -> bool:
+        """Has the latest run failed to improve on the best of the runs
+        before it? Shared by the campaign-wide and region-scoped paths so the
+        two can never drift apart in what "stalled" means.
+
+        The baseline deliberately EXCLUDES the latest value. Comparing the
+        window's minimum against the latest when the latest is itself part of
+        that window makes `improvement` zero exactly when the newest run set
+        a record -- so a steadily improving search reported itself as
+        stalled. That never surfaced because this was unreachable on the
+        campaign path: it needs max_stalled_iterations + 1 = 4 values and the
+        orchestrator only ever passes the last 3 (get_all_results()[-3:]), so
+        the length guard returned False every time. Region scoping feeds it a
+        region's full history, which is what made the latent bug reachable.
+        """
+        finite_values = [v for v in values if isinstance(v, (int, float)) and math.isfinite(v)]
+        if len(finite_values) < self.max_stalled_iterations + 1:
+            return False
 
         recent_window = finite_values[-(self.max_stalled_iterations + 1):]
-        best_value = min(recent_window)
+        baseline = min(recent_window[:-1])
         latest_value = recent_window[-1]
         if latest_val_bpb is not None and math.isfinite(latest_val_bpb):
             latest_value = latest_val_bpb
 
-        improvement = best_value - latest_value
+        improvement = baseline - latest_value
         return improvement < self.min_improvement
 
     def _detect_stagnation(
@@ -561,21 +771,35 @@ class Agent1TrainingSpecialist:
         recent_results: Optional[list],
         latest_val_bpb: Optional[float],
     ) -> bool:
-        """Return True when the recent validation trend shows little or no improvement."""
-        if not recent_results:
-            return False
+        """Return True when the recent validation trend shows little or no
+        improvement.
 
-        values = []
-        for item in recent_results:
-            if not isinstance(item, dict):
-                continue
-            val_bpb = item.get("val_bpb")
-            if val_bpb is None:
-                continue
-            try:
-                values.append(float(val_bpb))
-            except (TypeError, ValueError):
-                continue
+        Region-scoped when a region is active, campaign-wide otherwise. That
+        distinction is not cosmetic: this signal's True routes into
+        _evidence_adjustment(stuck_signal=True) -> _radical_change, which
+        picks a random n_layer and n_embd. Fed the campaign's last few runs
+        while four regions train concurrently, it compares one region's run
+        against another's, concludes "no progress", and jumps the center out
+        of the region it was supposed to be exploiting -- destroying the
+        region's identity on essentially every wave. See _region_val_bpbs.
+        """
+        region_values = self._region_val_bpbs()
+        if region_values is not None:
+            values = list(region_values)
+        else:
+            if not recent_results:
+                return False
+            values = []
+            for item in recent_results:
+                if not isinstance(item, dict):
+                    continue
+                val_bpb = item.get("val_bpb")
+                if val_bpb is None:
+                    continue
+                try:
+                    values.append(float(val_bpb))
+                except (TypeError, ValueError):
+                    continue
 
         if len(values) < 3:
             return False
@@ -585,12 +809,14 @@ class Agent1TrainingSpecialist:
             return False
 
         window = finite_values[-3:]
-        if window[0] == float("inf") or window[1] == float("inf") or window[2] == float("inf"):
-            return False
 
-        improved = window[-1] < window[-2] - 0.01 or window[-2] < window[-3] - 0.01
+        # Sized against the measured noise floor rather than the old
+        # hardcoded 0.01 (= 1.09 sigma today, i.e. "one lucky run counts as
+        # progress"). See stagnation_sigma_multiple.
+        margin = self._sigma() * self.stagnation_sigma_multiple
+        improved = window[-1] < window[-2] - margin or window[-2] < window[-3] - margin
         if latest_val_bpb is not None and math.isfinite(latest_val_bpb):
-            return not improved and latest_val_bpb >= min(window[-2], window[-3]) - 0.01
+            return not improved and latest_val_bpb >= min(window[-2], window[-3]) - margin
         return not improved
 
     def _radical_change(self, new_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1090,50 +1316,19 @@ class Agent1TrainingSpecialist:
             "error": error,
         }
 
-    _TRAIN_OUTPUT_FIELDS = {
-        "val_bpb:": ("val_bpb", float),
-        "training_seconds:": ("training_time", float),
-        "total_seconds:": ("total_seconds", float),
-        "peak_vram_mb:": ("peak_vram_mb", float),
-        "mfu_percent:": ("mfu_percent", float),
-        "total_tokens_m:": ("total_tokens_M", float),
-        "num_steps:": ("num_steps", int),
-        "num_params_m:": ("num_params_M", float),
-        "depth:": ("depth", int),
-        "holdout_val_bpb:": ("holdout_val_bpb", float),
-        "budget_shortfall_pct:": ("budget_shortfall_pct", float),
-    }
-
-    # Lines like `interpretable_scalars: {...}` / `head_ablation_impacts: {...}`
-    # carry real per-run evidence (see train.py) as a JSON blob rather than a
-    # single scalar; keyed generically so any future `<name>: {json}` line is
-    # picked up without another parser change.
-    _JSON_OUTPUT_KEYS = {"interpretable_scalars", "head_ablation_impacts", "hyperparam_clamps", "token_fingerprint"}
-
     def _parse_training_output(self, stdout: str) -> Dict[str, Any]:
-        """Parse all metrics from train.py's final summary block."""
-        metrics: Dict[str, Any] = {"val_bpb": float("inf")}
-        for line in stdout.splitlines():
-            if ":" in line:
-                prefix, _, rest = line.partition(":")
-                key = prefix.strip()
-                if key in self._JSON_OUTPUT_KEYS:
-                    try:
-                        metrics[key] = json.loads(rest.strip())
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                    continue
+        """Parse all metrics from train.py's final summary block.
 
-            parts = line.split()
-            if not parts:
-                continue
-            key = parts[0].lower()
-            if key in self._TRAIN_OUTPUT_FIELDS and len(parts) >= 2:
-                dest, cast = self._TRAIN_OUTPUT_FIELDS[key]
-                try:
-                    metrics[dest] = cast(parts[1])
-                except (ValueError, IndexError):
-                    pass
+        The field map and the scanning itself live in agents/train_output.py,
+        shared with agents/remote_runner.py::_parse_output -- see that module
+        for why they must not be two hand-synced copies.
+
+        Only the default below is specific to this path: this is the local
+        subprocess fallback, whose caller (train_model) sets the status itself,
+        so unlike the remote parser this one seeds no `status`.
+        """
+        metrics: Dict[str, Any] = {"val_bpb": float("inf")}
+        metrics.update(train_output.parse(stdout))
         return metrics
 
     def _extract_summary_sections(self, summary: str, headings: List[str]) -> str:

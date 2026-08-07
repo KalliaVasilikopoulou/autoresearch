@@ -16,10 +16,8 @@ from state.landscape import (
     DEFAULT_GRID_RESOLUTION,
     LANDSCAPE_DEPS_AVAILABLE,
     build_landscape,
-    load_region_flags,
     project_point,
     region_members,
-    save_region_flags,
 )
 from state.results_analysis import HYPERPARAM_COLUMNS
 from state.surrogate import fit_surrogate
@@ -237,41 +235,8 @@ def test_region_members_radius_is_monotonic():
 def test_region_members_empty_when_center_unprojectable():
     rows, ls = _landscape()
     assert region_members(rows, {"n_layer": 6}, ls, radius=0.5) == []
-
-
-# --- region flags ----------------------------------------------------------
-
-def test_load_region_flags_missing_file_returns_empty(tmp_path):
-    assert load_region_flags(tmp_path / "nope.json") == []
-
-
-def test_load_region_flags_corrupt_file_returns_empty(tmp_path):
-    path = tmp_path / "flags.json"
-    path.write_text("not valid json{{{", encoding="utf-8")
-    assert load_region_flags(path) == []
-
-
-def test_load_region_flags_malformed_regions_key_returns_empty(tmp_path):
-    path = tmp_path / "flags.json"
-    path.write_text(json.dumps({"regions": "not a list"}), encoding="utf-8")
-    assert load_region_flags(path) == []
-
-
-def test_load_region_flags_skips_entries_without_hyperparams(tmp_path):
-    """An entry with no hyperparams can't be placed on the landscape at all
-    -- dropped rather than drawn at a guessed position."""
-    path = tmp_path / "flags.json"
-    path.write_text(json.dumps({"regions": [
-        {"flag": "local_optimum"},
-        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting"},
-    ]}), encoding="utf-8")
-    loaded = load_region_flags(path)
-    assert len(loaded) == 1 and loaded[0]["flag"] == "currently_exploiting"
-
-
-def test_save_load_region_flags_roundtrip(tmp_path):
-    path = tmp_path / "state" / "flags.json"
-    regions = [{"hyperparams": {"n_layer": 6, "n_embd": 512}, "flag": "local_optimum",
-                "since_iteration": 120, "n_runs": 14}]
-    save_region_flags(path, regions)
-    assert load_region_flags(path) == regions
+# The region-flag load/save tests that lived here are gone with the
+# functions: state/agent4_region_flags.json was a second region store with
+# its own identity scheme. state/regions.py is the single store now, and
+# tests/test_regions.py covers its persistence. This module keeps only what
+# is genuinely about the PCA landscape.

@@ -14,14 +14,17 @@ try:
 except ImportError:  # pragma: no cover - fallback for minimal environments
     yaml = None
 
+from agents import allocator
 from agents import pipeline_validator
 from agents import remote_runner
 from agents.live_progress import MultiGpuProgressDisplay
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
 from agents.agent2_xai_specialist import Agent2XAISpecialist
 from agents.agent3_report_analyst import Agent3ReportAnalyst, _read_text_tolerant
-from agents.agent4_landscape_explorer import COMMIT, Agent4LandscapeExplorer
+from agents.agent4_landscape_explorer import Agent4LandscapeExplorer
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
+from state.regions import CAPACITY_PAUSED, RegionRegistry
+from state.results_analysis import SYNTHETIC_STATUSES, load_results
 from state.state_manager import StateManager
 from state.results_logger import log_result
 
@@ -35,6 +38,15 @@ from state.results_logger import log_result
 # iteration budget intact beats filling results.tsv with invented numbers.
 REMOTE_FAILURE_HALT_STREAK = 3
 REMOTE_RETRY_SLEEP_S = 60
+
+# Consecutive waves in which EVERY slot came back remote_error before the
+# campaign stops. Distinct from the streak above, which only counts waves that
+# could not be dispatched at all: a wave whose sync succeeded and whose slots
+# then all failed used to be indistinguishable from progress, so a campaign
+# could burn its entire iteration budget writing val_bpb=inf rows. Observed
+# for real -- two consecutive 4-slot waves produced eight inf rows and the
+# loop would happily have continued to twenty.
+ALL_SLOTS_FAILED_HALT_STREAK = 2
 
 
 def _format_duration(seconds: float) -> str:
@@ -88,26 +100,53 @@ class Orchestrator:
         self.agent1 = Agent1TrainingSpecialist(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
         self.agent2 = Agent2XAISpecialist(config_path, root_dir=root_dir, reports_dir=reports_dir)
         self.agent3 = Agent3ReportAnalyst(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
-        # Agent 4 owns hyperparameter decisions only inside its own bounded
-        # windows; outside them it is entirely inert. Constructed even when
-        # disabled so `self.agent4.enabled` is the single switch rather than
-        # a None check scattered through the loop.
+        # Agent 4 proposes new regions and judges the lifecycle of running
+        # ones. It never proposes a training configuration -- that is Agent 1
+        # scoped to a region. Constructed even when disabled so
+        # `self.agent4.enabled` is the single switch rather than a None check
+        # scattered through the loop.
         self.agent4 = Agent4LandscapeExplorer(config_path, root_dir=root_dir, state_dir=state_dir, reports_dir=reports_dir)
+        # The live regions, shared with Agent 4 (same file) so there is one
+        # store rather than one per reader.
+        self.registry = RegionRegistry(str(Path(state_dir) / "regions.json"))
+        # region_id -> the val_bpb that region's newest run produced, carried
+        # from one wave to the next so a region-scoped decision sees its own
+        # last result rather than the campaign's.
+        self._last_val_bpb_by_region: Dict[str, float] = {}
 
-        # Whichever agent actually decided the current iteration's
-        # hyperparameters -- read by the pipeline_validator call that follows
-        # each decision, so the validator always checks the real decision log
-        # instead of assuming Agent 1 produced it.
+        # Recover the campaign record from results.tsv. best_val_bpb starts at
+        # inf and is only advanced by results this process sees, so a restart
+        # forgot every record ever set -- while the halt messages below tell
+        # the operator to "fix connectivity and restart; the campaign resumes
+        # from results.tsv". It did resume the runs; it did not resume the one
+        # number the whole search is measured against. The consequences were
+        # quiet rather than dramatic: no holdout threshold until something beat
+        # infinity, a spurious "new best" on the first run back (which turns on
+        # token-level XAI for it), and a final report quoting this process's
+        # best as the campaign's.
+        self._recover_campaign_best()
+
+        # The decision log the pipeline_validator call after each decision
+        # should check. Always Agent 1's now -- Agent 4 stopped proposing
+        # training configurations when the exploration window was replaced by
+        # continuous multi-region search, and writes verdict_*.json rather
+        # than the decision_*.json the validator walks. Kept as a pair of
+        # attributes rather than inlined so the validator call site does not
+        # have to know which agent that is.
         self._active_decision_log: Optional[Dict[str, Any]] = None
         self._active_decisions_dir: Path = self.agent1.decisions_dir
-        # Consecutive waves that couldn't reach the remote server. Reset on
-        # any successful sync -- this counts an ongoing outage, not a
+        # Two different remote failures, two counters, because conflating
+        # them makes each one wrong. "Cannot open a connection" means the
+        # server is unreachable; "connected but git sync failed" means it is
+        # reachable and the repo is the problem. Sharing one counter meant a
+        # successful connect cleared accumulated sync failures, so a
+        # persistently broken sync could never reach the halt threshold.
+        # Each counts CONSECUTIVE occurrences of its own failure, not a
         # lifetime total.
         self._remote_unreachable_streak = 0
-        # Iteration of Agent 4's last check. Starts at 0 so the first check
-        # lands one full check_interval in, never at campaign start (where
-        # there is no recent history to judge stagnation from).
-        self._agent4_last_check = 0
+        self._sync_failure_streak = 0
+        # Consecutive waves in which every dispatched slot failed.
+        self._all_slots_failed_streak = 0
 
         # Set the moment Agent 3 creates a new LLM-backed summary
         # (_process_training_result), consumed by whichever hyperparameter
@@ -117,9 +156,25 @@ class Orchestrator:
         # afterward that happens to still see it as "the latest."
         self._new_summary_ready = False
 
+        # Set when a completed run beats the campaign record, consumed by the
+        # next hyperparameter decision (which turns on token-level XAI for it).
+        # An explicit flag rather than the old `latest_val_bpb <
+        # best_before_decision` comparison: the orchestrator now updates
+        # best_val_bpb the moment a result lands -- it has to, because a
+        # region-scoped decision only ever sees its own region's best -- so by
+        # the time the next decision reads it, the comparison can never be
+        # true. Same intent, stated directly instead of inferred from a race.
+        self._new_best_just_set = False
+
         self.config_path = config_path
-        self.max_iterations = 100
-        self.poll_interval = 5
+        orchestrator_config = self._load_orchestrator_config(config_path)
+        # Read from config rather than hardcoded. Both keys have been in
+        # agents_config.yaml's orchestrator: block all along while the class
+        # ignored them -- editing orchestrator.max_iterations did nothing,
+        # which is the same "setting that reads as live and isn't" trap as
+        # the removed agent4.min_regions. --iterations still overrides.
+        self.max_iterations = int(orchestrator_config.get("max_iterations", 100))
+        self.poll_interval = int(orchestrator_config.get("poll_interval_seconds", 5))
         self.dry_run = dry_run
         self.interactive = interactive
 
@@ -128,7 +183,6 @@ class Orchestrator:
         # now wired up for real. parallel_enabled gates whether each
         # iteration even attempts GPU discovery; max_parallel_runs caps how
         # many concurrent GPUs/SSH sessions one wave may claim.
-        orchestrator_config = self._load_orchestrator_config(config_path)
         self.parallel_enabled = bool(orchestrator_config.get("parallel", True))
         self.max_parallel_runs = int(orchestrator_config.get("max_parallel_runs", 4))
         self.parallel_hp_dir = Path(state_dir) / "parallel_hyperparams"
@@ -157,6 +211,26 @@ class Orchestrator:
 
         print("[Orchestrator] Initialization complete")
 
+    def _recover_campaign_best(self) -> None:
+        """Seed Agent 1's best_val_bpb from results.tsv, ignoring synthetic
+        rows (dry_run/simulated), whose val_bpb is a hand-tuned formula rather
+        than a measurement and must never become the record."""
+        try:
+            rows = load_results(str(self.results_path))
+        except Exception as e:  # pragma: no cover - never block startup on this
+            print(f"[Orchestrator] Could not read {self.results_path} for the campaign best: {e}")
+            return
+        finite = [
+            float(r["val_bpb"]) for r in rows
+            if isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
+            and r.get("status") not in SYNTHETIC_STATUSES
+        ]
+        if not finite:
+            return
+        self.agent1.best_val_bpb = min(finite)
+        print(f"[Orchestrator] Resuming: campaign best {self.agent1.best_val_bpb:.6f} "
+              f"recovered from {len(finite)} previous run(s)")
+
     def _load_orchestrator_config(self, config_path: str) -> Dict[str, Any]:
         if yaml is None or not Path(config_path).exists():
             return {}
@@ -164,7 +238,7 @@ class Orchestrator:
             config = yaml.safe_load(f) or {}
         return config.get("orchestrator", {})
 
-    def _kill_stale_remote_training(self, context: str = "a previous run") -> None:
+    def _kill_stale_remote_training(self, context: str = "a previous run", client=None) -> None:
         """Clean up any leftover train.py process on the remote server --
         see remote_runner.kill_stale_training_processes for the 5-condition
         identification (owned by us, running train.py, from our repo,
@@ -183,7 +257,7 @@ class Orchestrator:
         if self.dry_run or not remote_runner.is_remote_configured():
             return
         print(f"[Orchestrator] Checking the remote server for stale training processes from {context}...")
-        killed = remote_runner.kill_stale_training_processes()
+        killed = remote_runner.kill_stale_training_processes(client=client)
         if not killed:
             print("[Orchestrator]   None found.")
             return
@@ -207,11 +281,6 @@ class Orchestrator:
             print(f"[Orchestrator] Iteration {iteration + 1}")
             print(f"{'='*60}")
 
-            # Asked before dispatch so an opening window can cap this wave's
-            # size to Agent 4's probe batch (a wave boundary has to be a
-            # decision boundary for the abandon rule to be exact).
-            self._maybe_open_agent4_window(iteration)
-
             wave_result = self._run_parallel_wave(iteration, report_batch, max_iterations)
             if wave_result is not None:
                 iteration, report_batch, halted = wave_result
@@ -231,7 +300,15 @@ class Orchestrator:
             if recent_results:
                 latest_result = recent_results[-1]
                 latest_val_bpb = latest_result.get("val_bpb")
-            best_before_decision = self.agent1.best_val_bpb
+            # The sequential path is not only the dry-run path: the wave
+            # dispatcher returns None whenever fewer than 2 GPUs are free, so
+            # a busy server drops the whole campaign down here. Without a
+            # region that silently reverts to single-search mode -- rows land
+            # in results.tsv with a blank region_id, no region's history
+            # records them, and the lifecycle thresholds that count "runs
+            # this region spent" quietly stop counting. Run it as a region so
+            # behaviour does not depend on how busy the server happens to be.
+            sequential_region = self._sequential_region(iteration)
             new_hyperparams = self._decide_next_hyperparams(
                 iteration=iteration,
                 latest_summary=latest_summary,
@@ -239,6 +316,7 @@ class Orchestrator:
                 recent_results=recent_results,
                 latest_val_bpb=latest_val_bpb,
                 fresh_summary=fresh_summary,
+                region=sequential_region,
             )
 
             if new_hyperparams is None:
@@ -258,7 +336,8 @@ class Orchestrator:
             # train_model's own _save_hyperparams() call persist this flag —
             # decide_next_hyperparams already wrote the file once, without
             # this key; train_model's save overwrites it with this included.
-            new_best_just_set = latest_val_bpb is not None and latest_val_bpb < best_before_decision
+            new_best_just_set = self._new_best_just_set
+            self._new_best_just_set = False
             token_xai_due = (iteration % self.token_xai_interval == 0) or new_best_just_set
             new_hyperparams["token_xai_enabled"] = token_xai_due
             print(f"[Orchestrator] token_xai_enabled={token_xai_due} "
@@ -283,11 +362,6 @@ class Orchestrator:
             halted, report_batch = self._process_training_result(iteration, new_hyperparams, train_result, report_batch)
             if halted:
                 break
-
-            # Sequential path: a probe "wave" is just N consecutive
-            # iterations, so the boundary check runs every iteration and
-            # evaluate_batch itself decides when it has a full batch.
-            self._agent4_evaluate(iteration)
 
             iteration += 1
             print(f"[Orchestrator] Iteration {iteration} complete")
@@ -332,27 +406,115 @@ class Orchestrator:
         if isinstance(best, (int, float)) and math.isfinite(best):
             hyperparams["holdout_eval_if_below"] = float(best)
 
-    def _maybe_open_agent4_window(self, iteration: int) -> bool:
-        """Ask Agent 4, on its own cadence, whether the search looks trapped.
-        Returns True if it took control. A "no" costs zero iterations.
+    def _sequential_region(self, iteration: int):
+        """The single region a one-run-at-a-time iteration belongs to, or
+        None when regions do not apply.
 
-        The cadence is "at least check_interval iterations since the last
-        check", NOT `iteration % check_interval == 0`. Under multi-GPU
-        parallelism the loop counter advances by the wave size, not by 1, so
-        a modulo test silently skips whole checks: at max_parallel_runs=4 the
-        counter goes 28 -> 32 and never sees 30 at all. Since wave size also
-        varies with how many GPUs happen to be free, that made the check
-        schedule effectively random -- a whole campaign could pass without
-        Agent 4 ever engaging.
+        Returns None for a dry run: nothing is trained, so attributing the
+        result to a region would put fabricated numbers into that region's
+        history and into every lifecycle threshold computed from it.
         """
-        if not self.agent4.enabled or self.agent4.active:
-            return self.agent4.active
-        if iteration - self._agent4_last_check < self.agent4.check_interval:
-            return False
-        self._agent4_last_check = iteration
-        return self.agent4.consider_intervention(
-            iteration, self.agent1.current_hyperparams, self.agent1.best_val_bpb,
-        )
+        if self.dry_run or not self.agent4.enabled:
+            return None
+        _live, plan = self._plan_wave(1, iteration)
+        if not plan.assignments:
+            return None
+        return self.registry.get(plan.assignments[0])
+
+    def _plan_wave(self, n_gpus: int, at_run: int) -> Tuple[List[Any], allocator.AllocationPlan]:
+        """Decide which region each of this wave's GPUs works on.
+
+        Runs Agent 4's maintenance FIRST (merge converged regions, judge every
+        live one) so the allocation is made against this wave's lifecycle
+        state rather than last wave's -- otherwise a region retired moments
+        ago still gets a GPU, and a region that just merged gets two.
+
+        Then, in order: fill any slot the plan wants a NEW region for; if
+        Agent 4 can't produce one (too little data to fit a surrogate, or
+        every candidate lands somewhere already ruled out) fall back to
+        resuming the best PAUSED region, which is exactly the "if nothing
+        better exists, unpause and continue there" case; and if that fails
+        too, hand the slot to the best live region rather than idling a GPU.
+        """
+        self.agent4.maintain(self.registry, at_run)
+
+        live = self.registry.active()
+        plan = allocator.plan(live, n_gpus, self.agent4.max_regions)
+
+        # Resume BEFORE proposing. A region that already has runs invested and
+        # a measured score is a better use of a freed GPU than a speculative
+        # new one, and resume_best_paused takes capacity pauses first -- those
+        # regions lost their slot to a busy server, not to a judgement. The
+        # other order left four partially-explored regions idle while the
+        # allocator opened brand-new ones the moment GPUs came back, which is
+        # exactly the state the 32-run campaign ended in.
+        for _ in range(plan.assignments.count(None)):
+            resumed = self.agent4.resume_best_paused(self.registry, at_run)
+            if resumed is None:
+                break
+            plan.assignments[plan.assignments.index(None)] = resumed.region_id
+
+        wanted_new = plan.assignments.count(None)
+        if wanted_new:
+            rows = load_results(str(self.results_path))
+            opened = self.agent4.propose_regions(
+                rows, self.registry, wanted_new, at_run, self.agent1.best_val_bpb)
+            for region in opened:
+                plan.assignments[plan.assignments.index(None)] = region.region_id
+
+        # Campaign cold start. Agent 4 cannot propose anything until a
+        # surrogate fits (15 usable runs), and those runs cannot exist until
+        # something is dispatched -- so a fresh campaign would deadlock with
+        # zero regions and zero results forever.
+        #
+        # The resolution is that Agent 1's Sobol cold start IS exploration,
+        # and always was: it is a space-filling sample over the whole search
+        # space. It just needs to belong to a region so its runs are
+        # attributed and its planner state has a home. One bootstrap region
+        # is opened at the default center; after ~15 runs land in results.tsv
+        # the surrogate fits, Agent 4 starts proposing real regions on its
+        # three criteria, and this never runs again.
+        if None in plan.assignments and not self.registry.active():
+            bootstrap = self.registry.open_region(
+                self.agent1.current_hyperparams, at_run=at_run, origin="bootstrap")
+            self.registry.save()
+            print(f"[Orchestrator] Campaign cold start: opened bootstrap region "
+                  f"{bootstrap.region_id} -- Agent 1's Sobol cold start runs here until "
+                  f"there is enough history for Agent 4 to propose real ones")
+
+        live = self.registry.active()
+        if None in plan.assignments:
+            fallback = live[0].region_id if live else None
+            remaining = plan.assignments.count(None)
+            if fallback is None:
+                # Structurally unreachable now that the cold start opens a
+                # bootstrap region -- kept as a loud guard rather than an
+                # assumption, since the failure it catches (dispatching a
+                # configuration no criterion chose) would silently put rows in
+                # results.tsv that nothing asked for.
+                print(f"[Orchestrator] No region available for {remaining} slot(s) -- "
+                      f"not enough history to propose one yet, skipping them")
+                plan.assignments = [a for a in plan.assignments if a is not None]
+            else:
+                print(f"[Orchestrator] {remaining} slot(s) had no new region to open -- "
+                      f"reinforcing {fallback} instead")
+                plan.assignments = [a if a is not None else fallback for a in plan.assignments]
+
+        # CAPACITY_PAUSED, not PAUSED: nothing was learned about these
+        # regions, they just lost a GPU to a busier server. The distinction is
+        # what lets resume_best_paused bring them back first when capacity
+        # returns, instead of treating them like regions judged to have
+        # stopped paying.
+        for region_id in plan.to_pause:
+            region = self.registry.get(region_id)
+            if region is not None:
+                region.set_flag(CAPACITY_PAUSED, at_run)
+        if plan.to_pause:
+            self.registry.save()
+
+        if plan.assignments:
+            print(allocator.describe(plan, live))
+        return live, plan
 
     def _decide_next_hyperparams(
         self,
@@ -363,44 +525,52 @@ class Orchestrator:
         latest_val_bpb: Optional[float],
         fresh_summary: bool,
         slot: int = 0,
+        region: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Route this iteration's decision to whoever owns it -- Agent 4
-        during an open exploration window, Agent 1 otherwise.
+        """Agent 1 decides every training configuration; `region` says which
+        region it is deciding for.
 
-        Both the sequential loop and the parallel wave dispatcher funnel
-        through here so the window behaves identically either way, and both
-        record which decision log the validator should then check.
+        Agent 4 no longer appears here at all. Under the old window model this
+        function had to route between two owners, and the one that won took
+        over every slot; now a wave's slots belong to different regions at the
+        same time, which a single-owner branch cannot express.
+
+        The region scope (Agent1TrainingSpecialist.search_region) is what
+        makes concurrent decisions independent: each gets its own center, its
+        own planner state file, its own frozen set and block rotation, and its
+        own EI reference.
         """
-        if self.agent4.active:
-            new_hyperparams = self.agent4.propose_probe(iteration, slot=slot)
-            self._active_decision_log = self.agent4.last_decision_log
-            self._active_decisions_dir = self.agent4.decisions_dir
-            print(f"[Orchestrator] Iteration {iteration} decided by Agent 4 "
-                  f"(exploration window, {self.agent4.budget_left} iteration(s) of budget left)")
+        if region is None:
+            new_hyperparams = self.agent1.decide_next_hyperparams(
+                latest_summary=latest_summary,
+                evidence=recent_evidence,
+                iteration=iteration,
+                latest_val_bpb=latest_val_bpb,
+                recent_results=recent_results,
+                fresh_summary=fresh_summary,
+            )
+            self._active_decision_log = self.agent1.last_decision_log
+            self._active_decisions_dir = self.agent1.decisions_dir
             return new_hyperparams
 
-        new_hyperparams = self.agent1.decide_next_hyperparams(
-            latest_summary=latest_summary,
-            evidence=recent_evidence,
-            iteration=iteration,
-            latest_val_bpb=latest_val_bpb,
-            recent_results=recent_results,
-            fresh_summary=fresh_summary,
-        )
+        with self.agent1.search_region(region):
+            new_hyperparams = self.agent1.decide_next_hyperparams(
+                latest_summary=latest_summary,
+                evidence=recent_evidence,
+                iteration=iteration,
+                # This region's own newest result, not the campaign's newest.
+                # Feeding it another region's run is what used to make
+                # stagnation detection compare two different places in the
+                # space and call the difference a trend.
+                latest_val_bpb=self._last_val_bpb_by_region.get(region.region_id),
+                recent_results=recent_results,
+                fresh_summary=fresh_summary,
+            )
         self._active_decision_log = self.agent1.last_decision_log
         self._active_decisions_dir = self.agent1.decisions_dir
+        if new_hyperparams is not None:
+            new_hyperparams["region_id"] = region.region_id
         return new_hyperparams
-
-    def _agent4_evaluate(self, iteration: int) -> None:
-        """Probe-wave boundary: let Agent 4 read its batch and act. A COMMIT
-        is the only verdict that changes anything outside Agent 4 itself --
-        it relocates Agent 1's search center, which is what makes the whole
-        mechanism more than a reporting exercise."""
-        if not self.agent4.active:
-            return
-        verdict = self.agent4.evaluate_batch(iteration)
-        if verdict == COMMIT and self.agent4.committed_hyperparams:
-            self.agent1.relocate_search_center(self.agent4.committed_hyperparams)
 
     def _handle_issues(self, iteration: int, issues: List[pipeline_validator.Issue]) -> bool:
         """Prints + persists validator issues. Returns True when the
@@ -462,20 +632,29 @@ class Orchestrator:
         log_result(result_payload.run_id, hyperparams, train_result, results_path=str(self.results_path))
         print(f"[Orchestrator] Result logged: {result_payload.run_id}")
 
-        # Inside an exploration window this run was a probe -- feed its
-        # measured val_bpb back so Agent 4 can judge the region at the next
-        # wave boundary. A no-op (and harmless) outside a window.
-        if self.agent4.active:
-            self.agent4.record_result(result_payload.val_bpb)
-            # Agent 1 normally records a new best inside decide_next_hyperparams,
-            # which it never reaches during a window -- so without this, a new
-            # all-time best discovered by a probe would be thrown away, leaving
-            # EI aiming at a stale f_best for the rest of the campaign.
-            if (isinstance(result_payload.val_bpb, (int, float))
-                    and result_payload.val_bpb < self.agent1.best_val_bpb):
-                print(f"[Orchestrator] Agent 4 probe set a new best: "
-                      f"{result_payload.val_bpb:.6f} (was {self.agent1.best_val_bpb:.6f})")
-                self.agent1.best_val_bpb = result_payload.val_bpb
+        # Attribute the run to the region that dispatched it, so that region's
+        # own history -- which every lifecycle threshold counts in -- is the
+        # record of what IT spent, never what happened to land near its
+        # anchor. See RegionRegistry.assign_run.
+        region_id = hyperparams.get("region_id")
+        if region_id:
+            self.registry.assign_run(region_id, result_payload.run_id,
+                                     result_payload.val_bpb, center=hyperparams)
+            self.registry.save()
+            if isinstance(result_payload.val_bpb, (int, float)) and math.isfinite(result_payload.val_bpb):
+                self._last_val_bpb_by_region[region_id] = result_payload.val_bpb
+
+        # Agent 1 records a new best inside decide_next_hyperparams, but under
+        # a region scope that call sees only the REGION's best (EI needs a
+        # local reference, see search_region). So the campaign record has to
+        # be maintained here, or a record set inside a region would leave the
+        # global f_best stale for the rest of the campaign.
+        if (isinstance(result_payload.val_bpb, (int, float))
+                and result_payload.val_bpb < self.agent1.best_val_bpb):
+            print(f"[Orchestrator] New campaign best: {result_payload.val_bpb:.6f} "
+                  f"(was {self.agent1.best_val_bpb:.6f}, region {region_id or '-'})")
+            self.agent1.best_val_bpb = result_payload.val_bpb
+            self._new_best_just_set = True
 
         issues = pipeline_validator.validate_training_result(train_result, hyperparams)
         if self._handle_issues(iteration, issues):
@@ -572,21 +751,64 @@ class Orchestrator:
         # (e.g. a previous wave's run that exceeded its SSH timeout and got
         # logged as remote_error locally without actually dying remotely)
         # before this wave's discovery call decides what's available.
-        self._kill_stale_remote_training(context="an earlier wave in this campaign")
+        # ONE connection for this entire wave. The server rate-limits SSH
+        # connects (~60-90s block after the first, measured -- see
+        # remote_runner.CONNECT_BACKOFF_MULTIPLIER), and this wave used to open
+        # seven: stale check, GPU discovery, code sync, and one per concurrent
+        # training run. The first succeeded and the rest were dropped, so every
+        # wave lost most of its slots to remote_error. paramiko carries many
+        # channels over one TCP connection, so all of it now shares this.
+        try:
+            wave_client = remote_runner.open_client()
+        except Exception as e:
+            print(f"[Orchestrator] Could not reach the remote server: {e} -- skipping this wave")
+            self._remote_unreachable_streak += 1
+            if self._remote_unreachable_streak >= REMOTE_FAILURE_HALT_STREAK:
+                print(f"[Orchestrator] HALTING: could not connect to the remote server "
+                      f"{self._remote_unreachable_streak} times in a row.")
+                return (iteration, report_batch, True)
+            time.sleep(REMOTE_RETRY_SLEEP_S)
+            return None
 
-        candidates = remote_runner.discover_available_gpus()[: self.max_parallel_runs]
+        # Reaching the server is exactly what this streak measures the absence
+        # of, so a successful connect clears it here rather than only after a
+        # successful sync further down. Otherwise a wave that connects fine
+        # and then returns early (fewer than 2 GPUs free, say) leaves earlier
+        # failures on the counter, and three of those accumulated over hours
+        # would halt a campaign against a perfectly reachable server -- a
+        # lifetime total masquerading as an ongoing outage.
+        self._remote_unreachable_streak = 0
+        try:
+            return self._dispatch_wave(iteration, report_batch, max_iterations, wave_client)
+        finally:
+            wave_client.close()
+
+    def _dispatch_wave(
+        self, iteration: int, report_batch: List[str], max_iterations: int, wave_client,
+    ) -> Optional[Tuple[int, List[str], bool]]:
+        """The body of one parallel wave, with every remote call sharing
+        `wave_client`. Split out from _run_parallel_wave purely so that
+        connection has exactly one open/close site."""
+        self._kill_stale_remote_training(context="an earlier wave in this campaign",
+                                         client=wave_client)
+
+        candidates = remote_runner.discover_available_gpus(client=wave_client)[: self.max_parallel_runs]
         if len(candidates) < 2:
             return None
 
         wave_size = min(len(candidates), max_iterations - iteration)
-        if self.agent4.active:
-            # A wave boundary has to be a decision boundary: Agent 4 abandons
-            # a region when every probe in one batch comes back bad, so a
-            # wave wider than probe_wave_size would blur that test, and one
-            # wider than the remaining budget would overshoot the window.
-            wave_size = min(wave_size, self.agent4.probe_wave_size, self.agent4.budget_left)
-            if wave_size < 1:
-                return None
+
+        # Which region does each GPU serve? This is where exploration and
+        # exploitation stop being phases: a single wave can hold the champion
+        # being exploited, a stalled region getting one more look, and a
+        # brand-new region being opened, all at once.
+        live_regions, wave_plan = self._plan_wave(wave_size, iteration)
+        assignments = wave_plan.assignments[:wave_size]
+        if not assignments:
+            return None
+        wave_size = len(assignments)
+        regions_by_id = {r.region_id: r for r in self.registry.regions}
+
         print(f"[Orchestrator] Parallel wave: {len(candidates)} GPU(s) available -- "
               f"dispatching {wave_size} concurrent run(s) on GPUs {[c['index'] for c in candidates[:wave_size]]}")
         wave_start = time.time()
@@ -597,12 +819,12 @@ class Orchestrator:
         latest_val_bpb = None
         if recent_results:
             latest_val_bpb = recent_results[-1].get("val_bpb")
-        best_before_decision = self.agent1.best_val_bpb
 
         slots: List[Tuple[int, Dict[str, Any], int, Path]] = []
         decision_halt = False
         for i in range(wave_size):
             iteration_for_slot = iteration + i
+            region = regions_by_id.get(assignments[i])
             # Only the first decision in the wave can ever consume a
             # pending fresh-summary flag (it's reset the instant it's
             # read) -- keeps LLM usage to once per new summary even when
@@ -620,13 +842,18 @@ class Orchestrator:
                 latest_val_bpb=latest_val_bpb,
                 fresh_summary=fresh_summary,
                 slot=i,
+                region=region,
             )
             if new_hyperparams is None:
                 print("\n[Orchestrator] STOPPING: Agent 1 stopped optimizing")
                 decision_halt = True
                 break
 
-            new_best_just_set = latest_val_bpb is not None and latest_val_bpb < best_before_decision
+            # Only the first slot of a wave can consume the flag, same rule
+            # the fresh-summary flag follows just above -- a record set before
+            # the wave justifies fingerprinting one run, not all four.
+            new_best_just_set = self._new_best_just_set
+            self._new_best_just_set = False
             token_xai_due = (iteration_for_slot % self.token_xai_interval == 0) or new_best_just_set
             new_hyperparams["token_xai_enabled"] = token_xai_due
             self._set_holdout_threshold(new_hyperparams)
@@ -643,13 +870,14 @@ class Orchestrator:
             hp_path = self.parallel_hp_dir / f"run_{iteration_for_slot:04d}.yaml"
             self._write_temp_hyperparams(new_hyperparams, hp_path)
             print(f"[Orchestrator] Wave dispatch: GPU {gpu_index} <- iteration {iteration_for_slot} "
+                  f"region {new_hyperparams.get('region_id', '-')} "
                   f"(n_layer={new_hyperparams.get('n_layer')}, matrix_lr={new_hyperparams.get('matrix_lr')})")
             slots.append((gpu_index, new_hyperparams, iteration_for_slot, hp_path))
 
         if not slots:
             return (iteration, report_batch, True) if decision_halt else None
 
-        if not remote_runner.sync_remote_code():
+        if not remote_runner.sync_remote_code(client=wave_client):
             # Can't reach the server, so it cannot run anything either.
             # Skipping the wave is the only honest option: dispatching now
             # would just produce a wave of remote_error rows. The consecutive-
@@ -657,16 +885,16 @@ class Orchestrator:
             # this keeps happening rather than letting it grind on.
             print("[Orchestrator] Remote code sync failed -- skipping this wave "
                   "(no training dispatched, no iterations consumed)")
-            self._remote_unreachable_streak += 1
-            if self._remote_unreachable_streak >= REMOTE_FAILURE_HALT_STREAK:
+            self._sync_failure_streak += 1
+            if self._sync_failure_streak >= REMOTE_FAILURE_HALT_STREAK:
                 print(f"[Orchestrator] HALTING: remote server unreachable "
-                      f"{self._remote_unreachable_streak} times in a row. Nothing has been "
+                      f"{self._sync_failure_streak} times in a row. Nothing has been "
                       f"trained and no iterations were consumed -- fix connectivity and "
                       f"restart; the campaign resumes from results.tsv.")
                 return (iteration, report_batch, True)
             time.sleep(REMOTE_RETRY_SLEEP_S)
             return None
-        self._remote_unreachable_streak = 0
+        self._sync_failure_streak = 0
 
         # Each GPU gets its own pinned terminal line for the duration of the
         # wave (see agents/live_progress.py) -- without this, every thread's
@@ -693,6 +921,7 @@ class Orchestrator:
                         timeout=self.agent1.training_budget + 120,
                         skip_sync=True,
                         display=display,
+                        client=wave_client,
                     )
                     future_map[future] = (gpu_index, hp, it)
 
@@ -723,9 +952,23 @@ class Orchestrator:
             slot_halt, report_batch = self._process_training_result(it, hp, train_result, report_batch)
             halt = halt or slot_halt
 
-        # One wave == one probe batch, so this is exactly the boundary at
-        # which Agent 4 abandons / commits / continues.
-        self._agent4_evaluate(max(results_by_iteration) if results_by_iteration else iteration)
+        # A wave that dispatched fine and then lost every slot is not
+        # progress, and nothing else in this loop would notice: results.tsv
+        # gains a row per slot either way, so the iteration counter advances
+        # exactly as it does on success.
+        statuses = [tr.get("status") for _hp, tr in results_by_iteration.values()]
+        if statuses and all(st == "remote_error" for st in statuses):
+            self._all_slots_failed_streak += 1
+            print(f"[Orchestrator] Every slot in this wave failed "
+                  f"({self._all_slots_failed_streak} wave(s) in a row).")
+            if self._all_slots_failed_streak >= ALL_SLOTS_FAILED_HALT_STREAK:
+                print(f"[Orchestrator] HALTING: {self._all_slots_failed_streak} consecutive "
+                      f"waves produced nothing but remote_error. Every further iteration "
+                      f"would just add val_bpb=inf rows -- fix connectivity and restart; "
+                      f"the campaign resumes from results.tsv.")
+                halt = True
+        else:
+            self._all_slots_failed_streak = 0
 
         wave_elapsed = time.time() - wave_start
         print(f"[Orchestrator] Wave complete: {len(slots)} run(s) in {_format_duration(wave_elapsed)}")

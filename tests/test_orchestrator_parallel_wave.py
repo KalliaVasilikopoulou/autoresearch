@@ -17,6 +17,34 @@ from agents.orchestrator import Orchestrator, _format_duration
 from state.results_analysis import load_results
 
 
+
+class _StubClient:
+    """Stands in for the single SSH connection a wave now shares across its
+    stale check, GPU discovery, code sync and every training slot."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _stub_wave_connection(monkeypatch):
+    """A wave opens exactly one connection (remote_runner.open_client) because
+    the server rate-limits connects -- see remote_runner's note by
+    CONNECT_BACKOFF_MULTIPLIER. Every test that drives a wave has to stub it
+    or it would try to reach the real host."""
+    opened = []
+
+    def fake_open_client(*a, **k):
+        client = _StubClient()
+        opened.append(client)
+        return client
+
+    monkeypatch.setattr(remote_runner, "open_client", fake_open_client)
+    return opened
+
+
 def _base_config(tmp_path, parallel=True, max_parallel_runs=4, use_surrogate=False):
     config_path = tmp_path / "agents_config.yaml"
     config_path.write_text(f"""
@@ -65,14 +93,14 @@ TWO_GPUS = [
 def test_returns_none_when_dry_run(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     orch.dry_run = True
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: (_ for _ in ()).throw(
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: (_ for _ in ()).throw(
         AssertionError("discovery must not run when dry_run is True")))
     assert orch._run_parallel_wave(0, [], 10) is None
 
 
 def test_returns_none_when_parallel_disabled(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path, parallel=False)
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: (_ for _ in ()).throw(
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: (_ for _ in ()).throw(
         AssertionError("discovery must not run when parallel is disabled")))
     assert orch._run_parallel_wave(0, [], 10) is None
 
@@ -86,16 +114,18 @@ def test_returns_none_when_remote_not_configured(tmp_path, monkeypatch):
 def test_returns_none_when_zero_gpus_discovered(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: [])
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: [])
     assert orch._run_parallel_wave(0, [], 10) is None
 
 
 def test_returns_none_when_only_one_gpu_discovered(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: TWO_GPUS[:1])
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: TWO_GPUS[:1])
     assert orch._run_parallel_wave(0, [], 10) is None
 
 
@@ -106,6 +136,7 @@ def test_run_parallel_wave_cleans_up_stale_processes_before_discovery(tmp_path, 
     deciding what's available, not just once at campaign start."""
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
 
     call_order = []
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes",
@@ -136,7 +167,8 @@ def test_format_duration_hand_computed():
 def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path, monkeypatch, capsys):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
+    _stub_wave_connection(monkeypatch)
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: list(TWO_GPUS))
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
     # orch.run() below now also does a startup stale-process check -- must
     # never make a real SSH call in tests (this repo's real .env has real
@@ -145,7 +177,7 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
 
     seen_remote_names = []
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None):
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None, client=None):
         seen_remote_names.append(hp_remote_name)
         return {
             "val_bpb": 1.0 if gpu_index == 3 else 1.1,
@@ -182,13 +214,14 @@ def test_two_gpu_wave_dispatches_concurrently_and_logs_distinct_devices(tmp_path
 def test_wave_stop_signal_halts_without_training_remaining_slots(tmp_path, monkeypatch):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: list(TWO_GPUS))
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: list(TWO_GPUS))
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
 
     dispatched_gpus = []
 
-    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None):
+    def fake_run_training_remote(hyperparams_local_path, gpu_index, hp_remote_name=None, run_label=None, timeout=600, skip_sync=False, display=None, client=None):
         dispatched_gpus.append(gpu_index)
         return {"val_bpb": 1.0, "training_time": 1.0, "status": "remote_ok", "device": gpu_index}
 
@@ -239,6 +272,7 @@ def test_kill_stale_remote_training_skipped_when_remote_not_configured(tmp_path,
 def test_kill_stale_remote_training_calls_cleanup_when_remote_configured(tmp_path, monkeypatch, capsys):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [
         {"pid": "111", "cmd": "python -u train.py", "escalated_to_sigkill": False},
     ])
@@ -253,6 +287,7 @@ def test_kill_stale_remote_training_calls_cleanup_when_remote_configured(tmp_pat
 def test_kill_stale_remote_training_reports_none_found(tmp_path, monkeypatch, capsys):
     orch = _make_orchestrator(tmp_path)
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
 
     orch._kill_stale_remote_training()
@@ -268,8 +303,9 @@ def test_kill_stale_remote_training_reports_none_found(tmp_path, monkeypatch, ca
 
 def _stub_remote(monkeypatch, gpus=None):
     monkeypatch.setattr(remote_runner, "is_remote_configured", lambda: True)
+    _stub_wave_connection(monkeypatch)
     monkeypatch.setattr(remote_runner, "kill_stale_training_processes", lambda *a, **k: [])
-    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda: gpus or TWO_GPUS)
+    monkeypatch.setattr(remote_runner, "discover_available_gpus", lambda **k: gpus or TWO_GPUS)
 
 
 def test_wave_skips_instead_of_crashing_when_sync_fails(tmp_path, monkeypatch):
@@ -283,14 +319,19 @@ def test_wave_skips_instead_of_crashing_when_sync_fails(tmp_path, monkeypatch):
     result = orch._run_parallel_wave(0, [], 10)
 
     assert result is None          # skipped, campaign continues
-    assert orch._remote_unreachable_streak == 1
+    # A sync failure counts on its own streak: the server WAS reachable, so
+    # calling it "unreachable" would clear on the next successful connect and
+    # a permanently broken sync could never reach the halt threshold.
+    assert orch._sync_failure_streak == 1
+    assert orch._remote_unreachable_streak == 0
 
 
 def test_a_successful_sync_resets_the_failure_streak(tmp_path, monkeypatch):
-    """The counter tracks an ongoing outage, not a lifetime total -- an
+    """The counters track an ongoing outage, not a lifetime total -- an
     occasional blip must never accumulate into a spurious halt."""
     orch = _make_orchestrator(tmp_path)
     orch._remote_unreachable_streak = 2
+    orch._sync_failure_streak = 2
     _stub_remote(monkeypatch)
     monkeypatch.setattr(remote_runner, "sync_remote_code", lambda *a, **k: True)
     monkeypatch.setattr(remote_runner, "run_training_remote", lambda **k: {
@@ -299,6 +340,7 @@ def test_a_successful_sync_resets_the_failure_streak(tmp_path, monkeypatch):
     orch._run_parallel_wave(0, [], 10)
 
     assert orch._remote_unreachable_streak == 0
+    assert orch._sync_failure_streak == 0
 
 
 def test_campaign_halts_rather_than_fabricating_results_during_an_outage(tmp_path, monkeypatch):

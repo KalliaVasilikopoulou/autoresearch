@@ -316,15 +316,15 @@ def test_landscape_section_and_chart_appear_with_enough_real_runs(tmp_path):
 
 
 def test_landscape_chart_receives_agent4_region_flags(tmp_path, monkeypatch):
-    """End-to-end: a real region-flags file on disk actually reaches the
-    chart call, not just load_region_flags in isolation."""
+    """End-to-end: real regions in the registry actually reach the chart
+    call, not just flags_snapshot() in isolation."""
     _write_results_tsv(tmp_path / "results.tsv", n_rows=30)
     _write_report(tmp_path / "reports" / "agent2_reports", "report_0000", val_bpb=1.2, status="remote_ok")
     agent3 = _make_agent3_with_charts(tmp_path)
-    agent3.region_flags_path.parent.mkdir(parents=True, exist_ok=True)
-    agent3.region_flags_path.write_text(json.dumps({"regions": [
-        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting", "since_iteration": 30}
-    ]}), encoding="utf-8")
+    from state.regions import RegionRegistry
+    registry = RegionRegistry(str(agent3.registry_path))
+    registry.open_region({"n_layer": 6}, at_run=30, origin="test")
+    registry.save()
 
     captured = {}
     import agents.agent3_report_analyst as agent3_module
@@ -336,6 +336,54 @@ def test_landscape_chart_receives_agent4_region_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(agent3_module, "chart_optimization_landscape", fake_chart)
     agent3.analyze_and_summarize(["report_0000"])
 
-    assert captured["region_flags"] == [
-        {"hyperparams": {"n_layer": 6}, "flag": "currently_exploiting", "since_iteration": 30}
-    ]
+    assert len(captured["region_flags"]) == 1
+    entry = captured["region_flags"][0]
+    assert entry["flag"] == "currently_exploiting"
+    assert entry["since_iteration"] == 30
+    assert entry["hyperparams"]["n_layer"] == 6
+
+
+def test_summary_includes_a_per_region_section(tmp_path):
+    """Every other aggregate in a summary pools all regions together, which
+    describes the campaign and decides nothing about any one region. This is
+    the part that is actionable under multi-region search."""
+    from state.regions import RegionRegistry
+
+    _write_results_tsv(tmp_path / "results.tsv", n_rows=10)
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000",
+                  val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3(tmp_path)
+
+    registry = RegionRegistry(str(agent3.registry_path))
+    good = registry.open_region({"n_layer": 6, "n_embd": 512}, at_run=0, origin="high_ei")
+    empty = registry.open_region({"n_layer": 20, "n_embd": 256}, at_run=3, origin="unexplored")
+    registry.assign_run(good.region_id, "run_0000", 1.25)
+    registry.assign_run(good.region_id, "run_0001", float("inf"))  # crashed
+    registry.save()
+
+    summary = agent3.analyze_and_summarize(["report_0000"])
+    text = summary.to_dict().get("summary_text") or _read_summary(agent3)
+
+    assert "## Regions" in text
+    assert good.region_id in text and empty.region_id in text
+    assert "high_ei" in text and "unexplored" in text
+    # A region with no finite run has no score -- n/a, never 0.000000, which
+    # would read as a perfect result.
+    assert "n/a" in text
+    # Budget spent vs evidence gathered are different numbers.
+    assert "| 2 | 1 |" in text
+
+
+def test_the_region_section_is_skipped_when_there_are_no_regions(tmp_path):
+    _write_results_tsv(tmp_path / "results.tsv", n_rows=10)
+    _write_report(tmp_path / "reports" / "agent2_reports", "report_0000",
+                  val_bpb=1.2, status="remote_ok")
+    agent3 = _make_agent3(tmp_path)
+    summary = agent3.analyze_and_summarize(["report_0000"])
+    text = summary.to_dict().get("summary_text") or _read_summary(agent3)
+    assert "## Regions" not in text
+
+
+def _read_summary(agent3):
+    path = agent3.summaries_dir / f"summary_{agent3.summary_counter - 1:04d}.md"
+    return path.read_text(encoding="utf-8")

@@ -33,6 +33,21 @@ import yaml
 # training's actual achievable range from the start, not something that
 # regressed. 0.15 == "more than 15% worse than the median of the best 25%
 # of real runs ever."
+#
+# Re-checked 2026-08-05 against the CALIBRATION REFERENCE in
+# agents_config.yaml and left unchanged, deliberately. This one is measured
+# on neither sigma (0.000797) nor sigma_region (0.0028) but on the spread of
+# the WHOLE campaign (std 0.11 after controlling for num_steps), because the
+# comparison it makes is one run against the campaign-wide elite. 0.15
+# relative = 0.195 bpb = ~1.8 campaign standard deviations, which fires for
+# roughly the worst 20% of real runs -- a plausible "this run is bad", and
+# the intended meaning. Quoting it in sigma (245x) or sigma_region (70x)
+# makes it look absurd; those are simply the wrong yardsticks for it.
+#
+# Its consequences also changed: this no longer routes into
+# Agent 1's _radical_change while a region is being searched (that would jump
+# the center out of the region -- see Agent1TrainingSpecialist.search_region).
+# It is now evidence the allocator weighs when judging a region's lifecycle.
 STUCK_VAL_BPB_MARGIN = 0.15
 
 

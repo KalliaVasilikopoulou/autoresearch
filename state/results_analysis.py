@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from state.results_logger import COLUMNS as CURRENT_COLUMNS
+from state.results_logger import PRE_SEED_COLUMNS
 
 # Frozen historical layout used before the 4-LR-group refactor. Its
 # `learning_rate` column is known to contain corrupted values for real runs
@@ -28,6 +29,15 @@ LEGACY_COLUMNS = (
     "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps", "depth", "status",
 )
 LEGACY_DROP_FIELDS = {"learning_rate"}
+
+# PRE_SEED_COLUMNS (imported above) is the frozen 25-column layout used between
+# the window_s_fraction addition and the seed addition. Rows are told apart here
+# by FIELD COUNT, so every superseded width needs a frozen tuple or its rows
+# silently stop parsing the moment COLUMNS grows -- they match neither the new
+# width nor LEGACY_COLUMNS and get skipped, which looks identical to having no
+# history. It lives in results_logger because that module also needs it to
+# migrate such a file in place; defining it in both would be two things to keep
+# in sync.
 
 # Statuses whose val_bpb is a synthetic placeholder, not a measured result:
 # "dry_run" (agents/agent1_training_specialist.py::train_model) returns
@@ -46,6 +56,13 @@ SYNTHETIC_STATUSES = frozenset({"dry_run", "simulated"})
 
 # Hyperparameter columns worth correlating against val_bpb (excludes
 # identifiers, timestamps, and outcome/runtime metrics).
+#
+# `seed` is deliberately NOT here even though results.tsv logs it. This tuple
+# is the surrogate's feature set and the search space's coordinate system
+# (state/surrogate.py, state/regions.py both key off it), so anything listed
+# becomes something the search optimizes. The seed is a nuisance variable to
+# average over, not a dimension to maximize along -- searching it would just
+# find the luckiest initialization.
 HYPERPARAM_COLUMNS = (
     "n_layer", "n_embd", "n_head", "window_s_fraction",
     "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr",
@@ -55,6 +72,8 @@ HYPERPARAM_COLUMNS = (
 _NUMERIC_FIELDS = set(HYPERPARAM_COLUMNS) | {
     "val_bpb", "training_time", "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps",
     "holdout_val_bpb",
+    # Coerced to a number so analysis can group by it, without being a feature.
+    "seed",
 }
 
 
@@ -76,10 +95,12 @@ def _coerce_row(fieldnames: Sequence[str], raw_values: Sequence[str], schema: st
 
 
 def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Dict[str, Any]]:
-    """Load one or more results.tsv-shaped files, tolerant of both the
-    current 20-column schema and the frozen legacy 15-column schema (rows
-    are told apart by field count, not by the file's header line, since a
-    stale/mismatched header is exactly the bug this loader has to survive).
+    """Load one or more results.tsv-shaped files, tolerant of the current
+    schema and every frozen superseded one (PRE_SEED_COLUMNS, LEGACY_COLUMNS).
+    Rows are told apart by field count, not by the file's header line, since a
+    stale/mismatched header is exactly the bug this loader has to survive --
+    and it is also why archived files under legacy_results.tsv/ can be passed
+    here directly alongside the live results.tsv.
 
     Rows with a status in SYNTHETIC_STATUSES (dry_run, simulated) are
     dropped -- every caller of this loader treats val_bpb as a real,
@@ -109,6 +130,8 @@ def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Di
                         continue
                 if len(fields) == len(CURRENT_COLUMNS):
                     row = _coerce_row(CURRENT_COLUMNS, fields, "current")
+                elif len(fields) == len(PRE_SEED_COLUMNS):
+                    row = _coerce_row(PRE_SEED_COLUMNS, fields, "pre_seed")
                 elif len(fields) == len(LEGACY_COLUMNS):
                     row = _coerce_row(LEGACY_COLUMNS, fields, "legacy")
                 else:

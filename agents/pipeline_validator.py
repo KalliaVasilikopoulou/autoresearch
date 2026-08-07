@@ -78,33 +78,60 @@ def validate_agent1_decision(
             issues.append(Issue(ERROR, "agent1", f"{param} is NaN/inf after this decision",
                                  {"param": param, "value": info.get("after")}))
 
-    issues.extend(_check_boundary_pinning(decisions_dir, decision_log.get("iteration", 0), lookback))
-    issues.extend(_check_fingerprint_adjustment_thrashing(decisions_dir, decision_log.get("iteration", 0)))
+    # Both checks are about ONE search's recent behaviour, so they are scoped
+    # to the region this decision belongs to. Under multi-region search
+    # consecutive iteration numbers belong to different regions, and an
+    # unscoped lookback would read six runs from four independent searches as
+    # one trend. region_id is None on the single-search path, which restores
+    # the original unfiltered behaviour exactly.
+    region_id = decision_log.get("region_id")
+    issues.extend(_check_boundary_pinning(decisions_dir, decision_log.get("iteration", 0),
+                                          lookback, region_id))
+    issues.extend(_check_fingerprint_adjustment_thrashing(
+        decisions_dir, decision_log.get("iteration", 0), region_id=region_id))
     return issues
 
 
-def _load_recent_decisions(decisions_dir: Optional[Path], iteration: int, lookback: int) -> List[Dict[str, Any]]:
+def _load_recent_decisions(decisions_dir: Optional[Path], iteration: int, lookback: int,
+                           region_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Most-recent-first list of parsed decision_*.json files, walking back
     from `iteration`, stopping at the first missing/corrupt file. Shared by
     _check_boundary_pinning and _check_fingerprint_adjustment_thrashing so
     the "read recent decision logs off disk" logic exists in one place.
+
+    `region_id` filters to one region's own decisions. Both callers ask
+    questions about a single search's recent behaviour -- "has this parameter
+    been pinned at its boundary for N consecutive iterations", "is the
+    fingerprint hook thrashing this parameter back and forth" -- and under
+    multi-region search consecutive iteration numbers belong to DIFFERENT
+    regions. Unfiltered, six consecutive decisions are six runs from up to
+    four independent searches, and "pinned for 6 iterations" becomes a
+    statement about no search in particular. Walking back further than
+    `lookback` is deliberate when filtering: it takes more iterations to
+    collect `lookback` decisions from one region when several are interleaved.
     """
     if not decisions_dir:
         return []
     decisions_dir = Path(decisions_dir)
     recent = []
-    for i in range(iteration, max(-1, iteration - lookback), -1):
+    span = lookback if region_id is None else lookback * 8
+    for i in range(iteration, max(-1, iteration - span), -1):
+        if len(recent) >= lookback:
+            break
         p = decisions_dir / f"decision_{i:04d}.json"
         if not p.exists():
             break
         try:
-            recent.append(json.loads(p.read_text()))
+            log = json.loads(p.read_text())
         except (json.JSONDecodeError, OSError):
             break
+        if region_id is None or log.get("region_id") == region_id:
+            recent.append(log)
     return recent
 
 
-def _check_fingerprint_adjustment_thrashing(decisions_dir: Optional[Path], iteration: int, lookback: int = 6) -> List[Issue]:
+def _check_fingerprint_adjustment_thrashing(decisions_dir: Optional[Path], iteration: int, lookback: int = 6,
+                                            region_id: Optional[str] = None) -> List[Issue]:
     """Tier 4's fingerprint_adjustments (agents/agent1_training_specialist.py's
     _fingerprint_adjustment) was never validated before this. WARN when a
     param's fingerprint-driven votes have flipped sign at least twice across
@@ -112,7 +139,7 @@ def _check_fingerprint_adjustment_thrashing(decisions_dir: Optional[Path], itera
     back and forth rather than settling is a sign they're unstable for this
     param, not converging on anything.
     """
-    recent = _load_recent_decisions(decisions_dir, iteration, lookback)
+    recent = _load_recent_decisions(decisions_dir, iteration, lookback, region_id)
     if not recent:
         return []
 
@@ -140,8 +167,9 @@ def _check_fingerprint_adjustment_thrashing(decisions_dir: Optional[Path], itera
     return issues
 
 
-def _check_boundary_pinning(decisions_dir: Optional[Path], iteration: int, lookback: int) -> List[Issue]:
-    recent = _load_recent_decisions(decisions_dir, iteration, lookback)
+def _check_boundary_pinning(decisions_dir: Optional[Path], iteration: int, lookback: int,
+                            region_id: Optional[str] = None) -> List[Issue]:
+    recent = _load_recent_decisions(decisions_dir, iteration, lookback, region_id)
     if len(recent) < lookback:
         return []
 

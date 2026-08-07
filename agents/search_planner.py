@@ -15,6 +15,7 @@ persisted state only tracks which block/budget we're mid-cycle on.
 """
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -135,8 +136,47 @@ def propose_next(
     report_dir_path = Path(report_dir)
 
     # -- Cold start: Sobol until cold_start_n usable rows exist. --
-    n_usable = sum(1 for r in rows if "val_bpb" in r and all(c in r for c in params))
-    if n_usable < cold_start_n:
+    # A row only counts toward "have we finished cold-starting" if it carries
+    # a real measurement. Counting merely-present val_bpb let a crashed run
+    # (remote_error logs val_bpb=inf) advance the cold start without
+    # contributing any data -- and state/surrogate.py::_rows_to_xy correctly
+    # drops those same rows, so 15 failed runs would end the cold start and
+    # then fit_surrogate would return None on 0 usable points, silently
+    # dropping the campaign onto the heuristic path for good. Observed for
+    # real: a network outage failed 8 consecutive dispatches, each logged as
+    # val_bpb=inf, and every one of them counted.
+    # "Usable" has to mean exactly what fit_surrogate means by it, or the cold
+    # start ends while the surrogate still cannot fit and every later call
+    # silently returns None. fit_surrogate drops compute-starved runs (a
+    # contended GPU gave them far fewer steps than their config predicts), so
+    # this must too.
+    #
+    # Seen for real: a 16-run campaign ended its cold start at 15 raw rows,
+    # then fit_surrogate excluded 5 as compute-starved, leaving 11 -- below
+    # MIN_SURROGATE_N. Agent 4 could propose no regions, the orchestrator saw
+    # no live region, opened a second bootstrap region, and restarted the
+    # whole Sobol cold start. Same class of bug as counting val_bpb=inf rows:
+    # two different definitions of "usable row" in two places.
+    def _countable(candidate_rows):
+        return sum(
+            1 for r in candidate_rows
+            if isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
+            and all(c in r for c in params)
+        )
+
+    # "Is the cold start over?" and "can the surrogate fit?" are the same
+    # question, so ask it once by actually fitting. Counting rows through
+    # without_compute_starved separately meant fitting the step-deficit model
+    # twice per proposal, since fit_surrogate applies that same filter
+    # internally -- it doubled this module's own test time.
+    #
+    # The raw count is checked first purely to avoid a doomed fit: filtering
+    # only ever reduces the count, so below cold_start_n the answer is already
+    # "keep cold-starting".
+    sm = None
+    if _countable(rows) >= cold_start_n:
+        sm = surrogate.fit_surrogate(rows, feature_columns=params, min_n=cold_start_n)
+    if sm is None:
         if not state.cold_start_points:
             state.cold_start_points = surrogate.sobol_cold_start(SEARCH_SPACE, params, cold_start_n, seed=0)
             if generate_charts:
@@ -162,21 +202,28 @@ def propose_next(
             proposal.update(extra[0])
         return proposal
 
-    # -- Surrogate-driven: fit -> prune -> block -> EI over the active block. --
-    # min_n=cold_start_n (not fit_surrogate's own MIN_SURROGATE_N default):
-    # the cold-start loop above already gates on "n_usable >= cold_start_n"
-    # before ever reaching here, so cold_start_n is the one real, caller-
-    # configurable "how much data before we stop cold-starting" threshold --
-    # letting fit_surrogate silently apply a second, independent, hardcoded
-    # threshold underneath it means a caller that lowers cold_start_n (e.g.
-    # agents_config.yaml's agent1.surrogate_min_observations) doesn't
-    # actually get what it asked for.
-    sm = surrogate.fit_surrogate(rows, feature_columns=params, min_n=cold_start_n)
-    if sm is None:
-        return None
+    # -- Surrogate-driven: prune -> block -> EI over the active block. --
+    # `sm` was fitted above, where "can it fit at all" doubled as the
+    # cold-start test. min_n=cold_start_n there (not fit_surrogate's own
+    # MIN_SURROGATE_N default) because cold_start_n is the one real,
+    # caller-configurable "how much data before we stop cold-starting"
+    # threshold -- letting fit_surrogate silently apply a second, independent,
+    # hardcoded threshold underneath it means a caller that lowers
+    # cold_start_n (agents_config.yaml's agent1.surrogate_min_observations)
+    # doesn't actually get what it asked for.
 
     sigma = _load_sigma(noise_floor_path)
     center = dict(current_best_hyperparams)
+    # k stays at 2.0 and is correct at any sigma: the question it asks is "is
+    # this parameter's total effect distinguishable from measurement noise",
+    # which is definitionally in units of that noise. But note the CONSEQUENCE
+    # moved a lot when the token budget collapsed sigma ~11x (0.00919 ->
+    # 0.000797, see the CALIBRATION REFERENCE in agents_config.yaml): the
+    # freeze bar fell from ~0.018 to ~0.0016 val_bpb of effect, so far fewer
+    # parameters are now judged unmeasurable and the Gauss-Southwell blocks
+    # run wider. That is the honest answer -- more parameters really are
+    # measurable now -- but it means EI varies more dimensions per proposal
+    # than it used to, on the same 2000 candidates.
     kept_now, frozen_now = surrogate.prune_by_noise_floor(sm, params, center, sm.bounds, sigma, k=2.0)
 
     # Age-based unfreeze: a param frozen >= reprobe_every iterations ago gets
