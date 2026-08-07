@@ -108,6 +108,27 @@ def test_resolvable_gap_shrinks_with_more_seeds():
     assert gaps["1"] / gaps["5"] == pytest.approx(5 ** 0.5, rel=1e-6)
 
 
+def test_each_pair_reports_its_own_resolvable_gap_not_a_pooled_one():
+    """Pooling across pairs was actively misleading on the first real run: the
+    frontier pair's gap spread was 0.0030 while both pairs against the far-off
+    control were ~0.0093, so the pooled figure claimed a 0.0144 resolution
+    limit when the frontier's own was 0.0060 -- 2.4x too pessimistic for the
+    only comparison the search actually makes."""
+    measurements = {
+        0: {s: 1.20 + 0.0005 * i for i, s in enumerate(SEEDS)},          # tight pair
+        1: {s: 1.201 + 0.0005 * i for i, s in enumerate(SEEDS)},
+        2: {s: 1.40 + 0.02 * (i % 3) for i, s in enumerate(SEEDS)},      # noisy control
+    }
+    report = seed_variance.analyze(measurements, SEEDS)
+    by_pair = {(p["config_a"], p["config_b"]): p for p in report["pairs"]}
+
+    tight = by_pair[(0, 1)]["resolvable_gap_at_k_seeds"]["1"]
+    noisy = by_pair[(0, 2)]["resolvable_gap_at_k_seeds"]["1"]
+    assert tight < noisy / 10, "the tight pair must not inherit the noisy pair's limit"
+    # And each is 2 s.e. of its OWN gap spread.
+    assert tight == pytest.approx(2.0 * by_pair[(0, 1)]["std_of_gap"])
+
+
 def _ranked_rows(n, spacing=0.02):
     return [
         {"run_id": f"run_{i}", "status": "remote_ok", "val_bpb": 1.20 + spacing * i,

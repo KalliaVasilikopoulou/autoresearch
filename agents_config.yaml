@@ -6,14 +6,42 @@
 # Re-derived 2026-08-05 against state/noise_floor.json and the 582 finite runs
 # in archive/campaign-20260804-timebudget/results.tsv.
 #
-# There are TWO scales in this system and using the wrong one is the single
-# most common way a threshold here ends up meaningless.
+# 2026-08-07: scripts/seed_variance.py (15 runs, 3 configs x 5 seeds) measured
+# the scale that was MISSING from everything below, and it changes which
+# yardstick is correct. Read this part first.
+#
+#   sigma_seed   = 0.00197    MEDIAN of the per-config seed spreads
+#                  (measured 0.00154 / 0.00197 / 0.00887 -- a ~6x range that
+#                  tracks step count, so no single number is right everywhere;
+#                  the median is robust and sits near the frontier, where the
+#                  decisions are). state/seed_variance.json.
+#
+#                  THIS IS NOW WHAT agents/search_planner.py::_load_sigma
+#                  RETURNS. It prefers state/seed_variance.json and only falls
+#                  back to noise_floor.json (loudly) when that is absent, so
+#                  prune_by_noise_floor and _detect_stagnation are both sized
+#                  against it automatically -- no value below needs editing
+#                  for that to take effect.
+#
+#   Consequence: the freeze bar (2*sigma) went 0.00159 -> 0.00394, i.e. 2.5x
+#   higher. Parameters whose total effect is under ~0.004 are no longer judged
+#   measurable, because they are not: a single run's score moves more than that
+#   from the initial weights alone.
+#
+#   Also measured: the two best configs of the whole campaign trade places
+#   depending on the seed (3-2 across 5 seeds, mean gap 0.0012 +- 0.0030,
+#   separation 0.9). Resolving them would take ~25 seeds each. Treat the
+#   frontier as a PLATEAU, not a ranking, and require a candidate to win by
+#   >= 0.0035 on 3 seeds (or >= 0.0060 on one) before believing it.
 #
 #   sigma        = 0.000797   (0.061% of a typical val_bpb = 1.3027)
-#                  Repeatability of ONE config. state/noise_floor.json, n=10,
-#                  round-robined across GPUs. Use for: "did the frontier
-#                  move", "is this parameter's effect measurable", anything
-#                  comparing a run to itself or to the best-ever.
+#                  SUPERSEDED as a decision yardstick -- kept for reference and
+#                  as the fallback when no seed measurement exists. It was
+#                  taken with the seed, the data and the token budget ALL held
+#                  fixed, so it measures bf16/kernel nondeterminism and no
+#                  statistical variation at all. Using it to ask "is this
+#                  difference real" understates the noise ~2.5x at the frontier.
+#                  state/noise_floor.json, n=10, round-robined across GPUs.
 #
 #   sigma_region = 0.0028     (3.5 x sigma)
 #                  Spread of val_bpb among DIFFERENT configs inside one
@@ -294,6 +322,20 @@ agent4:
   # the noise floor's sigma = 0.000797 -- is the right yardstick. Using sigma
   # here would make all of them ~4x too sensitive. See the CALIBRATION
   # REFERENCE at the top of this file.
+  #
+  # 2026-08-07, NOT YET ACTED ON -- a decision for the operator, not a silent
+  # change. sigma_seed at the frontier is 0.00197, so of this 0.0028 of
+  # "within-region spread", 0.00197^2 / 0.0028^2 = ~49% is variance from the
+  # initial weights, NOT differences between the configurations. The genuine
+  # config-to-config spread inside a region is closer to
+  # sqrt(0.0028^2 - 0.00197^2) = 0.0020.
+  #
+  # Lowering it to 0.0020 would tighten every Agent 4 lifecycle threshold
+  # (retire_margin_sigma * sigma_region: 0.0084 -> 0.0060; improvement_sigma:
+  # 0.0028 -> 0.0020), i.e. retire and pause regions sooner. That is defensible
+  # -- it stops counting seed noise as real hyperparameter variation -- but it
+  # makes the campaign more aggressive and was measured on 3 configs, so it is
+  # left alone pending a wider measurement.
   sigma_region: 0.0028
 
   # A region is retired as no_optimum when its elite score sits this many

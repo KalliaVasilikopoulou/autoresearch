@@ -221,6 +221,46 @@ def fit_surrogate(
     )
 
 
+def best_predicted_mean(
+    surrogate: "SurrogateModel",
+    rows: List[Dict[str, Any]],
+    feature_columns: Sequence[str] = HYPERPARAM_COLUMNS,
+) -> Optional[float]:
+    """The lowest value the surrogate PREDICTS at any point that was actually
+    measured -- the denoised stand-in for "best so far".
+
+    Expected Improvement needs an incumbent to beat. Using the best OBSERVED
+    val_bpb makes that incumbent the luckiest draw rather than the best
+    configuration, and this campaign measured exactly how large that gap is:
+    the record 1.248540 came from the single kindest of 5 seeds for that
+    config, whose honest mean is 1.251022 (scripts/seed_variance.py). Aiming
+    EI at a value ~1.6 sigma below anything actually achievable depresses the
+    acquisition everywhere and pushes the search toward wherever the noise
+    happened to be kindest -- which is where the record already is.
+
+    A random forest's prediction at a training point averages over the trees
+    that saw it, so it is already smoothed toward that point's neighbourhood.
+    Taking the minimum of those predictions is the cheap, standard "noisy EI"
+    correction: it asks "what is the best value we have reason to believe in",
+    not "what is the luckiest number we happened to see".
+
+    Returns None when no row can be scored, so the caller keeps its existing
+    observed-best behaviour rather than being handed a fabricated number.
+    """
+    if not SURROGATE_DEPS_AVAILABLE:
+        return None
+    best = None
+    for row in rows:
+        if any(col not in row for col in feature_columns):
+            continue
+        if not isinstance(row.get("val_bpb"), (int, float)) or not math.isfinite(row["val_bpb"]):
+            continue
+        mu, _ = surrogate.predict({col: float(row[col]) for col in feature_columns})
+        if math.isfinite(mu) and (best is None or mu < best):
+            best = mu
+    return best
+
+
 def normalized_value(param: str, value: float, bounds: Dict[str, Tuple[float, float]]) -> float:
     """Maps value into [0, 1] within its observed bounds -- log-scale for
     LOG_SCALE_PARAMS (LR groups and batch_size span orders of magnitude and

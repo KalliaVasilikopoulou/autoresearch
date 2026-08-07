@@ -25,6 +25,9 @@ from state.results_analysis import HYPERPARAM_COLUMNS
 
 STATE_PATH_DEFAULT = "state/search_planner_state.json"
 NOISE_FLOOR_PATH_DEFAULT = "state/noise_floor.json"
+#: Looked for beside whatever noise_floor.json a caller passes, so redirecting
+#: a state directory redirects both. See _load_sigma.
+SEED_VARIANCE_FILENAME = "seed_variance.json"
 REPORT_DIR_DEFAULT = "reports/agent1_search_plan"
 DEFAULT_SIGMA = 0.01  # conservative fallback if noise_floor.json is missing
 
@@ -54,13 +57,73 @@ class SearchPlannerState:
         Path(path).write_text(json.dumps(asdict(self), indent=2))
 
 
-def _load_sigma(noise_floor_path: str) -> float:
+def _seed_sigma(seed_variance_path: str) -> Optional[float]:
+    """The measured seed-to-seed spread, from scripts/seed_variance.py.
+
+    The MEDIAN of the per-configuration spreads, not the pooled figure the
+    report also prints. Spread is strongly config-dependent -- measured
+    0.00154 / 0.00197 / 0.00887 across three configurations, a ~6x range that
+    tracks step count -- so the pooled number is dragged to 0.00532 by the
+    single noisiest config and describes nowhere in particular. The median is
+    robust to that one outlier and lands near the frontier, which is where
+    every decision this sigma feeds actually gets made.
+
+    Returns None if the file is absent or unusable, so the caller falls back to
+    the noise floor rather than to a guess.
+    """
+    p = Path(seed_variance_path)
+    if not p.exists():
+        return None
+    try:
+        report = json.loads(p.read_text())
+        stds = sorted(
+            entry["std"] for entry in report.get("per_config", {}).values()
+            if isinstance(entry.get("std"), (int, float)) and entry["std"] > 0
+        )
+    except (json.JSONDecodeError, OSError, AttributeError, TypeError):
+        return None
+    if not stds:
+        return None
+    mid = len(stds) // 2
+    return stds[mid] if len(stds) % 2 else (stds[mid - 1] + stds[mid]) / 2
+
+
+def _load_sigma(noise_floor_path: str,
+                seed_variance_path: Optional[str] = None) -> float:
+    """The measurement noise every "is this difference real" test is sized
+    against.
+
+    seed_variance_path defaults to seed_variance.json BESIDE noise_floor_path,
+    never to a fixed repo-root location: every caller that redirects its state
+    directory (tests, or a campaign with a custom state_dir) must get its own
+    file, or the redirection silently only half applies and the real repo's
+    measurement leaks into an isolated run.
+
+    Prefers the SEED-inclusive spread when it has been measured. This ordering
+    is the whole correction: state/noise_floor.json repeats one configuration
+    with the seed, the data and the token budget all held fixed, so it captures
+    bf16/kernel nondeterminism and no statistical variation whatsoever. Using
+    it to decide whether a hyperparameter's effect is real understates the
+    noise by ~2.5x at the frontier (measured 0.000797 vs 0.00197), which means
+    parameters whose true effect is smaller than the run-to-run bounce were
+    being kept and tuned.
+    """
+    if seed_variance_path is None:
+        seed_variance_path = str(Path(noise_floor_path).parent / SEED_VARIANCE_FILENAME)
+    seed_sigma = _seed_sigma(seed_variance_path)
+    if seed_sigma is not None:
+        return seed_sigma
+
     p = Path(noise_floor_path)
     if not p.exists():
-        print(f"[search_planner] WARNING: {noise_floor_path} not found -- using "
-              f"conservative fallback sigma={DEFAULT_SIGMA}. Run scripts/noise_floor.py "
-              f"to measure it for real.")
+        print(f"[search_planner] WARNING: neither {seed_variance_path} nor "
+              f"{noise_floor_path} found -- using conservative fallback "
+              f"sigma={DEFAULT_SIGMA}. Run scripts/seed_variance.py to measure "
+              f"it for real.")
         return DEFAULT_SIGMA
+    print(f"[search_planner] WARNING: using {noise_floor_path}'s sigma, which was "
+          f"measured with the seed FIXED and so contains no seed variance -- it "
+          f"understates the real noise. Run scripts/seed_variance.py.")
     return float(json.loads(p.read_text())["std"])
 
 
@@ -119,6 +182,7 @@ def propose_next(
     noise_floor_path: str = NOISE_FLOOR_PATH_DEFAULT,
     report_dir: str = REPORT_DIR_DEFAULT,
     generate_charts: bool = True,
+    f_best_region_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Returns a full hyperparams dict (pass-through keys like `ablation_k`
     from current_best_hyperparams are preserved), or None when scipy/
@@ -284,8 +348,27 @@ def propose_next(
     print(f"[search_planner] Blocks: {blocks} — active this cycle: {active_block} "
           f"({state.budget_used_in_block + 1}/{budget})")
 
+    # Denoise the EI incumbent (see surrogate.best_predicted_mean). Restricted
+    # to this region's own rows when one is active, because the whole point of
+    # a region-scoped search is a LOCAL reference -- a campaign-wide incumbent
+    # makes EI inside any non-champion region see no improvement anywhere and
+    # its argmax degenerate into noise. Falls back to the observed best
+    # whenever no row can be scored, so behaviour is unchanged where this
+    # cannot be computed.
+    f_best_rows = rows
+    if f_best_region_id is not None:
+        scoped = [r for r in rows if r.get("region_id") == f_best_region_id]
+        if scoped:
+            f_best_rows = scoped
+    f_best = surrogate.best_predicted_mean(sm, f_best_rows, feature_columns=params)
+    if f_best is None:
+        f_best = current_best_val_bpb
+    else:
+        print(f"[search_planner] EI incumbent: {f_best:.6f} (denoised predicted mean) "
+              f"instead of {current_best_val_bpb:.6f} (best observed)")
+
     proposal, ei_diagnostics = surrogate.propose_via_ei(
-        sm, f_best=current_best_val_bpb, bounds=sm.bounds,
+        sm, f_best=f_best, bounds=sm.bounds,
         free_params=active_block, fixed_values=center, n_candidates=2000, seed=iteration,
         return_diagnostics=True,
     )

@@ -650,6 +650,9 @@ class Agent1TrainingSpecialist:
             noise_floor_path=self._noise_floor_path,
             report_dir=self._search_plan_report_dir,
             generate_charts=self.generate_charts,
+            # Keeps EI's denoised incumbent local to this region, matching what
+            # search_region already does for best_val_bpb.
+            f_best_region_id=self._active_region.region_id if self._active_region else None,
         )
         if result is None:
             return None

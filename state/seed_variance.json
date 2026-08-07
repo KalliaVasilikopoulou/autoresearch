@@ -1,0 +1,165 @@
+{
+  "all_pairs_consistent": false,
+  "configs": {
+    "0": {
+      "batch_size": 23180.0,
+      "embedding_lr": 0.0886776573279423,
+      "matrix_lr": 0.023762701040555865,
+      "n_embd": 960.0,
+      "n_head": 6.0,
+      "n_layer": 21.0,
+      "scalar_lr": 0.2101414489776221,
+      "unembedding_lr": 0.003955934722681367,
+      "warmup_ratio": 0.17311601489782336,
+      "weight_decay": 0.09338780539110303,
+      "window_s_fraction": 0.36455016024410725
+    },
+    "1": {
+      "batch_size": 11601.0,
+      "embedding_lr": 0.682852,
+      "matrix_lr": 0.018039,
+      "n_embd": 816.0,
+      "n_head": 3.0,
+      "n_layer": 17.0,
+      "scalar_lr": 0.1788899024847607,
+      "unembedding_lr": 0.0021680735067864196,
+      "warmup_ratio": 0.01982714217156172,
+      "weight_decay": 0.37115939101204276,
+      "window_s_fraction": 0.6545171458274126
+    },
+    "2": {
+      "batch_size": 3629.0,
+      "embedding_lr": 0.07666257370268362,
+      "matrix_lr": 0.01040697806819713,
+      "n_embd": 760.0,
+      "n_head": 5.0,
+      "n_layer": 2.0,
+      "scalar_lr": 0.6507700838275043,
+      "unembedding_lr": 0.0009031613639102989,
+      "warmup_ratio": 0.1947598060593009,
+      "weight_decay": 0.2682855147868395,
+      "window_s_fraction": 0.9707933021709323
+    }
+  },
+  "independent_reference_sqrt2_sigma": 0.007524347165479953,
+  "mean_std_of_pairwise_gap": 0.00721944088022986,
+  "n_seeds": 5,
+  "pairs": [
+    {
+      "a_wins": 3,
+      "b_wins": 2,
+      "config_a": 0,
+      "config_b": 1,
+      "mean_gap": -0.0012129999999999975,
+      "n_seeds": 5,
+      "ranking_consistent": false,
+      "resolvable_gap_at_k_seeds": {
+        "1": 0.006040247511484897,
+        "10": 0.0019100939767456337,
+        "2": 0.004271099975416139,
+        "3": 0.003487338526727773,
+        "5": 0.0027012808073208342
+      },
+      "separation": 0.8980924876174328,
+      "std_of_gap": 0.0030201237557424486
+    },
+    {
+      "a_wins": 5,
+      "b_wins": 0,
+      "config_a": 0,
+      "config_b": 2,
+      "mean_gap": -0.19815720000000003,
+      "n_seeds": 5,
+      "ranking_consistent": true,
+      "resolvable_gap_at_k_seeds": {
+        "1": 0.018502091849301718,
+        "10": 0.0058508751721430274,
+        "2": 0.013082954612777593,
+        "3": 0.010682187709765529,
+        "5": 0.008274387020196687
+      },
+      "separation": 47.89652684031444,
+      "std_of_gap": 0.009251045924650859
+    },
+    {
+      "a_wins": 5,
+      "b_wins": 0,
+      "config_a": 1,
+      "config_b": 2,
+      "mean_gap": -0.19694420000000004,
+      "n_seeds": 5,
+      "ranking_consistent": true,
+      "resolvable_gap_at_k_seeds": {
+        "1": 0.018774305920592548,
+        "10": 0.005936956819785675,
+        "2": 0.013275439028521737,
+        "3": 0.010839350577102494,
+        "5": 0.00839612485376434
+      },
+      "separation": 46.913118475531384,
+      "std_of_gap": 0.009387152960296274
+    }
+  ],
+  "per_config": {
+    "0": {
+      "max": 1.252597,
+      "mean": 1.2510224,
+      "min": 1.248626,
+      "n": 5,
+      "std": 0.00154409076805735,
+      "values_by_seed": {
+        "1": 1.252597,
+        "2": 1.250604,
+        "3": 1.251212,
+        "4": 1.252073,
+        "42": 1.248626
+      }
+    },
+    "1": {
+      "max": 1.254821,
+      "mean": 1.2522354,
+      "min": 1.249371,
+      "n": 5,
+      "std": 0.0019726794721900255,
+      "values_by_seed": {
+        "1": 1.252333,
+        "2": 1.251756,
+        "3": 1.249371,
+        "4": 1.252896,
+        "42": 1.254821
+      }
+    },
+    "2": {
+      "max": 1.459733,
+      "mean": 1.4491796000000001,
+      "min": 1.435899,
+      "n": 5,
+      "std": 0.008868371879888634,
+      "values_by_seed": {
+        "1": 1.454099,
+        "2": 1.459733,
+        "3": 1.447737,
+        "4": 1.435899,
+        "42": 1.44843
+      }
+    }
+  },
+  "resolvable_gap_at_k_seeds": {
+    "1": 0.01443888176045972,
+    "2": 0.010209831205571823,
+    "3": 0.008336292271198597,
+    "5": 0.006457264227093954
+  },
+  "results_path": "state/seed_variance.tsv",
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    42
+  ],
+  "shared_fraction_of_seed_effect": 0.04052262323154576,
+  "sigma_seed": 0.005320516904712652,
+  "timestamp": "2026-08-07T07:01:43",
+  "verdict": "RANKINGS FLIP -- at least one pair changed winner depending on the seed. Single-seed val_bpb cannot separate configs at that gap size; multi-seed evaluation is required for frontier decisions (plan tier 2)."
+}

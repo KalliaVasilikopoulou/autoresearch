@@ -327,6 +327,17 @@ def analyze(measurements: Dict[int, Dict[int, float]], seeds: List[int]) -> Dict
             "n_seeds": len(diffs),
             "mean_gap": mean_diff,
             "std_of_gap": std_diff,
+            # PER PAIR, not pooled. Pooling across pairs was actively
+            # misleading on the first real run: the frontier pair's gap spread
+            # was 0.0030 while both pairs involving the far-off control config
+            # were ~0.0093, so the pooled figure claimed a 0.0144 resolution
+            # limit at k=1 when the frontier's own is 0.0060 -- 2.4x too
+            # pessimistic for the only comparison the search actually makes.
+            # Noise varies enormously across the space (see per_config), so any
+            # single pooled number is the wrong summary.
+            "resolvable_gap_at_k_seeds": {
+                str(k): 2.0 * std_diff / k ** 0.5 for k in (1, 2, 3, 5, 10)
+            },
             # How often the winner is the same one. A ranking that flips is the
             # failure mode; a consistent winner with a tiny gap is not.
             "a_wins": a_wins,
@@ -426,12 +437,8 @@ def render(report: Dict[str, Any], configs: List[Dict[str, Any]]) -> str:
         lines.append("  Every sigma-scaled threshold in agents_config.yaml was calibrated on the")
         lines.append("  noise_floor sigma, which held the seed FIXED and so measured no seed effect at all.")
 
-    if report["resolvable_gap_at_k_seeds"]:
-        lines += ["", "Smallest val_bpb gap resolvable (~2 standard errors) at k seeds per config:"]
-        for k, gap in report["resolvable_gap_at_k_seeds"].items():
-            lines.append(f"  k={k}: {gap:.6f}")
-
-    lines += ["", "Pairwise comparisons:"]
+    lines += ["", "Pairwise comparisons (the per-pair numbers are the decision-relevant ones --",
+              "noise varies enormously across the space, so nothing pooled summarises it):"]
     for p in report["pairs"]:
         flag = "consistent" if p["ranking_consistent"] else "*** FLIPPED ***"
         lines.append(
@@ -439,6 +446,24 @@ def render(report: Dict[str, Any], configs: List[Dict[str, Any]]) -> str:
             f"std_of_gap={p['std_of_gap']:.6f} separation={p['separation']:.1f} "
             f"wins {p['a_wins']}-{p['b_wins']} [{flag}]"
         )
+        gaps = p["resolvable_gap_at_k_seeds"]
+        lines.append("      smallest gap resolvable (~2 s.e.) at k seeds each: "
+                     + ", ".join(f"k={k}:{v:.5f}" for k, v in gaps.items()))
+        # The question a search actually asks: how many runs to believe THIS
+        # difference? Reported explicitly because the answer can be absurd,
+        # and "absurd" is itself the finding -- it means the two configs are a
+        # plateau to accept rather than a ranking to resolve.
+        if abs(p["mean_gap"]) > 0:
+            k_needed = max(1.0, (2.0 * p["std_of_gap"] / abs(p["mean_gap"])) ** 2)
+            verdict = (f"{k_needed:.0f} seed(s) each" if k_needed <= 10
+                       else f"{k_needed:.0f} seeds each -- i.e. not worth resolving; treat as equivalent")
+            lines.append(f"      to resolve the observed mean gap would take {verdict}")
+
+    if report["resolvable_gap_at_k_seeds"]:
+        lines += ["", "(Pooled across all pairs, for reference only -- dominated by the noisiest",
+                  " configuration in the set, so do NOT size a threshold from this:)"]
+        for k, gap in report["resolvable_gap_at_k_seeds"].items():
+            lines.append(f"  k={k}: {gap:.6f}")
 
     lines += ["", "VERDICT: " + report["verdict"], "=" * 72, ""]
     return "\n".join(lines)

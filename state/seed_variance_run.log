@@ -1,0 +1,1209 @@
+﻿[seed_variance] Test configurations, picked from results.tsv (32 historical row(s)):
+  config 0: historical val_bpb=1.248540 (run run_0000) n_layer=21 n_embd=960 n_head=6 matrix_lr=0.02376
+  config 1: historical val_bpb=1.254326 (run run_0015) n_layer=17 n_embd=816 n_head=3 matrix_lr=0.01804
+  config 2: historical val_bpb=1.440615 (run run_0014) n_layer=2 n_embd=760 n_head=5 matrix_lr=0.01041
+
+[seed_variance] Dispatching 15 run(s): 3 config(s) x 5 seed(s) [42, 1, 2, 3, 4]
+
+[seed_variance] === seed 42 (3 run(s)) ===
+[RemoteRunner] GPU discovery: 7 total, 5 available (util<10%, free>8000MB): [4, 5, 6, 3, 1]
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_s42.yaml
+[GPU4] GPU 4 lock stale (37882s old) -- reclaiming
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_s42.yaml
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_
+s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_
+s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU4] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_s42.yaml
+[GPU4] Executing on GPU 4: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=4 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_
+s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU5] [hyperparams] DEPTH=17 N_HEAD=3 target_n_embd=816 EMBEDDING_LR=0.682852 
+UNEMBEDDING_LR=0.0021680735067864196 MATRIX_LR=0.018039 
+SCALAR_LR=0.1788899024847607 WEIGHT_DECAY=0.37115939101204276 
+WARMUP_RATIO=0.01982714217156172 TOTAL_BATCH_SIZE=12288 
+WINDOW_PATTERN=LSLSSLSSLSSLSSLSS (window_s_fraction=0.6545171458274126) SEED=42
+[GPU4] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=42
+[GPU6] [hyperparams] DEPTH=2 N_HEAD=5 target_n_embd=760 
+EMBEDDING_LR=0.07666257370268362 UNEMBEDDING_LR=0.0009031613639102989 
+MATRIX_LR=0.01040697806819713 SCALAR_LR=0.6507700838275043 
+WEIGHT_DECAY=0.2682855147868395 WARMUP_RATIO=0.1947598060593009 
+TOTAL_BATCH_SIZE=4096 WINDOW_PATTERN=SS (window_s_fraction=0.9707933021709323) 
+SEED=42
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 17, 
+'n_head': 3, 'n_kv_head': 3, 'n_embd': 816, 'window_pattern': 
+'LSLSSLSSLSSLSSLSS'}
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 2, 
+'n_head': 5, 'n_kv_head': 5, 'n_embd': 760, 'window_pattern': 'SS'}
+[GPU4] Vocab size: 8,192
+[GPU4] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 6,684,672
+[GPU5]   value_embeds            : 60,162,048
+[GPU5]   lm_head                 : 6,684,672
+[GPU5]   transformer_matrices    : 135,835,488
+[GPU5]   scalars                 : 34
+[GPU5]   total                   : 209,366,914
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 6,225,920
+[GPU5] Estimated FLOPs per token: 1.095769e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(816/768) = 0.970143
+[GPU6]   value_embeds            : 6,225,920
+[GPU6]   lm_head                 : 6,225,920
+[GPU6]   transformer_matrices    : 13,862,560
+[GPU6]   scalars                 : 4
+[GPU6]   total                   : 32,540,324
+[GPU6] Estimated FLOPs per token: 1.485475e+08
+[GPU6] Scaling AdamW LRs by 1/sqrt(760/768) = 1.005249
+[GPU4] Parameter counts:
+[GPU4]   wte                     : 7,864,320
+[GPU4]   value_embeds            : 86,507,520
+[GPU4]   lm_head                 : 7,864,320
+[GPU4]   transformer_matrices    : 232,245,312
+[GPU4]   scalars                 : 42
+[GPU4]   total                   : 334,481,514
+[GPU4] Estimated FLOPs per token: 1.853535e+09
+[GPU4] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU4] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU4] [train.py] Initializing dataloader...
+[GPU4] [train.py] Dataloader created, prefetching first batch...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 6
+[GPU5] [train.py] Starting training loop...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 2
+[GPU6] [train.py] Starting training loop...
+[GPU4] [train.py] First batch prefetched successfully
+[GPU4] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU4] Gradient accumulation steps: 11
+[GPU4] [train.py] Starting training loop...
+[GPU6] [train.py] Starting validation eval...
+[GPU6] ---
+[GPU6] val_bpb:          1.448430
+[GPU6] training_seconds: 124.7
+[GPU6] total_seconds:    202.9
+[GPU6] peak_vram_mb:     917.3
+[GPU6] mfu_percent:      1.50
+[GPU6] total_tokens_M:   12.5
+[GPU6] num_steps:        3052
+[GPU6] budget_shortfall_pct: 0.00
+[GPU6] num_params_M:     32.5
+[GPU6] depth:            2
+[GPU6] seed:             42
+[GPU6] interpretable_scalars: {"resid_lambdas": [0.96937096118927, 
+0.4631015360355377], "x0_lambdas": [-0.2030143141746521, 0.8844430446624756], 
+"ve_gate_norm": {"1": 2.979260206222534}}
+[GPU6] Parsed metrics: {'val_bpb': 1.44843, 'training_time': 124.7, 'status': 
+'remote_ok', 'total_seconds': 202.9, 'peak_vram_mb': 917.3, 'mfu_percent': 1.5,
+'total_tokens_M': 12.5, 'num_steps': 3052, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 32.5, 'depth': 2, 'seed': 42, 'interpretable_scalars': 
+{'resid_lambdas': [0.96937096118927, 0.4631015360355377], 'x0_lambdas': 
+[-0.2030143141746521, 0.8844430446624756], 've_gate_norm': {'1': 
+2.979260206222534}}, 'device': 6}
+[seed_variance] seedvar_c2_s42: val_bpb=1.44843 status=remote_ok
+[ResultsLogger] Logged seedvar_c2_s42: val_bpb=1.448430, status=remote_ok, time=124.7s
+[ResultsLogger]   Hyperparams: n_layer=2, n_embd=760, matrix_lr=1.04e-02
+[GPU5] [train.py] Starting validation eval...
+[GPU4] [train.py] Starting validation eval...
+[GPU5] ---
+[GPU5] val_bpb:          1.254821
+[GPU5] training_seconds: 688.6
+[GPU5] total_seconds:    990.0
+[GPU5] peak_vram_mb:     4934.9
+[GPU5] mfu_percent:      1.99
+[GPU5] total_tokens_M:   12.5
+[GPU5] num_steps:        1018
+[GPU5] budget_shortfall_pct: 0.00
+[GPU5] num_params_M:     209.4
+[GPU5] depth:            17
+[GPU5] seed:             42
+[GPU5] interpretable_scalars: {"resid_lambdas": [1.0161045789718628, 
+0.50623619556427, 0.7437931895256042, 0.6132505536079407, 0.7199434041976929, 
+0.5922614336013794, 0.9606408476829529, 1.0971561670303345, 1.131121277809143, 
+1.0692144632339478, 1.1304097175598145, 1.0790410041809082, 1.0543259382247925,
+1.028892993927002, 1.0581294298171997, 0.9972224235534668, 1.0296238660812378],
+"x0_lambdas": [2.7715651988983154, 1.8145179748535156, 0.9773234128952026, 
+0.15814237296581268, 0.4135850667953491, 0.9201812148094177, 
+-0.02465558797121048, 2.3237597942352295, 0.005778388120234013, 
+0.4571026861667633, 0.04567696899175644, 0.4640315771102905, 
+0.4331914484500885, 1.653655767440796, 1.2245875597000122, 0.6457414627075195, 
+-0.4911864399909973], "ve_gate_norm": {"0": 1.6775885820388794, "2": 
+0.7091044783592224, "4": 0.8482370376586914, "6": 0.7292080521583557, "8": 
+0.9012943506240845, "10": 1.4263323545455933, "12": 2.468364953994751, "14": 
+1.5431063175201416, "16": 1.1461162567138672}}
+[GPU5] Parsed metrics: {'val_bpb': 1.254821, 'training_time': 688.6, 'status': 
+'remote_ok', 'total_seconds': 990.0, 'peak_vram_mb': 4934.9, 'mfu_percent': 
+1.99, 'total_tokens_M': 12.5, 'num_steps': 1018, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 209.4, 'depth': 17, 'seed': 42, 'interpretable_scalars': 
+{'resid_lambdas': [1.0161045789718628, 0.50623619556427, 0.7437931895256042, 
+0.6132505536079407, 0.7199434041976929, 0.5922614336013794, 0.9606408476829529,
+1.0971561670303345, 1.131121277809143, 1.0692144632339478, 1.1304097175598145, 
+1.0790410041809082, 1.0543259382247925, 1.028892993927002, 1.0581294298171997, 
+0.9972224235534668, 1.0296238660812378], 'x0_lambdas': [2.7715651988983154, 
+1.8145179748535156, 0.9773234128952026, 0.15814237296581268, 
+0.4135850667953491, 0.9201812148094177, -0.02465558797121048, 
+2.3237597942352295, 0.005778388120234013, 0.4571026861667633, 
+0.04567696899175644, 0.4640315771102905, 0.4331914484500885, 1.653655767440796,
+1.2245875597000122, 0.6457414627075195, -0.4911864399909973], 've_gate_norm': 
+{'0': 1.6775885820388794, '2': 0.7091044783592224, '4': 0.8482370376586914, 
+'6': 0.7292080521583557, '8': 0.9012943506240845, '10': 1.4263323545455933, 
+'12': 2.468364953994751, '14': 1.5431063175201416, '16': 1.1461162567138672}}, 
+'device': 5}
+[seed_variance] seedvar_c1_s42: val_bpb=1.254821 status=remote_ok
+[ResultsLogger] Logged seedvar_c1_s42: val_bpb=1.254821, status=remote_ok, time=688.6s
+[ResultsLogger]   Hyperparams: n_layer=17, n_embd=816, matrix_lr=1.80e-02
+[GPU4] ---
+[GPU4] val_bpb:          1.248626
+[GPU4] training_seconds: 685.6
+[GPU4] total_seconds:    1047.2
+[GPU4] peak_vram_mb:     7325.1
+[GPU4] mfu_percent:      3.35
+[GPU4] total_tokens_M:   12.5
+[GPU4] num_steps:        555
+[GPU4] budget_shortfall_pct: 0.00
+[GPU4] num_params_M:     334.5
+[GPU4] depth:            21
+[GPU4] seed:             42
+[GPU4] interpretable_scalars: {"resid_lambdas": [1.0000574588775635, 
+0.674255907535553, 0.7122154831886292, 0.7261918783187866, 0.760331928730011, 
+0.7594525814056396, 0.7698967456817627, 0.781123161315918, 0.7937990427017212, 
+0.8692663908004761, 0.8474305868148804, 0.9919586777687073, 0.9526969790458679,
+0.9943106174468994, 0.9514396786689758, 1.0529825687408447, 1.0139466524124146,
+1.0450202226638794, 0.9989281296730042, 1.0532463788986206, 
+0.9871171116828918], "x0_lambdas": [1.0951837301254272, 2.4372200965881348, 
+1.2578051090240479, 0.6371142268180847, 0.10460800677537918, 
+0.8635430932044983, 0.5483850240707397, 0.5638620853424072, 
+-0.20320911705493927, 0.7048658728599548, -0.22101210057735443, 
+1.134466528892517, -0.07939638942480087, 0.8447986245155334, 
+-0.2998928129673004, 1.0559228658676147, 0.3708295226097107, 
+0.6111854910850525, 0.7048120498657227, -0.13603568077087402, 
+0.29180747270584106], "ve_gate_norm": {"0": 3.6050026416778564, "2": 
+5.039683818817139, "4": 4.724740028381348, "6": 4.583689212799072, "8": 
+5.24634313583374, "10": 5.736483573913574, "12": 6.0476765632629395, "14": 
+5.923244476318359, "16": 6.672196388244629, "18": 6.3856377601623535, "20": 
+6.840255260467529}}
+[GPU4] Parsed metrics: {'val_bpb': 1.248626, 'training_time': 685.6, 'status': 
+'remote_ok', 'total_seconds': 1047.2, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.35, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 42, 'interpretable_scalars': 
+{'resid_lambdas': [1.0000574588775635, 0.674255907535553, 0.7122154831886292, 
+0.7261918783187866, 0.760331928730011, 0.7594525814056396, 0.7698967456817627, 
+0.781123161315918, 0.7937990427017212, 0.8692663908004761, 0.8474305868148804, 
+0.9919586777687073, 0.9526969790458679, 0.9943106174468994, 0.9514396786689758,
+1.0529825687408447, 1.0139466524124146, 1.0450202226638794, 0.9989281296730042,
+1.0532463788986206, 0.9871171116828918], 'x0_lambdas': [1.0951837301254272, 
+2.4372200965881348, 1.2578051090240479, 0.6371142268180847, 
+0.10460800677537918, 0.8635430932044983, 0.5483850240707397, 
+0.5638620853424072, -0.20320911705493927, 0.7048658728599548, 
+-0.22101210057735443, 1.134466528892517, -0.07939638942480087, 
+0.8447986245155334, -0.2998928129673004, 1.0559228658676147, 
+0.3708295226097107, 0.6111854910850525, 0.7048120498657227, 
+-0.13603568077087402, 0.29180747270584106], 've_gate_norm': {'0': 
+3.6050026416778564, '2': 5.039683818817139, '4': 4.724740028381348, '6': 
+4.583689212799072, '8': 5.24634313583374, '10': 5.736483573913574, '12': 
+6.0476765632629395, '14': 5.923244476318359, '16': 6.672196388244629, '18': 
+6.3856377601623535, '20': 6.840255260467529}}, 'device': 4}
+[seed_variance] seedvar_c0_s42: val_bpb=1.248626 status=remote_ok
+[ResultsLogger] Logged seedvar_c0_s42: val_bpb=1.248626, status=remote_ok, time=685.6s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU4] [====================] 100.0% | eval step 10240/10240
+[GPU5] [====================] 100.0% | eval step 10240/10240
+[GPU6] [====================] 100.0% | eval step 10240/10240
+[seed_variance] === seed 1 (3 run(s)) ===
+[RemoteRunner] GPU discovery: 7 total, 5 available (util<10%, free>8000MB): [4, 5, 6, 3, 1]
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[GPU3] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_s1.yaml
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_s1.yaml
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_s1.yaml
+[GPU3] Executing on GPU 3: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=3 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_
+s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_
+s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_
+s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] [hyperparams] DEPTH=17 N_HEAD=3 target_n_embd=816 EMBEDDING_LR=0.682852 
+UNEMBEDDING_LR=0.0021680735067864196 MATRIX_LR=0.018039 
+SCALAR_LR=0.1788899024847607 WEIGHT_DECAY=0.37115939101204276 
+WARMUP_RATIO=0.01982714217156172 TOTAL_BATCH_SIZE=12288 
+WINDOW_PATTERN=LSLSSLSSLSSLSSLSS (window_s_fraction=0.6545171458274126) SEED=1
+[GPU3] [hyperparams] DEPTH=2 N_HEAD=5 target_n_embd=760 
+EMBEDDING_LR=0.07666257370268362 UNEMBEDDING_LR=0.0009031613639102989 
+MATRIX_LR=0.01040697806819713 SCALAR_LR=0.6507700838275043 
+WEIGHT_DECAY=0.2682855147868395 WARMUP_RATIO=0.1947598060593009 
+TOTAL_BATCH_SIZE=4096 WINDOW_PATTERN=SS (window_s_fraction=0.9707933021709323) 
+SEED=1
+[GPU5] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=1
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 17, 
+'n_head': 3, 'n_kv_head': 3, 'n_embd': 816, 'window_pattern': 
+'LSLSSLSSLSSLSSLSS'}
+[GPU3] Vocab size: 8,192
+[GPU3] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 2, 
+'n_head': 5, 'n_kv_head': 5, 'n_embd': 760, 'window_pattern': 'SS'}
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 6,684,672
+[GPU6]   value_embeds            : 60,162,048
+[GPU6]   lm_head                 : 6,684,672
+[GPU6]   transformer_matrices    : 135,835,488
+[GPU6]   scalars                 : 34
+[GPU6]   total                   : 209,366,914
+[GPU6] Estimated FLOPs per token: 1.095769e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(816/768) = 0.970143
+[GPU3] Parameter counts:
+[GPU3]   wte                     : 6,225,920
+[GPU3]   value_embeds            : 6,225,920
+[GPU3]   lm_head                 : 6,225,920
+[GPU3]   transformer_matrices    : 13,862,560
+[GPU3]   scalars                 : 4
+[GPU3]   total                   : 32,540,324
+[GPU3] Estimated FLOPs per token: 1.485475e+08
+[GPU3] Scaling AdamW LRs by 1/sqrt(760/768) = 1.005249
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 7,864,320
+[GPU5]   value_embeds            : 86,507,520
+[GPU5]   lm_head                 : 7,864,320
+[GPU5]   transformer_matrices    : 232,245,312
+[GPU5]   scalars                 : 42
+[GPU5]   total                   : 334,481,514
+[GPU5] Estimated FLOPs per token: 1.853535e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU3] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU3] [train.py] Initializing dataloader...
+[GPU3] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 6
+[GPU6] [train.py] Starting training loop...
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU3] [train.py] First batch prefetched successfully
+[GPU3] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU3] Gradient accumulation steps: 2
+[GPU3] [train.py] Starting training loop...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 11
+[GPU5] [train.py] Starting training loop...
+[GPU3] [train.py] Starting validation eval...
+[GPU3] ---
+[GPU3] val_bpb:          1.454099
+[GPU3] training_seconds: 124.6
+[GPU3] total_seconds:    203.9
+[GPU3] peak_vram_mb:     917.3
+[GPU3] mfu_percent:      1.50
+[GPU3] total_tokens_M:   12.5
+[GPU3] num_steps:        3052
+[GPU3] budget_shortfall_pct: 0.00
+[GPU3] num_params_M:     32.5
+[GPU3] depth:            2
+[GPU3] seed:             1
+[GPU3] interpretable_scalars: {"resid_lambdas": [0.9745709300041199, 
+0.47828733921051025], "x0_lambdas": [-0.13511447608470917, 0.955939769744873], 
+"ve_gate_norm": {"1": 3.0131213665008545}}
+[GPU3] Parsed metrics: {'val_bpb': 1.454099, 'training_time': 124.6, 'status': 
+'remote_ok', 'total_seconds': 203.9, 'peak_vram_mb': 917.3, 'mfu_percent': 1.5,
+'total_tokens_M': 12.5, 'num_steps': 3052, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 32.5, 'depth': 2, 'seed': 1, 'interpretable_scalars': 
+{'resid_lambdas': [0.9745709300041199, 0.47828733921051025], 'x0_lambdas': 
+[-0.13511447608470917, 0.955939769744873], 've_gate_norm': {'1': 
+3.0131213665008545}}, 'device': 3}
+[seed_variance] seedvar_c2_s1: val_bpb=1.454099 status=remote_ok
+[ResultsLogger] Logged seedvar_c2_s1: val_bpb=1.454099, status=remote_ok, time=124.6s
+[ResultsLogger]   Hyperparams: n_layer=2, n_embd=760, matrix_lr=1.04e-02
+[GPU5] [train.py] Starting validation eval...
+[GPU6] [train.py] Starting validation eval...
+[GPU6] ---
+[GPU6] val_bpb:          1.252333
+[GPU6] training_seconds: 689.4
+[GPU6] total_seconds:    989.0
+[GPU6] peak_vram_mb:     4934.9
+[GPU6] mfu_percent:      1.99
+[GPU6] total_tokens_M:   12.5
+[GPU6] num_steps:        1018
+[GPU6] budget_shortfall_pct: 0.00
+[GPU6] num_params_M:     209.4
+[GPU6] depth:            17
+[GPU6] seed:             1
+[GPU6] interpretable_scalars: {"resid_lambdas": [1.0222296714782715, 
+0.5027852654457092, 0.7099072337150574, 0.5777514576911926, 0.8412790298461914,
+0.7299438118934631, 0.9318787455558777, 0.8316889405250549, 0.9026652574539185,
+0.8413266539573669, 0.9203585982322693, 1.0890909433364868, 1.0999836921691895,
+1.074643611907959, 1.0547114610671997, 1.0136436223983765, 1.0972027778625488],
+"x0_lambdas": [3.4233486652374268, 1.7291895151138306, 0.893303632736206, 
+0.9620739221572876, 1.301069974899292, 0.25015753507614136, 
+0.15258149802684784, 1.0369901657104492, -0.18204565346240997, 
+0.765121579170227, -0.2623251974582672, 2.0057058334350586, 0.1960899531841278,
+1.2086865901947021, 1.0540169477462769, 1.3386534452438354, 
+-0.419697105884552], "ve_gate_norm": {"0": 1.7240034341812134, "2": 
+1.3090884685516357, "4": 0.7654978036880493, "6": 0.7619096636772156, "8": 
+0.8705417513847351, "10": 0.9227937459945679, "12": 2.2236509323120117, "14": 
+1.758219838142395, "16": 1.0945967435836792}}
+[GPU6] Parsed metrics: {'val_bpb': 1.252333, 'training_time': 689.4, 'status': 
+'remote_ok', 'total_seconds': 989.0, 'peak_vram_mb': 4934.9, 'mfu_percent': 
+1.99, 'total_tokens_M': 12.5, 'num_steps': 1018, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 209.4, 'depth': 17, 'seed': 1, 'interpretable_scalars': 
+{'resid_lambdas': [1.0222296714782715, 0.5027852654457092, 0.7099072337150574, 
+0.5777514576911926, 0.8412790298461914, 0.7299438118934631, 0.9318787455558777,
+0.8316889405250549, 0.9026652574539185, 0.8413266539573669, 0.9203585982322693,
+1.0890909433364868, 1.0999836921691895, 1.074643611907959, 1.0547114610671997, 
+1.0136436223983765, 1.0972027778625488], 'x0_lambdas': [3.4233486652374268, 
+1.7291895151138306, 0.893303632736206, 0.9620739221572876, 1.301069974899292, 
+0.25015753507614136, 0.15258149802684784, 1.0369901657104492, 
+-0.18204565346240997, 0.765121579170227, -0.2623251974582672, 
+2.0057058334350586, 0.1960899531841278, 1.2086865901947021, 1.0540169477462769,
+1.3386534452438354, -0.419697105884552], 've_gate_norm': {'0': 
+1.7240034341812134, '2': 1.3090884685516357, '4': 0.7654978036880493, '6': 
+0.7619096636772156, '8': 0.8705417513847351, '10': 0.9227937459945679, '12': 
+2.2236509323120117, '14': 1.758219838142395, '16': 1.0945967435836792}}, 
+'device': 6}
+[seed_variance] seedvar_c1_s1: val_bpb=1.252333 status=remote_ok
+[ResultsLogger] Logged seedvar_c1_s1: val_bpb=1.252333, status=remote_ok, time=689.4s
+[ResultsLogger]   Hyperparams: n_layer=17, n_embd=816, matrix_lr=1.80e-02
+[GPU5] ---
+[GPU5] val_bpb:          1.252597
+[GPU5] training_seconds: 672.5
+[GPU5] total_seconds:    1022.8
+[GPU5] peak_vram_mb:     7325.1
+[GPU5] mfu_percent:      3.42
+[GPU5] total_tokens_M:   12.5
+[GPU5] num_steps:        555
+[GPU5] budget_shortfall_pct: 0.00
+[GPU5] num_params_M:     334.5
+[GPU5] depth:            21
+[GPU5] seed:             1
+[GPU5] interpretable_scalars: {"resid_lambdas": [1.006563425064087, 
+0.7107004523277283, 0.7272834777832031, 0.7293407917022705, 0.7322684526443481,
+0.7378160953521729, 0.7523834109306335, 0.7417001128196716, 0.7704444527626038,
+0.7734646201133728, 0.7811322212219238, 0.8681173324584961, 0.8356105089187622,
+0.9481450319290161, 0.9080901741981506, 1.0468827486038208, 1.0015758275985718,
+1.046768069267273, 0.9920954704284668, 1.046074628829956, 0.9770479798316956], 
+"x0_lambdas": [1.7256089448928833, 2.7361302375793457, 1.2262821197509766, 
+1.2912720441818237, 1.0892465114593506, 0.7050427198410034, 0.6420576572418213,
+0.739037275314331, 0.3835051953792572, 0.5064861178398132, 
+0.052744630724191666, 0.47169211506843567, -0.2309296429157257, 
+0.937013566493988, -0.16901648044586182, 0.8653663992881775, 
+0.36616283655166626, 0.799983561038971, 0.24378180503845215, 
+0.02543344348669052, 0.68162602186203], "ve_gate_norm": {"0": 
+3.646632432937622, "2": 5.103332996368408, "4": 5.291759967803955, "6": 
+5.430637836456299, "8": 4.582861423492432, "10": 4.873178958892822, "12": 
+5.458592891693115, "14": 5.6438069343566895, "16": 5.849799633026123, "18": 
+6.787028789520264, "20": 5.4623026847839355}}
+[GPU5] Parsed metrics: {'val_bpb': 1.252597, 'training_time': 672.5, 'status': 
+'remote_ok', 'total_seconds': 1022.8, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.42, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 1, 'interpretable_scalars': 
+{'resid_lambdas': [1.006563425064087, 0.7107004523277283, 0.7272834777832031, 
+0.7293407917022705, 0.7322684526443481, 0.7378160953521729, 0.7523834109306335,
+0.7417001128196716, 0.7704444527626038, 0.7734646201133728, 0.7811322212219238,
+0.8681173324584961, 0.8356105089187622, 0.9481450319290161, 0.9080901741981506,
+1.0468827486038208, 1.0015758275985718, 1.046768069267273, 0.9920954704284668, 
+1.046074628829956, 0.9770479798316956], 'x0_lambdas': [1.7256089448928833, 
+2.7361302375793457, 1.2262821197509766, 1.2912720441818237, 1.0892465114593506,
+0.7050427198410034, 0.6420576572418213, 0.739037275314331, 0.3835051953792572, 
+0.5064861178398132, 0.052744630724191666, 0.47169211506843567, 
+-0.2309296429157257, 0.937013566493988, -0.16901648044586182, 
+0.8653663992881775, 0.36616283655166626, 0.799983561038971, 
+0.24378180503845215, 0.02543344348669052, 0.68162602186203], 've_gate_norm': 
+{'0': 3.646632432937622, '2': 5.103332996368408, '4': 5.291759967803955, '6': 
+5.430637836456299, '8': 4.582861423492432, '10': 4.873178958892822, '12': 
+5.458592891693115, '14': 5.6438069343566895, '16': 5.849799633026123, '18': 
+6.787028789520264, '20': 5.4623026847839355}}, 'device': 5}
+[seed_variance] seedvar_c0_s1: val_bpb=1.252597 status=remote_ok
+[ResultsLogger] Logged seedvar_c0_s1: val_bpb=1.252597, status=remote_ok, time=672.5s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU5] [====================] 100.0% | eval step 10240/10240
+[GPU6] [====================] 100.0% | eval step 10240/10240
+[GPU3] [====================] 100.0% | eval step 10240/10240
+[seed_variance] === seed 2 (3 run(s)) ===
+[RemoteRunner] GPU discovery: 7 total, 6 available (util<10%, free>8000MB): [4, 5, 6, 3, 1, 0]
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_s2.yaml
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_s2.yaml
+[GPU3] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_s2.yaml
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_
+s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_
+s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU3] Executing on GPU 3: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=3 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_
+s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] [hyperparams] DEPTH=2 N_HEAD=5 target_n_embd=760 
+EMBEDDING_LR=0.07666257370268362 UNEMBEDDING_LR=0.0009031613639102989 
+MATRIX_LR=0.01040697806819713 SCALAR_LR=0.6507700838275043 
+WEIGHT_DECAY=0.2682855147868395 WARMUP_RATIO=0.1947598060593009 
+TOTAL_BATCH_SIZE=4096 WINDOW_PATTERN=SS (window_s_fraction=0.9707933021709323) 
+SEED=2
+[GPU3] [hyperparams] DEPTH=17 N_HEAD=3 target_n_embd=816 EMBEDDING_LR=0.682852 
+UNEMBEDDING_LR=0.0021680735067864196 MATRIX_LR=0.018039 
+SCALAR_LR=0.1788899024847607 WEIGHT_DECAY=0.37115939101204276 
+WARMUP_RATIO=0.01982714217156172 TOTAL_BATCH_SIZE=12288 
+WINDOW_PATTERN=LSLSSLSSLSSLSSLSS (window_s_fraction=0.6545171458274126) SEED=2
+[GPU6] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=2
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 2, 
+'n_head': 5, 'n_kv_head': 5, 'n_embd': 760, 'window_pattern': 'SS'}
+[GPU3] Vocab size: 8,192
+[GPU3] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 17, 
+'n_head': 3, 'n_kv_head': 3, 'n_embd': 816, 'window_pattern': 
+'LSLSSLSSLSSLSSLSS'}
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU3] Parameter counts:
+[GPU3]   wte                     : 6,684,672
+[GPU3]   value_embeds            : 60,162,048
+[GPU3]   lm_head                 : 6,684,672
+[GPU3]   transformer_matrices    : 135,835,488
+[GPU3]   scalars                 : 34
+[GPU3]   total                   : 209,366,914
+[GPU3] Estimated FLOPs per token: 1.095769e+09
+[GPU3] Scaling AdamW LRs by 1/sqrt(816/768) = 0.970143
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 6,225,920
+[GPU1]   value_embeds            : 6,225,920
+[GPU1]   lm_head                 : 6,225,920
+[GPU1]   transformer_matrices    : 13,862,560
+[GPU1]   scalars                 : 4
+[GPU1]   total                   : 32,540,324
+[GPU1] Estimated FLOPs per token: 1.485475e+08
+[GPU1] Scaling AdamW LRs by 1/sqrt(760/768) = 1.005249
+[GPU3] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU3] [train.py] Initializing dataloader...
+[GPU3] [train.py] Dataloader created, prefetching first batch...
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 7,864,320
+[GPU6]   value_embeds            : 86,507,520
+[GPU6]   lm_head                 : 7,864,320
+[GPU6]   transformer_matrices    : 232,245,312
+[GPU6]   scalars                 : 42
+[GPU6]   total                   : 334,481,514
+[GPU6] Estimated FLOPs per token: 1.853535e+09
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU6] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU3] [train.py] First batch prefetched successfully
+[GPU3] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU3] Gradient accumulation steps: 6
+[GPU3] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 2
+[GPU1] [train.py] Starting training loop...
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 11
+[GPU6] [train.py] Starting training loop...
+[GPU1] [train.py] Starting validation eval...
+[GPU1] ---
+[GPU1] val_bpb:          1.459733
+[GPU1] training_seconds: 123.2
+[GPU1] total_seconds:    203.6
+[GPU1] peak_vram_mb:     917.3
+[GPU1] mfu_percent:      1.52
+[GPU1] total_tokens_M:   12.5
+[GPU1] num_steps:        3052
+[GPU1] budget_shortfall_pct: 0.00
+[GPU1] num_params_M:     32.5
+[GPU1] depth:            2
+[GPU1] seed:             2
+[GPU1] interpretable_scalars: {"resid_lambdas": [0.9775249361991882, 
+0.4172211289405823], "x0_lambdas": [-0.06671693176031113, 0.9527654051780701], 
+"ve_gate_norm": {"1": 3.2554092407226562}}
+[GPU1] Parsed metrics: {'val_bpb': 1.459733, 'training_time': 123.2, 'status': 
+'remote_ok', 'total_seconds': 203.6, 'peak_vram_mb': 917.3, 'mfu_percent': 
+1.52, 'total_tokens_M': 12.5, 'num_steps': 3052, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 32.5, 'depth': 2, 'seed': 2, 'interpretable_scalars': 
+{'resid_lambdas': [0.9775249361991882, 0.4172211289405823], 'x0_lambdas': 
+[-0.06671693176031113, 0.9527654051780701], 've_gate_norm': {'1': 
+3.2554092407226562}}, 'device': 1}
+[seed_variance] seedvar_c2_s2: val_bpb=1.459733 status=remote_ok
+[ResultsLogger] Logged seedvar_c2_s2: val_bpb=1.459733, status=remote_ok, time=123.2s
+[ResultsLogger]   Hyperparams: n_layer=2, n_embd=760, matrix_lr=1.04e-02
+[GPU6] [train.py] Starting validation eval...
+[GPU3] [train.py] Starting validation eval...
+[GPU3] ---
+[GPU3] val_bpb:          1.251756
+[GPU3] training_seconds: 696.7
+[GPU3] total_seconds:    995.0
+[GPU3] peak_vram_mb:     4934.9
+[GPU3] mfu_percent:      1.97
+[GPU3] total_tokens_M:   12.5
+[GPU3] num_steps:        1018
+[GPU3] budget_shortfall_pct: 0.00
+[GPU3] num_params_M:     209.4
+[GPU3] depth:            17
+[GPU3] seed:             2
+[GPU3] interpretable_scalars: {"resid_lambdas": [1.0225086212158203, 
+0.5428931713104248, 0.6692707538604736, 0.5664305090904236, 0.7948977947235107,
+0.6964712738990784, 0.8463693261146545, 0.765091061592102, 0.9210271239280701, 
+1.0541332960128784, 1.1081973314285278, 1.1178604364395142, 1.1000670194625854,
+1.0574188232421875, 1.0879201889038086, 1.0682625770568848, 
+1.1001168489456177], "x0_lambdas": [3.534609317779541, 2.302380323410034, 
+0.3619850277900696, 0.9355218410491943, 0.987263560295105, 0.44696611166000366,
+0.3295656740665436, 0.8921838402748108, -0.36853089928627014, 
+1.5069037675857544, 0.7065728306770325, 0.880364179611206, 0.18598154187202454,
+1.4593461751937866, 1.0020434856414795, 0.4607482850551605, 
+0.11110144108533859], "ve_gate_norm": {"0": 1.684697151184082, "2": 
+0.7521694898605347, "4": 0.8458957076072693, "6": 0.7164273262023926, "8": 
+0.7140145301818848, "10": 1.8228152990341187, "12": 2.087618827819824, "14": 
+1.9863672256469727, "16": 1.365548014640808}}
+[GPU3] Parsed metrics: {'val_bpb': 1.251756, 'training_time': 696.7, 'status': 
+'remote_ok', 'total_seconds': 995.0, 'peak_vram_mb': 4934.9, 'mfu_percent': 
+1.97, 'total_tokens_M': 12.5, 'num_steps': 1018, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 209.4, 'depth': 17, 'seed': 2, 'interpretable_scalars': 
+{'resid_lambdas': [1.0225086212158203, 0.5428931713104248, 0.6692707538604736, 
+0.5664305090904236, 0.7948977947235107, 0.6964712738990784, 0.8463693261146545,
+0.765091061592102, 0.9210271239280701, 1.0541332960128784, 1.1081973314285278, 
+1.1178604364395142, 1.1000670194625854, 1.0574188232421875, 1.0879201889038086,
+1.0682625770568848, 1.1001168489456177], 'x0_lambdas': [3.534609317779541, 
+2.302380323410034, 0.3619850277900696, 0.9355218410491943, 0.987263560295105, 
+0.44696611166000366, 0.3295656740665436, 0.8921838402748108, 
+-0.36853089928627014, 1.5069037675857544, 0.7065728306770325, 
+0.880364179611206, 0.18598154187202454, 1.4593461751937866, 1.0020434856414795,
+0.4607482850551605, 0.11110144108533859], 've_gate_norm': {'0': 
+1.684697151184082, '2': 0.7521694898605347, '4': 0.8458957076072693, '6': 
+0.7164273262023926, '8': 0.7140145301818848, '10': 1.8228152990341187, '12': 
+2.087618827819824, '14': 1.9863672256469727, '16': 1.365548014640808}}, 
+'device': 3}
+[seed_variance] seedvar_c1_s2: val_bpb=1.251756 status=remote_ok
+[ResultsLogger] Logged seedvar_c1_s2: val_bpb=1.251756, status=remote_ok, time=696.7s
+[ResultsLogger]   Hyperparams: n_layer=17, n_embd=816, matrix_lr=1.80e-02
+[GPU6] ---
+[GPU6] val_bpb:          1.250604
+[GPU6] training_seconds: 676.1
+[GPU6] total_seconds:    1029.1
+[GPU6] peak_vram_mb:     7325.1
+[GPU6] mfu_percent:      3.40
+[GPU6] total_tokens_M:   12.5
+[GPU6] num_steps:        555
+[GPU6] budget_shortfall_pct: 0.00
+[GPU6] num_params_M:     334.5
+[GPU6] depth:            21
+[GPU6] seed:             2
+[GPU6] interpretable_scalars: {"resid_lambdas": [1.0010782480239868, 
+0.6783949136734009, 0.6844791769981384, 0.7221823334693909, 0.7293158769607544,
+0.741654098033905, 0.7718290686607361, 0.8106063604354858, 0.8154171109199524, 
+0.8660175204277039, 0.8314059972763062, 0.9188061952590942, 0.8882646560668945,
+1.041776180267334, 0.9967170357704163, 1.0208096504211426, 0.9859291315078735, 
+1.0341590642929077, 0.9806498885154724, 1.0208574533462524, 
+0.9554577469825745], "x0_lambdas": [1.1313964128494263, 2.20658016204834, 
+1.8655099868774414, 0.6241117715835571, 0.8077684044837952, 0.5368909239768982,
+-0.10485082119703293, 0.8113556504249573, -0.1428619772195816, 
+0.7163257598876953, -0.24201790988445282, 0.7659008502960205, 
+-0.3428008258342743, 1.3001824617385864, 0.19387662410736084, 
+0.7026110887527466, 0.2530187666416168, 0.3638388514518738, 0.5478225350379944,
+0.20441856980323792, 0.3618071377277374], "ve_gate_norm": {"0": 
+3.312628746032715, "2": 5.5123610496521, "4": 4.320756912231445, "6": 
+4.9484639167785645, "8": 4.769040584564209, "10": 5.306033134460449, "12": 
+5.418051242828369, "14": 6.307080268859863, "16": 6.870861053466797, "18": 
+6.453672409057617, "20": 7.094024658203125}}
+[GPU6] Parsed metrics: {'val_bpb': 1.250604, 'training_time': 676.1, 'status': 
+'remote_ok', 'total_seconds': 1029.1, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.4, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 2, 'interpretable_scalars': 
+{'resid_lambdas': [1.0010782480239868, 0.6783949136734009, 0.6844791769981384, 
+0.7221823334693909, 0.7293158769607544, 0.741654098033905, 0.7718290686607361, 
+0.8106063604354858, 0.8154171109199524, 0.8660175204277039, 0.8314059972763062,
+0.9188061952590942, 0.8882646560668945, 1.041776180267334, 0.9967170357704163, 
+1.0208096504211426, 0.9859291315078735, 1.0341590642929077, 0.9806498885154724,
+1.0208574533462524, 0.9554577469825745], 'x0_lambdas': [1.1313964128494263, 
+2.20658016204834, 1.8655099868774414, 0.6241117715835571, 0.8077684044837952, 
+0.5368909239768982, -0.10485082119703293, 0.8113556504249573, 
+-0.1428619772195816, 0.7163257598876953, -0.24201790988445282, 
+0.7659008502960205, -0.3428008258342743, 1.3001824617385864, 
+0.19387662410736084, 0.7026110887527466, 0.2530187666416168, 
+0.3638388514518738, 0.5478225350379944, 0.20441856980323792, 
+0.3618071377277374], 've_gate_norm': {'0': 3.312628746032715, '2': 
+5.5123610496521, '4': 4.320756912231445, '6': 4.9484639167785645, '8': 
+4.769040584564209, '10': 5.306033134460449, '12': 5.418051242828369, '14': 
+6.307080268859863, '16': 6.870861053466797, '18': 6.453672409057617, '20': 
+7.094024658203125}}, 'device': 6}
+[seed_variance] seedvar_c0_s2: val_bpb=1.250604 status=remote_ok
+[ResultsLogger] Logged seedvar_c0_s2: val_bpb=1.250604, status=remote_ok, time=676.1s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU6] [====================] 100.0% | eval step 10240/10240
+[GPU3] [====================] 100.0% | eval step 10240/10240
+[GPU1] [====================] 100.0% | eval step 10240/10240
+[seed_variance] === seed 3 (3 run(s)) ===
+[RemoteRunner] GPU discovery: 7 total, 6 available (util<10%, free>8000MB): [4, 5, 6, 3, 1, 0]
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_s3.yaml
+[GPU0] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_s3.yaml
+[GPU3] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_s3.yaml
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_
+s3.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU0] Executing on GPU 0: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=0 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_
+s3.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU3] Executing on GPU 3: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=3 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_
+s3.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU3] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=3
+[GPU1] [hyperparams] DEPTH=17 N_HEAD=3 target_n_embd=816 EMBEDDING_LR=0.682852 
+UNEMBEDDING_LR=0.0021680735067864196 MATRIX_LR=0.018039 
+SCALAR_LR=0.1788899024847607 WEIGHT_DECAY=0.37115939101204276 
+WARMUP_RATIO=0.01982714217156172 TOTAL_BATCH_SIZE=12288 
+WINDOW_PATTERN=LSLSSLSSLSSLSSLSS (window_s_fraction=0.6545171458274126) SEED=3
+[GPU0] [hyperparams] DEPTH=2 N_HEAD=5 target_n_embd=760 
+EMBEDDING_LR=0.07666257370268362 UNEMBEDDING_LR=0.0009031613639102989 
+MATRIX_LR=0.01040697806819713 SCALAR_LR=0.6507700838275043 
+WEIGHT_DECAY=0.2682855147868395 WARMUP_RATIO=0.1947598060593009 
+TOTAL_BATCH_SIZE=4096 WINDOW_PATTERN=SS (window_s_fraction=0.9707933021709323) 
+SEED=3
+[GPU3] Vocab size: 8,192
+[GPU3] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 17, 
+'n_head': 3, 'n_kv_head': 3, 'n_embd': 816, 'window_pattern': 
+'LSLSSLSSLSSLSSLSS'}
+[GPU0] Vocab size: 8,192
+[GPU0] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 2, 
+'n_head': 5, 'n_kv_head': 5, 'n_embd': 760, 'window_pattern': 'SS'}
+[GPU0] Parameter counts:
+[GPU0]   wte                     : 6,225,920
+[GPU0]   value_embeds            : 6,225,920
+[GPU0]   lm_head                 : 6,225,920
+[GPU0]   transformer_matrices    : 13,862,560
+[GPU0]   scalars                 : 4
+[GPU0]   total                   : 32,540,324
+[GPU0] Estimated FLOPs per token: 1.485475e+08
+[GPU0] Scaling AdamW LRs by 1/sqrt(760/768) = 1.005249
+[GPU3] Parameter counts:
+[GPU3]   wte                     : 7,864,320
+[GPU3]   value_embeds            : 86,507,520
+[GPU3]   lm_head                 : 7,864,320
+[GPU3]   transformer_matrices    : 232,245,312
+[GPU3]   scalars                 : 42
+[GPU3]   total                   : 334,481,514
+[GPU3] Estimated FLOPs per token: 1.853535e+09
+[GPU3] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 6,684,672
+[GPU1]   value_embeds            : 60,162,048
+[GPU1]   lm_head                 : 6,684,672
+[GPU1]   transformer_matrices    : 135,835,488
+[GPU1]   scalars                 : 34
+[GPU1]   total                   : 209,366,914
+[GPU1] Estimated FLOPs per token: 1.095769e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(816/768) = 0.970143
+[GPU0] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU0] [train.py] Initializing dataloader...
+[GPU0] [train.py] Dataloader created, prefetching first batch...
+[GPU3] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU3] [train.py] Initializing dataloader...
+[GPU3] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU0] [train.py] First batch prefetched successfully
+[GPU0] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU0] Gradient accumulation steps: 2
+[GPU0] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 6
+[GPU1] [train.py] Starting training loop...
+[GPU3] [train.py] First batch prefetched successfully
+[GPU3] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU3] Gradient accumulation steps: 11
+[GPU3] [train.py] Starting training loop...
+[GPU0] [train.py] Starting validation eval...
+[GPU0] ---
+[GPU0] val_bpb:          1.447737
+[GPU0] training_seconds: 132.6
+[GPU0] total_seconds:    215.3
+[GPU0] peak_vram_mb:     917.3
+[GPU0] mfu_percent:      1.41
+[GPU0] total_tokens_M:   12.5
+[GPU0] num_steps:        3052
+[GPU0] budget_shortfall_pct: 0.00
+[GPU0] num_params_M:     32.5
+[GPU0] depth:            2
+[GPU0] seed:             3
+[GPU0] interpretable_scalars: {"resid_lambdas": [0.9730373024940491, 
+0.4257141351699829], "x0_lambdas": [-0.021367603912949562, 0.8653709888458252],
+"ve_gate_norm": {"1": 3.0002262592315674}}
+[GPU0] Parsed metrics: {'val_bpb': 1.447737, 'training_time': 132.6, 'status': 
+'remote_ok', 'total_seconds': 215.3, 'peak_vram_mb': 917.3, 'mfu_percent': 
+1.41, 'total_tokens_M': 12.5, 'num_steps': 3052, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 32.5, 'depth': 2, 'seed': 3, 'interpretable_scalars': 
+{'resid_lambdas': [0.9730373024940491, 0.4257141351699829], 'x0_lambdas': 
+[-0.021367603912949562, 0.8653709888458252], 've_gate_norm': {'1': 
+3.0002262592315674}}, 'device': 0}
+[seed_variance] seedvar_c2_s3: val_bpb=1.447737 status=remote_ok
+[ResultsLogger] Logged seedvar_c2_s3: val_bpb=1.447737, status=remote_ok, time=132.6s
+[ResultsLogger]   Hyperparams: n_layer=2, n_embd=760, matrix_lr=1.04e-02
+[GPU3] [train.py] Starting validation eval...
+[GPU1] [train.py] Starting validation eval...
+[GPU1] ---
+[GPU1] val_bpb:          1.249371
+[GPU1] training_seconds: 694.8
+[GPU1] total_seconds:    984.0
+[GPU1] peak_vram_mb:     4934.9
+[GPU1] mfu_percent:      1.97
+[GPU1] total_tokens_M:   12.5
+[GPU1] num_steps:        1018
+[GPU1] budget_shortfall_pct: 0.00
+[GPU1] num_params_M:     209.4
+[GPU1] depth:            17
+[GPU1] seed:             3
+[GPU1] interpretable_scalars: {"resid_lambdas": [1.0235707759857178, 
+0.4892504811286926, 0.7620882987976074, 0.5827471613883972, 0.9173862338066101,
+0.8082900643348694, 0.901364266872406, 0.913520336151123, 1.005926251411438, 
+0.9541953802108765, 1.0074208974838257, 0.9374191164970398, 0.9071781635284424,
+1.045149803161621, 1.049790382385254, 1.0198038816452026, 1.0267771482467651], 
+"x0_lambdas": [3.5204477310180664, 1.4345372915267944, 0.8100174069404602, 
+0.919393002986908, -0.05171353369951248, 0.3173977732658386, 
+1.3958810567855835, -0.026004957035183907, -0.04512432590126991, 
+1.0739951133728027, -0.3013648986816406, 0.7542077302932739, 
+0.2810366749763489, 2.693387031555176, 0.6784337162971497, 0.9335457682609558, 
+-0.07159937173128128], "ve_gate_norm": {"0": 1.5552014112472534, "2": 
+0.7865170240402222, "4": 0.857336699962616, "6": 0.929553747177124, "8": 
+0.7649289965629578, "10": 1.6066014766693115, "12": 1.318495512008667, "14": 
+1.7226667404174805, "16": 1.660593867301941}}
+[GPU1] Parsed metrics: {'val_bpb': 1.249371, 'training_time': 694.8, 'status': 
+'remote_ok', 'total_seconds': 984.0, 'peak_vram_mb': 4934.9, 'mfu_percent': 
+1.97, 'total_tokens_M': 12.5, 'num_steps': 1018, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 209.4, 'depth': 17, 'seed': 3, 'interpretable_scalars': 
+{'resid_lambdas': [1.0235707759857178, 0.4892504811286926, 0.7620882987976074, 
+0.5827471613883972, 0.9173862338066101, 0.8082900643348694, 0.901364266872406, 
+0.913520336151123, 1.005926251411438, 0.9541953802108765, 1.0074208974838257, 
+0.9374191164970398, 0.9071781635284424, 1.045149803161621, 1.049790382385254, 
+1.0198038816452026, 1.0267771482467651], 'x0_lambdas': [3.5204477310180664, 
+1.4345372915267944, 0.8100174069404602, 0.919393002986908, 
+-0.05171353369951248, 0.3173977732658386, 1.3958810567855835, 
+-0.026004957035183907, -0.04512432590126991, 1.0739951133728027, 
+-0.3013648986816406, 0.7542077302932739, 0.2810366749763489, 2.693387031555176,
+0.6784337162971497, 0.9335457682609558, -0.07159937173128128], 've_gate_norm': 
+{'0': 1.5552014112472534, '2': 0.7865170240402222, '4': 0.857336699962616, '6':
+0.929553747177124, '8': 0.7649289965629578, '10': 1.6066014766693115, '12': 
+1.318495512008667, '14': 1.7226667404174805, '16': 1.660593867301941}}, 
+'device': 1}
+[seed_variance] seedvar_c1_s3: val_bpb=1.249371 status=remote_ok
+[ResultsLogger] Logged seedvar_c1_s3: val_bpb=1.249371, status=remote_ok, time=694.8s
+[ResultsLogger]   Hyperparams: n_layer=17, n_embd=816, matrix_lr=1.80e-02
+[GPU3] ---
+[GPU3] val_bpb:          1.251212
+[GPU3] training_seconds: 683.6
+[GPU3] total_seconds:    1047.0
+[GPU3] peak_vram_mb:     7325.1
+[GPU3] mfu_percent:      3.36
+[GPU3] total_tokens_M:   12.5
+[GPU3] num_steps:        555
+[GPU3] budget_shortfall_pct: 0.00
+[GPU3] num_params_M:     334.5
+[GPU3] depth:            21
+[GPU3] seed:             3
+[GPU3] interpretable_scalars: {"resid_lambdas": [0.9996457099914551, 
+0.6744170784950256, 0.6970285773277283, 0.685696005821228, 0.7445633411407471, 
+0.7575704455375671, 0.7798659801483154, 0.796992301940918, 0.7997676730155945, 
+0.8091696500778198, 0.7999721169471741, 0.8899614214897156, 0.8558289408683777,
+0.9242519736289978, 0.8886916637420654, 1.0526434183120728, 0.9912938475608826,
+1.035800814628601, 0.9726260304450989, 1.0194305181503296, 0.9238901734352112],
+"x0_lambdas": [1.1054353713989258, 2.4639289379119873, 1.380603313446045, 
+0.9471432566642761, 1.01618492603302, 0.7881738543510437, 0.6544119119644165, 
+0.4860360026359558, 0.12917065620422363, 0.5995741486549377, 
+-0.24463939666748047, 0.9655689001083374, -0.46783769130706787, 
+0.9966757297515869, -0.21037982404232025, 1.4195289611816406, 
+0.09096778929233551, 0.894288957118988, 0.13239796459674835, 
+0.1610155999660492, 0.3454189598560333], "ve_gate_norm": {"0": 
+3.5436244010925293, "2": 4.947218894958496, "4": 5.1633219718933105, "6": 
+4.639994144439697, "8": 4.566936492919922, "10": 5.06813907623291, "12": 
+5.015110492706299, "14": 6.004194259643555, "16": 6.305960178375244, "18": 
+6.542995452880859, "20": 6.625533580780029}}
+[GPU3] Parsed metrics: {'val_bpb': 1.251212, 'training_time': 683.6, 'status': 
+'remote_ok', 'total_seconds': 1047.0, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.36, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 3, 'interpretable_scalars': 
+{'resid_lambdas': [0.9996457099914551, 0.6744170784950256, 0.6970285773277283, 
+0.685696005821228, 0.7445633411407471, 0.7575704455375671, 0.7798659801483154, 
+0.796992301940918, 0.7997676730155945, 0.8091696500778198, 0.7999721169471741, 
+0.8899614214897156, 0.8558289408683777, 0.9242519736289978, 0.8886916637420654,
+1.0526434183120728, 0.9912938475608826, 1.035800814628601, 0.9726260304450989, 
+1.0194305181503296, 0.9238901734352112], 'x0_lambdas': [1.1054353713989258, 
+2.4639289379119873, 1.380603313446045, 0.9471432566642761, 1.01618492603302, 
+0.7881738543510437, 0.6544119119644165, 0.4860360026359558, 
+0.12917065620422363, 0.5995741486549377, -0.24463939666748047, 
+0.9655689001083374, -0.46783769130706787, 0.9966757297515869, 
+-0.21037982404232025, 1.4195289611816406, 0.09096778929233551, 
+0.894288957118988, 0.13239796459674835, 0.1610155999660492, 
+0.3454189598560333], 've_gate_norm': {'0': 3.5436244010925293, '2': 
+4.947218894958496, '4': 5.1633219718933105, '6': 4.639994144439697, '8': 
+4.566936492919922, '10': 5.06813907623291, '12': 5.015110492706299, '14': 
+6.004194259643555, '16': 6.305960178375244, '18': 6.542995452880859, '20': 
+6.625533580780029}}, 'device': 3}
+[seed_variance] seedvar_c0_s3: val_bpb=1.251212 status=remote_ok
+[ResultsLogger] Logged seedvar_c0_s3: val_bpb=1.251212, status=remote_ok, time=683.6s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU3] [====================] 100.0% | eval step 10240/10240
+[GPU1] [====================] 100.0% | eval step 10240/10240
+[GPU0] [====================] 100.0% | eval step 10240/10240
+[seed_variance] === seed 4 (3 run(s)) ===
+[RemoteRunner] GPU discovery: 7 total, 6 available (util<10%, free>8000MB): [4, 5, 6, 3, 1, 0]
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[GPU0] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_s4.yaml
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_s4.yaml
+[GPU4] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_s4.yaml
+[GPU0] Executing on GPU 0: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=0 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c1_
+s4.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c0_
+s4.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU4] Executing on GPU 4: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=4 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_seedvar_c2_
+s4.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU0] [hyperparams] DEPTH=17 N_HEAD=3 target_n_embd=816 EMBEDDING_LR=0.682852 
+UNEMBEDDING_LR=0.0021680735067864196 MATRIX_LR=0.018039 
+SCALAR_LR=0.1788899024847607 WEIGHT_DECAY=0.37115939101204276 
+WARMUP_RATIO=0.01982714217156172 TOTAL_BATCH_SIZE=12288 
+WINDOW_PATTERN=LSLSSLSSLSSLSSLSS (window_s_fraction=0.6545171458274126) SEED=4
+[GPU1] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=4
+[GPU4] [hyperparams] DEPTH=2 N_HEAD=5 target_n_embd=760 
+EMBEDDING_LR=0.07666257370268362 UNEMBEDDING_LR=0.0009031613639102989 
+MATRIX_LR=0.01040697806819713 SCALAR_LR=0.6507700838275043 
+WEIGHT_DECAY=0.2682855147868395 WARMUP_RATIO=0.1947598060593009 
+TOTAL_BATCH_SIZE=4096 WINDOW_PATTERN=SS (window_s_fraction=0.9707933021709323) 
+SEED=4
+[GPU0] Vocab size: 8,192
+[GPU0] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 17, 
+'n_head': 3, 'n_kv_head': 3, 'n_embd': 816, 'window_pattern': 
+'LSLSSLSSLSSLSSLSS'}
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU4] Vocab size: 8,192
+[GPU4] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 2, 
+'n_head': 5, 'n_kv_head': 5, 'n_embd': 760, 'window_pattern': 'SS'}
+[GPU0] Parameter counts:
+[GPU0]   wte                     : 6,684,672
+[GPU0]   value_embeds            : 60,162,048
+[GPU0]   lm_head                 : 6,684,672
+[GPU0]   transformer_matrices    : 135,835,488
+[GPU0]   scalars                 : 34
+[GPU0]   total                   : 209,366,914
+[GPU0] Estimated FLOPs per token: 1.095769e+09
+[GPU0] Scaling AdamW LRs by 1/sqrt(816/768) = 0.970143
+[GPU0] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU0] [train.py] Initializing dataloader...
+[GPU0] [train.py] Dataloader created, prefetching first batch...
+[GPU4] Parameter counts:
+[GPU4]   wte                     : 6,225,920
+[GPU4]   value_embeds            : 6,225,920
+[GPU4]   lm_head                 : 6,225,920
+[GPU4]   transformer_matrices    : 13,862,560
+[GPU4]   scalars                 : 4
+[GPU4]   total                   : 32,540,324
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 7,864,320
+[GPU1]   value_embeds            : 86,507,520
+[GPU1]   lm_head                 : 7,864,320
+[GPU1]   transformer_matrices    : 232,245,312
+[GPU1]   scalars                 : 42
+[GPU1]   total                   : 334,481,514
+[GPU1] Estimated FLOPs per token: 1.853535e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU4] Estimated FLOPs per token: 1.485475e+08
+[GPU4] Scaling AdamW LRs by 1/sqrt(760/768) = 1.005249
+[GPU0] [train.py] First batch prefetched successfully
+[GPU0] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU0] Gradient accumulation steps: 6
+[GPU0] [train.py] Starting training loop...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU4] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU4] [train.py] Initializing dataloader...
+[GPU4] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 11
+[GPU1] [train.py] Starting training loop...
+[GPU4] [train.py] First batch prefetched successfully
+[GPU4] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU4] Gradient accumulation steps: 2
+[GPU4] [train.py] Starting training loop...
+[GPU4] [train.py] Starting validation eval...
+[GPU4] ---
+[GPU4] val_bpb:          1.435899
+[GPU4] training_seconds: 124.0
+[GPU4] total_seconds:    204.9
+[GPU4] peak_vram_mb:     917.3
+[GPU4] mfu_percent:      1.51
+[GPU4] total_tokens_M:   12.5
+[GPU4] num_steps:        3052
+[GPU4] budget_shortfall_pct: 0.00
+[GPU4] num_params_M:     32.5
+[GPU4] depth:            2
+[GPU4] seed:             4
+[GPU4] interpretable_scalars: {"resid_lambdas": [0.9752674102783203, 
+0.4838314652442932], "x0_lambdas": [-0.1673475056886673, 0.8318138122558594], 
+"ve_gate_norm": {"1": 3.1081364154815674}}
+[GPU4] Parsed metrics: {'val_bpb': 1.435899, 'training_time': 124.0, 'status': 
+'remote_ok', 'total_seconds': 204.9, 'peak_vram_mb': 917.3, 'mfu_percent': 
+1.51, 'total_tokens_M': 12.5, 'num_steps': 3052, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 32.5, 'depth': 2, 'seed': 4, 'interpretable_scalars': 
+{'resid_lambdas': [0.9752674102783203, 0.4838314652442932], 'x0_lambdas': 
+[-0.1673475056886673, 0.8318138122558594], 've_gate_norm': {'1': 
+3.1081364154815674}}, 'device': 4}
+[seed_variance] seedvar_c2_s4: val_bpb=1.435899 status=remote_ok
+[ResultsLogger] Logged seedvar_c2_s4: val_bpb=1.435899, status=remote_ok, time=124.0s
+[ResultsLogger]   Hyperparams: n_layer=2, n_embd=760, matrix_lr=1.04e-02
+[GPU1] [train.py] Starting validation eval...
+[GPU0] [train.py] Starting validation eval...
+[GPU1] ---
+[GPU1] val_bpb:          1.252073
+[GPU1] training_seconds: 684.0
+[GPU1] total_seconds:    1040.9
+[GPU1] peak_vram_mb:     7325.1
+[GPU1] mfu_percent:      3.36
+[GPU1] total_tokens_M:   12.5
+[GPU1] num_steps:        555
+[GPU1] budget_shortfall_pct: 0.00
+[GPU1] num_params_M:     334.5
+[GPU1] depth:            21
+[GPU1] seed:             4
+[GPU1] interpretable_scalars: {"resid_lambdas": [1.0014554262161255, 
+0.6959822773933411, 0.6912736296653748, 0.7201278209686279, 0.7546523213386536,
+0.7497661709785461, 0.7791882753372192, 0.7672430276870728, 0.7939897179603577,
+0.855986475944519, 0.8176543116569519, 0.8767806887626648, 0.851058840751648, 
+0.9992885589599609, 0.9516046047210693, 1.0095572471618652, 0.9682173728942871,
+1.0372670888900757, 0.980431079864502, 1.0547070503234863, 0.9753084778785706],
+"x0_lambdas": [1.245600700378418, 2.7469704151153564, 1.7155510187149048, 
+0.7684493660926819, 0.6567807793617249, 0.8748067021369934, 0.6537503600120544,
+0.36704137921333313, -0.13602474331855774, 0.6574285626411438, 
+-0.14242158830165863, 0.6613931059837341, -0.36975857615470886, 
+1.1752183437347412, 0.0685809850692749, 0.8585828542709351, 
+-0.05860418826341629, 0.776536226272583, 0.15623822808265686, 
+0.3478420078754425, 0.6731805205345154], "ve_gate_norm": {"0": 
+3.8131957054138184, "2": 5.042740345001221, "4": 5.2186737060546875, "6": 
+4.658404350280762, "8": 4.921403408050537, "10": 5.377374649047852, "12": 
+5.7525434494018555, "14": 6.542869567871094, "16": 6.810615539550781, "18": 
+6.343507289886475, "20": 7.224250316619873}}
+[GPU1] Parsed metrics: {'val_bpb': 1.252073, 'training_time': 684.0, 'status': 
+'remote_ok', 'total_seconds': 1040.9, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.36, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 4, 'interpretable_scalars': 
+{'resid_lambdas': [1.0014554262161255, 0.6959822773933411, 0.6912736296653748, 
+0.7201278209686279, 0.7546523213386536, 0.7497661709785461, 0.7791882753372192,
+0.7672430276870728, 0.7939897179603577, 0.855986475944519, 0.8176543116569519, 
+0.8767806887626648, 0.851058840751648, 0.9992885589599609, 0.9516046047210693, 
+1.0095572471618652, 0.9682173728942871, 1.0372670888900757, 0.980431079864502, 
+1.0547070503234863, 0.9753084778785706], 'x0_lambdas': [1.245600700378418, 
+2.7469704151153564, 1.7155510187149048, 0.7684493660926819, 0.6567807793617249,
+0.8748067021369934, 0.6537503600120544, 0.36704137921333313, 
+-0.13602474331855774, 0.6574285626411438, -0.14242158830165863, 
+0.6613931059837341, -0.36975857615470886, 1.1752183437347412, 
+0.0685809850692749, 0.8585828542709351, -0.05860418826341629, 
+0.776536226272583, 0.15623822808265686, 0.3478420078754425, 
+0.6731805205345154], 've_gate_norm': {'0': 3.8131957054138184, '2': 
+5.042740345001221, '4': 5.2186737060546875, '6': 4.658404350280762, '8': 
+4.921403408050537, '10': 5.377374649047852, '12': 5.7525434494018555, '14': 
+6.542869567871094, '16': 6.810615539550781, '18': 6.343507289886475, '20': 
+7.224250316619873}}, 'device': 1}
+[seed_variance] seedvar_c0_s4: val_bpb=1.252073 status=remote_ok
+[ResultsLogger] Logged seedvar_c0_s4: val_bpb=1.252073, status=remote_ok, time=684.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU0] ---
+[GPU0] val_bpb:          1.252896
+[GPU0] training_seconds: 800.1
+[GPU0] total_seconds:    1107.6
+[GPU0] peak_vram_mb:     4934.9
+[GPU0] mfu_percent:      1.71
+[GPU0] total_tokens_M:   12.5
+[GPU0] num_steps:        1018
+[GPU0] budget_shortfall_pct: 0.00
+[GPU0] num_params_M:     209.4
+[GPU0] depth:            17
+[GPU0] seed:             4
+[GPU0] interpretable_scalars: {"resid_lambdas": [1.0213115215301514, 
+0.5124910473823547, 0.7943588495254517, 0.6030446290969849, 0.803256630897522, 
+0.7205042243003845, 0.9140543341636658, 1.081575870513916, 1.1050719022750854, 
+1.028748869895935, 1.0721914768218994, 1.0454331636428833, 1.0433624982833862, 
+1.0078339576721191, 1.070365309715271, 1.0408363342285156, 1.032217025756836], 
+"x0_lambdas": [3.2357704639434814, 1.6463342905044556, 0.16605086624622345, 
+0.6620832085609436, 0.8017487525939941, 0.3639042377471924, 
+0.03678708150982857, 2.2619197368621826, 1.2281465530395508, 
+0.1092044860124588, 0.20645424723625183, 0.9179458022117615, 
+1.1087706089019775, 0.5342802405357361, -0.1141156330704689, 
+0.5440834164619446, 0.7229948043823242], "ve_gate_norm": {"0": 
+1.6942896842956543, "2": 0.7644051909446716, "4": 0.8191106915473938, "6": 
+0.8355435729026794, "8": 1.7665845155715942, "10": 1.8179348707199097, "12": 
+1.536312222480774, "14": 2.2726047039031982, "16": 2.122763156890869}}
+[GPU0] Parsed metrics: {'val_bpb': 1.252896, 'training_time': 800.1, 'status': 
+'remote_ok', 'total_seconds': 1107.6, 'peak_vram_mb': 4934.9, 'mfu_percent': 
+1.71, 'total_tokens_M': 12.5, 'num_steps': 1018, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 209.4, 'depth': 17, 'seed': 4, 'interpretable_scalars': 
+{'resid_lambdas': [1.0213115215301514, 0.5124910473823547, 0.7943588495254517, 
+0.6030446290969849, 0.803256630897522, 0.7205042243003845, 0.9140543341636658, 
+1.081575870513916, 1.1050719022750854, 1.028748869895935, 1.0721914768218994, 
+1.0454331636428833, 1.0433624982833862, 1.0078339576721191, 1.070365309715271, 
+1.0408363342285156, 1.032217025756836], 'x0_lambdas': [3.2357704639434814, 
+1.6463342905044556, 0.16605086624622345, 0.6620832085609436, 
+0.8017487525939941, 0.3639042377471924, 0.03678708150982857, 
+2.2619197368621826, 1.2281465530395508, 0.1092044860124588, 
+0.20645424723625183, 0.9179458022117615, 1.1087706089019775, 
+0.5342802405357361, -0.1141156330704689, 0.5440834164619446, 
+0.7229948043823242], 've_gate_norm': {'0': 1.6942896842956543, '2': 
+0.7644051909446716, '4': 0.8191106915473938, '6': 0.8355435729026794, '8': 
+1.7665845155715942, '10': 1.8179348707199097, '12': 1.536312222480774, '14': 
+2.2726047039031982, '16': 2.122763156890869}}, 'device': 0}
+[seed_variance] seedvar_c1_s4: val_bpb=1.252896 status=remote_ok
+[ResultsLogger] Logged seedvar_c1_s4: val_bpb=1.252896, status=remote_ok, time=800.1s
+[ResultsLogger]   Hyperparams: n_layer=17, n_embd=816, matrix_lr=1.80e-02
+[GPU1] [====================] 100.0% | eval step 10240/10240
+[GPU0] [====================] 100.0% | eval step 10240/10240
+[GPU4] [====================] 100.0% | eval step 10240/10240
+[seed_variance] All runs finished in 88.4 min
+
+========================================================================
+[seed_variance] RESULT
+========================================================================
+
+Per-configuration val_bpb across seeds:
+  config 0: mean=1.251022 std=0.001544 n=5  (n_layer=21, n_embd=960, n_head=6)
+      by seed: 1=1.252597, 2=1.250604, 3=1.251212, 4=1.252073, 42=1.248626
+  config 1: mean=1.252235 std=0.001973 n=5  (n_layer=17, n_embd=816, n_head=3)
+      by seed: 1=1.252333, 2=1.251756, 3=1.249371, 4=1.252896, 42=1.254821
+  config 2: mean=1.449180 std=0.008868 n=5  (n_layer=2, n_embd=760, n_head=5)
+      by seed: 1=1.454099, 2=1.459733, 3=1.447737, 4=1.435899, 42=1.448430
+
+Two spreads (only the second one constrains a search):
+  sigma_seed            = 0.005321   how much ONE config moves with the seed
+  sigma_paired_diff     = 0.007219   how much a COMPARISON moves with the seed
+  independent reference = 0.007524   (sqrt(2)*sigma_seed; what sigma_paired_diff equals if seeds hit each config independently)
+  -> 4% of the seed effect is SHARED across configs (cancels in a comparison)
+
+Against the currently-configured yardsticks:
+  state/noise_floor.json sigma = 0.000797  -> sigma_seed is 6.7x larger
+  agents_config sigma_region   = 0.002800  -> sigma_seed is 1.9x that
+  Every sigma-scaled threshold in agents_config.yaml was calibrated on the
+  noise_floor sigma, which held the seed FIXED and so measured no seed effect at all.
+
+Smallest val_bpb gap resolvable (~2 standard errors) at k seeds per config:
+  k=1: 0.014439
+  k=2: 0.010210
+  k=3: 0.008336
+  k=5: 0.006457
+
+Pairwise comparisons:
+  config 0 vs 1: mean_gap=-0.001213 std_of_gap=0.003020 separation=0.9 wins 3-2 [*** FLIPPED ***]
+  config 0 vs 2: mean_gap=-0.198157 std_of_gap=0.009251 separation=47.9 wins 5-0 [consistent]
+  config 1 vs 2: mean_gap=-0.196944 std_of_gap=0.009387 separation=46.9 wins 5-0 [consistent]
+
+VERDICT: RANKINGS FLIP -- at least one pair changed winner depending on the seed. Single-seed val_bpb cannot separate configs at that gap size; multi-seed evaluation is required for frontier decisions (plan tier 2).
+========================================================================
+
+[seed_variance] Written to state\seed_variance.json
