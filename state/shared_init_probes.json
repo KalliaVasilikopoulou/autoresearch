@@ -1,0 +1,2368 @@
+{
+  "baseline": {
+    "n_embd": 384,
+    "n_head": 6,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "51a7c0c395474920",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "632054343e64bfbc",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "e6314d91f47be037",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "7e085aa283020be5",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "466985d2cd42bc2b",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "4d40484c93d3452e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "2b773c978465eada",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "367b6b46e6a0a573",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "b4b16142a40bdc98",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "accd273159bc0063",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "8577ade1e9fbc3be",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "374539470f955972",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "3ed7e61d1d3e9f5f",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "8ee09324fa12e568",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "54f99d05efce647e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "fc9b2356b805a44f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "eec13217b709b5cf",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "0b1fc846e550d2d9",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "207891a9a869d81f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "95b25942280f02aa",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "51deba6dbd1fdc39",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "620bfe5ef14f0940",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "7fb35c6da972134c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e1d3781fabf5969",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "a16fd71096cf5a5d",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "a1ffd5c0970f8617",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "c4578d8e5a9677fa",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "05ebc13dcf6c0f46",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "de687f4cfa6accf6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "different_n_embd": {
+    "n_embd": 768,
+    "n_head": 6,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "96169cebc9724d17",
+        "shape": [
+          8192,
+          768
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "bf3589af20f97ea3",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "4b17121706baa559",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "14e4f92a40c958da",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "34263eb31efeff13",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "eb13eadeee96074a",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "b43911e5d4a42dbe",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "0e2133158d4854d2",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "c9f7604574924d34",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "323502cf2492beee",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "ee79457e249dc4ac",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "124e22c700da59b4",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "b686fa429e6c41ac",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "a6591aeb86af8bf0",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "1a9d43b534385d9d",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "cd0f65bcf9ac6e28",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "facd215f93cc5eda",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "ad54d5d2fa3fc173",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "66e795f72fd9caf2",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "0b02247e8e22f445",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "98ec69c862ea577a",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "1db042fff2c97d43",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "2c819c751844e919",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e28dca0624c64e6",
+        "shape": [
+          768,
+          768
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "174b3d785565c672",
+        "shape": [
+          3072,
+          768
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "d2ee4703cd969894",
+        "shape": [
+          768,
+          3072
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "d438eaa6f8121482",
+        "shape": [
+          8192,
+          768
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "b52bd7736059eac9",
+        "shape": [
+          8192,
+          768
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "ceecc21298c2ac8c",
+        "shape": [
+          8192,
+          768
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "b83fc3fcb1fde48b",
+        "shape": [
+          8192,
+          768
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "different_n_head": {
+    "n_embd": 384,
+    "n_head": 4,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "51a7c0c395474920",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "632054343e64bfbc",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "e6314d91f47be037",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "7e085aa283020be5",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "466985d2cd42bc2b",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "4d40484c93d3452e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "2b773c978465eada",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "367b6b46e6a0a573",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "076a27c79e5ace2a",
+        "shape": [
+          4,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "b4b16142a40bdc98",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "accd273159bc0063",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "8577ade1e9fbc3be",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "374539470f955972",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "3ed7e61d1d3e9f5f",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "8ee09324fa12e568",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "54f99d05efce647e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "fc9b2356b805a44f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "076a27c79e5ace2a",
+        "shape": [
+          4,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "eec13217b709b5cf",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "0b1fc846e550d2d9",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "207891a9a869d81f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "95b25942280f02aa",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "51deba6dbd1fdc39",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "620bfe5ef14f0940",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "7fb35c6da972134c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e1d3781fabf5969",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "076a27c79e5ace2a",
+        "shape": [
+          4,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "a16fd71096cf5a5d",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "a1ffd5c0970f8617",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "c4578d8e5a9677fa",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "05ebc13dcf6c0f46",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "de687f4cfa6accf6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "different_n_layer": {
+    "n_embd": 384,
+    "n_head": 6,
+    "n_layer": 7,
+    "n_tensors": 54,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "51a7c0c395474920",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "6f3a1a9d59ae648b",
+        "shape": [
+          7
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "632054343e64bfbc",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "e6314d91f47be037",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "7e085aa283020be5",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "466985d2cd42bc2b",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "4d40484c93d3452e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "2b773c978465eada",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "367b6b46e6a0a573",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "b4b16142a40bdc98",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "accd273159bc0063",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "8577ade1e9fbc3be",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "374539470f955972",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "3ed7e61d1d3e9f5f",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "8ee09324fa12e568",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "54f99d05efce647e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "fc9b2356b805a44f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "eec13217b709b5cf",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "0b1fc846e550d2d9",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "207891a9a869d81f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "95b25942280f02aa",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "51deba6dbd1fdc39",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "620bfe5ef14f0940",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "7fb35c6da972134c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e1d3781fabf5969",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "a16fd71096cf5a5d",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.6.attn.c_k.weight": {
+        "sha": "2d32009863443f9a",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.6.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.6.attn.c_q.weight": {
+        "sha": "60bf11a0c4896203",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.6.attn.c_v.weight": {
+        "sha": "a0568cb6121fffcf",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.6.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.6.mlp.c_fc.weight": {
+        "sha": "ab2b0a4a39881137",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.6.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "a1ffd5c0970f8617",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.0.weight": {
+        "sha": "05ebc13dcf6c0f46",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.2.weight": {
+        "sha": "de687f4cfa6accf6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.4.weight": {
+        "sha": "d6f846f050565763",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.6.weight": {
+        "sha": "33d9ef302692e360",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "4512f316b08093c2",
+        "shape": [
+          7
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "different_seed": {
+    "n_embd": 384,
+    "n_head": 6,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 7,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "fb797e6e4783afe8",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "3d936c51342033b4",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "78cfdaf9267d4653",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "40d77ce0c1aab8c6",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "f2599cbdcc4a4e61",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "6ce93e6a8bbda6c7",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "bef5e21f7558117b",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "cf97301f4335fde7",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "0e5f6508ab68d906",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "0c50497d22d8f850",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "f9ccee40660db14c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "e850126c8fd8d68f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "60cf8df666297408",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "f70cd72b679ed5c3",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "6dda602e85222a50",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "db256611438c189c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "0d0b684e1489f47e",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "34e22710bdcd85fe",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "08fb1184ca11cca2",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "40c7996859926f78",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "5fe8bb28c92f1cf9",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "4c549c6899290b44",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "a4c0380b69ead115",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "893f83044c4c648d",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "5b73cd5ade56655e",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "67da46f005742cc6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "50984876b35a0562",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "9d16f9804d3f4a58",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "ab8b967471f6ea8b",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "same_region_far_corner": {
+    "n_embd": 384,
+    "n_head": 6,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "51a7c0c395474920",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "632054343e64bfbc",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "e6314d91f47be037",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "7e085aa283020be5",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "466985d2cd42bc2b",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "4d40484c93d3452e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "2b773c978465eada",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "367b6b46e6a0a573",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "b4b16142a40bdc98",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "accd273159bc0063",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "8577ade1e9fbc3be",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "374539470f955972",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "3ed7e61d1d3e9f5f",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "8ee09324fa12e568",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "54f99d05efce647e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "fc9b2356b805a44f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "eec13217b709b5cf",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "0b1fc846e550d2d9",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "207891a9a869d81f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "95b25942280f02aa",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "51deba6dbd1fdc39",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "620bfe5ef14f0940",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "7fb35c6da972134c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e1d3781fabf5969",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "a16fd71096cf5a5d",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "a1ffd5c0970f8617",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "c4578d8e5a9677fa",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "05ebc13dcf6c0f46",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "de687f4cfa6accf6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  },
+  "same_region_other_corner": {
+    "n_embd": 384,
+    "n_head": 6,
+    "n_layer": 6,
+    "n_tensors": 46,
+    "seed": 42,
+    "tensors": {
+      "lm_head.weight": {
+        "sha": "51a7c0c395474920",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "resid_lambdas": {
+        "sha": "f46913286d895f62",
+        "shape": [
+          6
+        ]
+      },
+      "transformer.h.0.attn.c_k.weight": {
+        "sha": "632054343e64bfbc",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_q.weight": {
+        "sha": "e6314d91f47be037",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.attn.c_v.weight": {
+        "sha": "7e085aa283020be5",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_fc.weight": {
+        "sha": "466985d2cd42bc2b",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.0.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.1.attn.c_k.weight": {
+        "sha": "4d40484c93d3452e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_q.weight": {
+        "sha": "2b773c978465eada",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.c_v.weight": {
+        "sha": "367b6b46e6a0a573",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.1.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.1.mlp.c_fc.weight": {
+        "sha": "b4b16142a40bdc98",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.1.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.2.attn.c_k.weight": {
+        "sha": "accd273159bc0063",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_q.weight": {
+        "sha": "8577ade1e9fbc3be",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.attn.c_v.weight": {
+        "sha": "374539470f955972",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_fc.weight": {
+        "sha": "3ed7e61d1d3e9f5f",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.2.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.3.attn.c_k.weight": {
+        "sha": "8ee09324fa12e568",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_q.weight": {
+        "sha": "54f99d05efce647e",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.c_v.weight": {
+        "sha": "fc9b2356b805a44f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.3.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.3.mlp.c_fc.weight": {
+        "sha": "eec13217b709b5cf",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.3.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.4.attn.c_k.weight": {
+        "sha": "0b1fc846e550d2d9",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_q.weight": {
+        "sha": "207891a9a869d81f",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.attn.c_v.weight": {
+        "sha": "95b25942280f02aa",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_fc.weight": {
+        "sha": "51deba6dbd1fdc39",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.4.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.h.5.attn.c_k.weight": {
+        "sha": "620bfe5ef14f0940",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_proj.weight": {
+        "sha": "250480ecefa3655c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_q.weight": {
+        "sha": "7fb35c6da972134c",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.c_v.weight": {
+        "sha": "2e1d3781fabf5969",
+        "shape": [
+          384,
+          384
+        ]
+      },
+      "transformer.h.5.attn.ve_gate.weight": {
+        "sha": "ef115a0e0c15cdc4",
+        "shape": [
+          6,
+          32
+        ]
+      },
+      "transformer.h.5.mlp.c_fc.weight": {
+        "sha": "a16fd71096cf5a5d",
+        "shape": [
+          1536,
+          384
+        ]
+      },
+      "transformer.h.5.mlp.c_proj.weight": {
+        "sha": "96a12deebdc8a342",
+        "shape": [
+          384,
+          1536
+        ]
+      },
+      "transformer.wte.weight": {
+        "sha": "a1ffd5c0970f8617",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.1.weight": {
+        "sha": "c4578d8e5a9677fa",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.3.weight": {
+        "sha": "05ebc13dcf6c0f46",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "value_embeds.5.weight": {
+        "sha": "de687f4cfa6accf6",
+        "shape": [
+          8192,
+          384
+        ]
+      },
+      "x0_lambdas": {
+        "sha": "8c5f8c81c8769fca",
+        "shape": [
+          6
+        ]
+      }
+    },
+    "vocab_size": 8192
+  }
+}
