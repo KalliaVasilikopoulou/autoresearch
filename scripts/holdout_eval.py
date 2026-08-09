@@ -8,27 +8,91 @@ never sees) from the *same* trained model. If the config that ranks best on
 val_bpb isn't also best on holdout_val_bpb, the search has been measuring
 its own selection bias, not real improvement.
 
-Cost: K full training runs. Run this once at the end of a search campaign,
-not per-iteration -- the search loop itself never uses holdout_val_bpb to
-decide anything (see prepare.py's _document_batches: HOLDOUT_SHARD is
-excluded from training and never touched by evaluate_bpb).
+EACH CANDIDATE IS RUN ON SEVERAL SEEDS (--seeds, default 3). A single run per
+candidate would rank them by one draw from a distribution whose spread is
+~0.0020 at the frontier, while the gaps being ranked are ~0.0012
+(scripts/seed_variance.py) -- i.e. the ranking would be mostly initialization
+luck. That is the very failure this script exists to detect, so doing it here
+would just move the bias rather than measure it. Candidates are ranked by MEAN
+holdout_val_bpb across seeds, and the per-candidate spread is reported so a
+tie can be recognised as a tie.
+
+Cost: K * seeds full training runs. Run this once at the end of a search
+campaign, not per-iteration -- the search loop itself never uses
+holdout_val_bpb to decide anything (see prepare.py's _document_batches:
+HOLDOUT_SHARD is excluded from training and never touched by evaluate_bpb).
 
 Usage:
-    uv run python scripts/holdout_eval.py --top-k 5
+    uv run python scripts/holdout_eval.py --top-k 5 --seeds 3
+    uv run python scripts/holdout_eval.py --drift-only     # no GPU, reads history
 """
 
 import argparse
+import statistics
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
-from state.results_analysis import HYPERPARAM_COLUMNS, load_results, spearman
+from state.results_analysis import (
+    HYPERPARAM_COLUMNS,
+    holdout_drift,
+    load_results,
+    spearman,
+)
 from state.results_logger import log_result
 
 RUN_ID_PREFIX = "holdout_check"
 REPORT_PATH = Path("reports/holdout_eval_report.md")
+
+# Seed 42 first: the campaign's historical seed, so its row is directly
+# comparable to what history already recorded for the same config.
+SEED_POOL = (42, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+
+def render_drift(drift) -> str:
+    """The continuous half of step 8: has the validation shard drifted away
+    from the holdout shard as the campaign made more decisions against it?"""
+    if drift is None:
+        return ("## Validation-vs-holdout drift\n\n"
+                "Not enough history: fewer than two runs carry both `val_bpb` and "
+                "`holdout_val_bpb`. The orchestrator scores the holdout shard only when a "
+                "run sets a new best (`holdout_on_new_best`), so this fills in slowly -- "
+                "and note that makes it a sample of WINNERS, which is why the top-K "
+                "re-check above exists as well.\n")
+
+    lines = [
+        "## Validation-vs-holdout drift",
+        "",
+        f"{drift['n']} run(s) carry both numbers. The gap is "
+        f"`holdout_val_bpb - val_bpb`; a constant gap is harmless (the shards are "
+        f"different text, so one is simply harder), a GROWING gap is the search "
+        f"fitting the validation shard's quirks.",
+        "",
+        "| run_id | val_bpb | holdout_val_bpb | gap |",
+        "|---|---:|---:|---:|",
+    ]
+    for r in drift["runs"]:
+        lines.append(f"| {r['run_id']} | {r['val_bpb']:.6f} | "
+                     f"{r['holdout_val_bpb']:.6f} | {r['gap']:+.6f} |")
+    lines += [
+        "",
+        f"- mean gap: **{drift['mean_gap']:+.6f}** (spread {drift['std_gap']:.6f})",
+    ]
+    if drift["growth"] is not None:
+        lines.append(f"- earlier half {drift['early_mean_gap']:+.6f} -> "
+                     f"later half {drift['late_mean_gap']:+.6f} "
+                     f"(change {drift['growth']:+.6f})")
+    lines.append("")
+    lines.append(
+        "**DRIFT DETECTED**: the gap grew by more than its own spread, which is what "
+        "progressive overfitting of the validation shard looks like."
+        if drift["growing"] else
+        "No drift detected: the gap is a roughly constant offset, which is expected and "
+        "harmless -- it reflects the two shards being different text, not selection bias."
+    )
+    return "\n".join(lines) + "\n"
 
 
 def check_holdout_shard_available():
@@ -93,11 +157,28 @@ def _dedupe_top_k(rows, top_k):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--seeds", type=int, default=3,
+                        help="Runs per candidate, each with a different initial-weight "
+                             "seed. Default 3. One would rank candidates by a single "
+                             "draw whose spread (~0.0020) exceeds the gaps being ranked "
+                             "(~0.0012), i.e. by luck -- see scripts/seed_variance.py.")
     parser.add_argument("--config", default="agents_config.yaml")
     parser.add_argument("--results-path", default="results.tsv")
+    parser.add_argument("--drift-only", action="store_true",
+                        help="Skip all training; just report validation-vs-holdout drift "
+                             "from runs already in --results-path. Costs no GPU time.")
     args = parser.parse_args()
 
     rows = load_results(args.results_path)
+
+    if args.drift_only:
+        report = "# Holdout Evaluation Report (drift only)\n\n" + render_drift(holdout_drift(rows))
+        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REPORT_PATH.write_text(report, encoding="utf-8")
+        print(report)
+        print(f"[holdout_eval] Report written to {REPORT_PATH}")
+        return
+
     candidates = _dedupe_top_k(rows, args.top_k)
     if len(candidates) < 2:
         print(f"[holdout_eval] Only {len(candidates)} distinct real config(s) in "
@@ -118,27 +199,50 @@ def main():
     if present:
         print("[holdout_eval] Pre-flight OK: holdout shard is present on the training machine.")
 
-    print(f"[holdout_eval] Re-checking top-{len(candidates)} configs on the holdout shard...")
+    seeds = list(SEED_POOL[: max(1, args.seeds)])
+    print(f"[holdout_eval] Re-checking top-{len(candidates)} configs on the holdout shard, "
+          f"{len(seeds)} seed(s) each ({len(candidates) * len(seeds)} runs)...")
     agent1 = Agent1TrainingSpecialist(config_path=args.config)
 
     results = []
     for i, cand in enumerate(candidates):
-        hp = {col: cand[col] for col in HYPERPARAM_COLUMNS if col in cand}
-        hp["holdout_eval"] = True
+        base = {col: cand[col] for col in HYPERPARAM_COLUMNS if col in cand}
+        base["holdout_eval"] = True
         original_run_id = cand.get("run_id", f"unknown_{i}")
-        run_id = f"{RUN_ID_PREFIX}_{i:04d}"
-        print(f"\n[holdout_eval] --- {run_id} (was {original_run_id}, "
-              f"historical val_bpb={cand['val_bpb']:.6f}) ---")
+        val_scores, holdout_scores = [], []
 
-        agent1.current_hyperparams = dict(hp)
-        metrics = agent1.train_model(hp, dry_run=False, iteration=i)
-        log_result(run_id, hp, metrics, results_path=args.results_path)
+        for seed in seeds:
+            hp = dict(base)
+            hp["seed"] = seed
+            run_id = f"{RUN_ID_PREFIX}_{i:04d}_s{seed}"
+            print(f"\n[holdout_eval] --- {run_id} (was {original_run_id}, "
+                  f"historical val_bpb={cand['val_bpb']:.6f}) ---")
+
+            agent1.current_hyperparams = dict(hp)
+            metrics = agent1.train_model(hp, dry_run=False, iteration=i)
+            log_result(run_id, hp, metrics, results_path=args.results_path)
+
+            val = metrics.get("val_bpb")
+            hold = metrics.get("holdout_val_bpb")
+            if isinstance(val, (int, float)):
+                val_scores.append(float(val))
+            if isinstance(hold, (int, float)):
+                holdout_scores.append(float(hold))
+
+        if not holdout_scores:
+            print(f"[holdout_eval] {original_run_id}: no seed produced a holdout score -- omitted")
+            continue
 
         results.append({
-            "run_id": run_id,
+            "run_id": f"{RUN_ID_PREFIX}_{i:04d}",
             "original_run_id": original_run_id,
-            "val_bpb": metrics.get("val_bpb", float("inf")),
-            "holdout_val_bpb": metrics.get("holdout_val_bpb"),
+            "n_seeds": len(holdout_scores),
+            # Ranked on the MEAN across seeds, never the best of them: best-of-N
+            # over noisy draws is exactly the statistic that manufactured the
+            # inflated frontier this script is checking.
+            "val_bpb": statistics.mean(val_scores) if val_scores else float("inf"),
+            "holdout_val_bpb": statistics.mean(holdout_scores),
+            "holdout_std": statistics.stdev(holdout_scores) if len(holdout_scores) > 1 else None,
         })
 
     scored = [r for r in results if r.get("holdout_val_bpb") is not None]
@@ -158,29 +262,51 @@ def main():
     )
     bias_detected = by_val[0]["run_id"] != by_holdout[0]["run_id"]
 
+    best = by_holdout[0]
     lines = [
         "# Holdout Evaluation Report",
         "",
-        f"Re-trained top-{len(scored)} configs with `holdout_eval: true`; each row's "
-        "`val_bpb`/`holdout_val_bpb` come from the same trained model.",
+        f"Re-trained top-{len(scored)} configs with `holdout_eval: true`, "
+        f"{len(seeds)} seed(s) each. Every row is the MEAN across seeds -- never the "
+        "best of them, since best-of-N over noisy draws is the statistic that inflates "
+        "a frontier in the first place. `val_bpb` and `holdout_val_bpb` always come "
+        "from the same trained model.",
         "",
-        "| run_id | (was) | val_bpb | holdout_val_bpb | delta | val_rank | holdout_rank |",
-        "|---|---|---:|---:|---:|---:|---:|",
+        "## Campaign result, ranked by holdout",
+        "",
+        "This ordering -- not the val_bpb one -- is the campaign's answer. The "
+        "validation shard chose these candidates, so it cannot also be the impartial "
+        "judge of them.",
+        "",
+        "| rank | run_id | (was) | holdout_val_bpb | +- | val_bpb | gap | val_rank |",
+        "|---:|---|---|---:|---:|---:|---:|---:|",
     ]
-    for r in scored:
-        delta = r["holdout_val_bpb"] - r["val_bpb"]
+    for rank, r in enumerate(by_holdout, start=1):
+        spread = f"{r['holdout_std']:.6f}" if r.get("holdout_std") is not None else "n/a"
         lines.append(
-            f"| {r['run_id']} | {r['original_run_id']} | {r['val_bpb']:.6f} | "
-            f"{r['holdout_val_bpb']:.6f} | {delta:+.6f} | {val_rank[r['run_id']]} | "
-            f"{holdout_rank[r['run_id']]} |"
+            f"| {rank} | {r['run_id']} | {r['original_run_id']} | "
+            f"{r['holdout_val_bpb']:.6f} | {spread} | {r['val_bpb']:.6f} | "
+            f"{r['holdout_val_bpb'] - r['val_bpb']:+.6f} | {val_rank[r['run_id']]} |"
         )
+
+    lines += ["", f"**Winner on holdout: `{best['original_run_id']}`** "
+                  f"(holdout {best['holdout_val_bpb']:.6f}).", ""]
+    if best.get("holdout_std") is not None:
+        rivals = [r for r in by_holdout[1:]
+                  if abs(r["holdout_val_bpb"] - best["holdout_val_bpb"]) <= 2 * best["holdout_std"]]
+        if rivals:
+            names = ", ".join(f"`{r['original_run_id']}`" for r in rivals)
+            lines += [f"Not separable from {names} -- within 2 standard deviations of the "
+                      f"winner's own seed spread. Treat these as tied rather than ranked.", ""]
+
     lines += [
-        "",
         f"Spearman(val_rank, holdout_rank) = {rho:.4f}",
         "",
         "**SELECTION BIAS DETECTED**: best-on-val config is not best-on-holdout."
         if bias_detected else
         "No selection bias detected: best-on-val config is also best-on-holdout.",
+        "",
+        render_drift(holdout_drift(load_results(args.results_path))),
     ]
     report = "\n".join(lines) + "\n"
 

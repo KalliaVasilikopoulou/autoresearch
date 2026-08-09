@@ -84,6 +84,47 @@ def test_denoised_incumbent_is_scoped_to_a_region_when_one_is_active():
     assert local_best > global_best, "the laggard region must judge itself locally"
 
 
+def test_agent1_actually_passes_its_region_through_to_the_planner():
+    """The wiring, not just the mechanism. The test above proves that filtering
+    rows to a region yields a local incumbent; this proves Agent 1 tells the
+    planner WHICH region, which is a separate thing and was unverified."""
+    from agents import search_planner
+    from agents.agent1_training_specialist import Agent1TrainingSpecialist
+
+    seen = {}
+
+    def fake_propose_next(**kwargs):
+        seen.update(kwargs)
+        return None  # falls through to the evidence path; we only inspect the call
+
+    specialist = Agent1TrainingSpecialist(config_path="does-not-exist.yaml")
+
+    class _Region:
+        region_id = "r0007"
+        center = {"n_layer": 8, "n_embd": 512, "n_head": 4}
+        best_val_bpb = 1.30
+        val_bpbs = [1.30]
+
+        def planner_state_path(self, root):
+            return "state/search_planner/r0007.json"
+
+        def report_dir(self, root):
+            return "reports/agent1_search_plan/r0007"
+
+    original = search_planner.propose_next
+    search_planner.propose_next = fake_propose_next
+    try:
+        with specialist.search_region(_Region()):
+            specialist._surrogate_adjustment(iteration=3)
+        assert seen["f_best_region_id"] == "r0007"
+
+        seen.clear()
+        specialist._surrogate_adjustment(iteration=4)  # no region scope active
+        assert seen["f_best_region_id"] is None, "the single-search path stays global"
+    finally:
+        search_planner.propose_next = original
+
+
 # --- step 7: sigma must include seed variance -------------------------------
 
 

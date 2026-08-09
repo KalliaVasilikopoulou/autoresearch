@@ -63,6 +63,12 @@ JSON_KEYS = frozenset({
     "head_ablation_impacts",
     "hyperparam_clamps",
     "token_fingerprint",
+    # Opt-in (`init_probe: true`): per-tensor hashes of the freshly-initialized
+    # weights, printed instead of training. Used by
+    # scripts/verify_shared_init.py to confirm that configurations sharing
+    # (n_layer, n_embd, n_head) and a seed start from identical weights, which
+    # is what makes a within-region comparison paired.
+    "init_probe",
 })
 
 

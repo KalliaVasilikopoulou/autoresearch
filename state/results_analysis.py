@@ -94,6 +94,71 @@ def _coerce_row(fieldnames: Sequence[str], raw_values: Sequence[str], schema: st
     return row
 
 
+def holdout_drift(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """How far the pinned validation shard has drifted from the untouched
+    holdout shard, over the life of the campaign.
+
+    Every accept/reject decision the search makes is against ONE validation
+    shard. Make enough of those decisions and a configuration can look good on
+    that shard specifically -- not because it is better, but because it was
+    lucky there. The holdout shard exists to detect that, and the statistic is
+    the per-run gap `holdout_val_bpb - val_bpb`.
+
+    A CONSTANT gap is harmless: the two shards are different text, so one is
+    simply a bit harder, and a fixed offset affects every run equally. What
+    matters is whether the gap GROWS -- that is the signature of the search
+    progressively fitting the validation shard's quirks.
+
+    Returns None when fewer than two runs carry both numbers, rather than
+    reporting a trend from a single point. `growing` is deliberately reported
+    as a raw half-split difference with its own noise band, not as a p-value:
+    with the handful of holdout-scored runs a campaign accumulates, anything
+    fancier would imply precision that isn't there.
+    """
+    paired = []
+    for row in rows:
+        val, hold = row.get("val_bpb"), row.get("holdout_val_bpb")
+        if not isinstance(val, (int, float)) or not isinstance(hold, (int, float)):
+            continue
+        if not (math.isfinite(val) and math.isfinite(hold)):
+            continue
+        paired.append({
+            "run_id": row.get("run_id"),
+            "timestamp": row.get("timestamp"),
+            "val_bpb": float(val),
+            "holdout_val_bpb": float(hold),
+            "gap": float(hold) - float(val),
+        })
+    if len(paired) < 2:
+        return None
+
+    paired.sort(key=lambda r: (r.get("timestamp") or "", r.get("run_id") or ""))
+    gaps = [r["gap"] for r in paired]
+    mean_gap = sum(gaps) / len(gaps)
+    variance = sum((g - mean_gap) ** 2 for g in gaps) / (len(gaps) - 1)
+    std_gap = variance ** 0.5
+
+    half = len(gaps) // 2
+    early, late = gaps[:half], gaps[half:]
+    early_mean = sum(early) / len(early) if early else None
+    late_mean = sum(late) / len(late) if late else None
+    growth = (late_mean - early_mean) if (early_mean is not None and late_mean is not None) else None
+
+    return {
+        "n": len(paired),
+        "runs": paired,
+        "mean_gap": mean_gap,
+        "std_gap": std_gap,
+        "early_mean_gap": early_mean,
+        "late_mean_gap": late_mean,
+        "growth": growth,
+        # Only call it drift when the change between halves exceeds the spread
+        # of the gaps themselves -- otherwise it is just the same offset
+        # measured twice.
+        "growing": bool(growth is not None and std_gap > 0 and growth > std_gap),
+    }
+
+
 def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Dict[str, Any]]:
     """Load one or more results.tsv-shaped files, tolerant of the current
     schema and every frozen superseded one (PRE_SEED_COLUMNS, LEGACY_COLUMNS).

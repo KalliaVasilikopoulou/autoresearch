@@ -653,6 +653,52 @@ with torch.device("meta"):
 model.to_empty(device=device)
 model.init_weights()
 
+# ---------------------------------------------------------------------------
+# Opt-in initialization probe (`init_probe: true` in the hyperparams file).
+# Prints a per-tensor hash of the freshly-initialized weights and exits BEFORE
+# the dataloader, training and eval -- seconds, not minutes, and it consumes no
+# training budget.
+#
+# It exists to verify the load-bearing claim of the multi-region design: the
+# RNG draw order above depends only on vocab_size, n_embd and n_layer, so two
+# configurations sharing those (and the seed) should start from BIT-IDENTICAL
+# weights no matter how their learning rates, batch size, weight decay, warmup
+# or window pattern differ. That is what makes a within-region comparison
+# paired, which in turn is what keeps the region's noise floor low enough for
+# anything inside it to be measurable.
+#
+# Per-tensor rather than one whole-model hash on purpose: n_head reshapes
+# ve_gate (initialized to zeros, consuming no randomness), so a whole-model
+# hash would differ for a reason that says nothing about the RNG stream.
+# Tensor-by-tensor shows exactly which weights match and which merely changed
+# shape.
+#
+# Cast to float32 before hashing -- bfloat16 -> float32 is exact and lossless,
+# so identical bytes here mean identical weights, while .numpy() on bfloat16
+# is not supported at all.
+# ---------------------------------------------------------------------------
+if _hp.get("init_probe"):
+    import hashlib
+
+    _tensor_hashes = {}
+    for _name, _param in sorted(model.named_parameters(), key=lambda kv: kv[0]):
+        _raw = _param.detach().float().cpu().contiguous().numpy().tobytes()
+        _tensor_hashes[_name] = {
+            "sha": hashlib.sha256(_raw).hexdigest()[:16],
+            "shape": list(_param.shape),
+        }
+    print("init_probe: " + json.dumps({
+        "seed": SEED,
+        "n_layer": DEPTH,
+        "n_embd": MODEL_DIM,
+        "n_head": N_HEAD,
+        "vocab_size": vocab_size,
+        "n_tensors": len(_tensor_hashes),
+        "tensors": _tensor_hashes,
+    }))
+    sys.stdout.flush()
+    sys.exit(0)
+
 param_counts = model.num_scaling_params()
 print("Parameter counts:")
 for key, value in param_counts.items():
