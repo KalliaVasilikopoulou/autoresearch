@@ -319,6 +319,11 @@ class RegionRegistry:
         self._bounds = bounds
         self.regions: List[Region] = []
         self._next_id = 1
+        #: "rNNNN|rMMMM" -> consecutive calls to merge_overlapping in which
+        #: that pair's centers were within the merge radius. Persisted, because
+        #: a campaign restarting mid-streak should not silently start the count
+        #: over and delay a merge that was already all but decided.
+        self._overlap_streaks: Dict[str, int] = {}
         self.load()
 
     @property
@@ -342,12 +347,17 @@ class RegionRegistry:
             return
         self.regions = [Region.from_dict(d) for d in raw.get("regions", [])]
         self._next_id = int(raw.get("next_id", len(self.regions) + 1))
+        streaks = raw.get("overlap_streaks", {})
+        self._overlap_streaks = {
+            str(k): int(v) for k, v in streaks.items() if isinstance(v, (int, float))
+        } if isinstance(streaks, dict) else {}
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "next_id": self._next_id,
             "regions": [r.to_dict() for r in self.regions],
+            "overlap_streaks": dict(self._overlap_streaks),
         }
         self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -427,43 +437,90 @@ class RegionRegistry:
             region.center = dict(center)
         return region
 
-    def merge_overlapping(self, radius: float, at_run: int) -> List[Tuple[str, str]]:
-        """Fold together regions whose anchors have ended up within `radius`
-        of each other, and return the (absorbed, survivor) pairs.
+    @staticmethod
+    def _pair_key(a: "Region", b: "Region") -> str:
+        return "|".join(sorted((a.region_id, b.region_id)))
 
-        Two regions can be opened far apart and still converge -- each one's
-        local search walks downhill, and there is nothing stopping two of
-        them walking into the same basin. Left alone that silently halves the
-        parallelism: two GPUs, two planner states, one basin. The survivor is
-        the better-scoring region, so the merged history is attributed to the
-        anchor that actually earned it; the absorbed region keeps its own
+    @staticmethod
+    def _merge_point(region: "Region") -> Dict[str, Any]:
+        """Where a region's search currently IS. Falls back to the anchor for a
+        region whose center carries none of the search coordinates (a
+        hand-constructed one in a test, or a registry written before centers
+        were stored)."""
+        center = region.center or {}
+        if any(c in center for c in HYPERPARAM_COLUMNS):
+            return center
+        return region.anchor
+
+    def merge_overlapping(self, radius: float, at_run: int,
+                          persist_checks: int = 2) -> List[Tuple[str, str]]:
+        """Fold together regions whose SEARCHES have converged on the same
+        place, and return the (absorbed, survivor) pairs.
+
+        Compares CENTERS, not anchors. This is the whole fix. The anchor is
+        written once at `open_region` and never again, so the previous
+        anchor-to-anchor comparison could only fire if two regions were
+        CREATED within `radius` of each other -- while Agent 4's
+        `_too_close_to_known` explicitly refuses to open one within
+        `region_radius`, and `merge_radius` is half of that. It was therefore
+        unable to detect the exact situation its own docstring described. Its
+        tests passed because they built two close anchors by hand, which the
+        real system can never produce.
+
+        Centers move; that is what makes them the right thing to compare. Each
+        region's local search walks its center downhill and nothing stops two
+        of them walking into the same basin. Left undetected that silently
+        halves the parallelism: two GPUs, two planner states, one basin.
+
+        `persist_checks` is why a single coincidence does not merge anything.
+        A merge is IRREVERSIBLE -- it folds one region's history into another
+        -- and a center can currently jump a long way in one proposal, since
+        the EI search varies its active parameters across their full range
+        rather than stepping locally. Requiring the overlap to hold on
+        consecutive calls encodes the claim actually being made ("these two
+        searches are living in the same place") instead of a much weaker one
+        ("they crossed paths once"). The streak resets the moment a pair stops
+        overlapping.
+
+        The survivor is the better-scoring region, so merged history is
+        attributed to the anchor that earned it; the absorbed region keeps its
         record and a `merged_into` pointer rather than being deleted, because
-        "these two turned out to be the same place" is a finding about the
-        landscape worth keeping.
+        "these two turned out to be the same place" is a finding worth keeping.
 
         Only schedulable and paused regions merge. A region already ruled out
         must stay ruled out: absorbing it into a live one would resurrect a
-        negative result as if it were evidence in the live region's favour.
+        negative result as evidence in the live region's favour.
         """
+        pool = [r for r in self.regions
+                if r.merged_into is None and (r.schedulable or r.flag == PAUSED)]
+
+        # One pass to see which pairs overlap RIGHT NOW, so a streak is
+        # incremented once per call however many merges follow.
+        overlapping: Dict[str, Tuple["Region", "Region"]] = {}
+        for i, a in enumerate(pool):
+            for b in pool[i + 1:]:
+                if distance(self._merge_point(a), self._merge_point(b), self.bounds) <= radius:
+                    overlapping[self._pair_key(a, b)] = (a, b)
+
+        for key in [k for k in self._overlap_streaks if k not in overlapping]:
+            del self._overlap_streaks[key]
+        for key in overlapping:
+            self._overlap_streaks[key] = self._overlap_streaks.get(key, 0) + 1
+
         merges: List[Tuple[str, str]] = []
-        changed = True
-        while changed:
-            changed = False
-            pool = [r for r in self.regions
-                    if r.merged_into is None and (r.schedulable or r.flag == PAUSED)]
-            for i, a in enumerate(pool):
-                for b in pool[i + 1:]:
-                    if distance(a.anchor, b.anchor, self.bounds) > radius:
-                        continue
-                    survivor, absorbed = self._rank_for_merge(a, b)
-                    _absorb_history(survivor, absorbed)
-                    absorbed.merged_into = survivor.region_id
-                    absorbed.set_flag(MERGED, at_run)
-                    merges.append((absorbed.region_id, survivor.region_id))
-                    changed = True
-                    break
-                if changed:
-                    break
+        for key, (a, b) in sorted(overlapping.items()):
+            if self._overlap_streaks.get(key, 0) < persist_checks:
+                continue
+            if a.merged_into is not None or b.merged_into is not None:
+                continue  # already absorbed earlier in this same pass
+            survivor, absorbed = self._rank_for_merge(a, b)
+            _absorb_history(survivor, absorbed)
+            absorbed.merged_into = survivor.region_id
+            absorbed.set_flag(MERGED, at_run)
+            merges.append((absorbed.region_id, survivor.region_id))
+            for stale in [k for k in self._overlap_streaks
+                          if absorbed.region_id in k.split("|")]:
+                del self._overlap_streaks[stale]
         return merges
 
     @staticmethod

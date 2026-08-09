@@ -289,16 +289,34 @@ def test_a_retirement_is_logged_per_region(agent4, registry):
 
 def test_maintain_merges_before_judging(agent4, registry):
     """Judging first would compare a region against what is effectively
-    itself, and could retire one arm of a duplicate pair on noise."""
+    itself, and could retire one arm of a duplicate pair on noise.
+
+    The two regions are given scores a hair apart -- which is what a genuine
+    duplicate looks like. The previous version of this test used 1.20 vs 1.60,
+    a 143-sigma_region gap, so the loser was retired as legitimately worse and
+    the ordering it claimed to check was never actually exercised.
+
+    Two maintain() calls because a merge now needs the overlap to persist (see
+    RegionRegistry.merge_overlapping): merging is irreversible, and one
+    accidental crossing of two centers should not destroy a region.
+    """
     a = registry.open_region(_hyperparams(0), at_run=0)
     near = dict(_hyperparams(0))
     near["n_embd"] = near["n_embd"] + 4
     b = registry.open_region(near, at_run=0)
     # Interleaved in real time, as two concurrently-searched regions are.
-    _fill(registry, a, [1.40, 1.36, 1.32, 1.28, 1.24, 1.20], start=0, step=2)
-    _fill(registry, b, [1.60] * 6, start=1, step=2)
+    # Both improving steadily (so neither reads as stalled) and only ~0.001
+    # apart (so neither can be retired as worse than the field, which needs
+    # 3 * sigma_region = 0.0084).
+    _fill(registry, a, [1.2100, 1.2060, 1.2020, 1.1980, 1.1940, 1.1900], start=0, step=2)
+    _fill(registry, b, [1.2110, 1.2070, 1.2030, 1.1990, 1.1950, 1.1910], start=1, step=2)
 
-    out = agent4.maintain(registry, at_run=10)
+    first = agent4.maintain(registry, at_run=10)
+    assert first["merges"] == [], "one overlap is not yet convergence"
+    assert all(r.merged_into is None and r.flag not in (NO_OPTIMUM, LOCAL_OPTIMUM)
+               for r in registry.regions), "and neither arm may be thrown away meanwhile"
+
+    out = agent4.maintain(registry, at_run=11)
     assert out["merges"] == [(b.region_id, a.region_id)]
     assert b.region_id not in out["verdicts"]
     assert len(registry.active()) == 1

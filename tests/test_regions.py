@@ -229,7 +229,7 @@ def test_a_merge_restores_chronological_order(tmp_path):
     reg.assign_run(b.region_id, "run_0001", 1.60)
     reg.assign_run(a.region_id, "run_0002", 1.20)
 
-    reg.merge_overlapping(radius=0.05, at_run=9)
+    reg.merge_overlapping(radius=0.05, at_run=9, persist_checks=1)
     survivor = reg.get(a.region_id)
     assert survivor.val_bpbs == [1.40, 1.60, 1.20], "true order, not a + b"
     assert survivor.runs_since_improvement(0.0) == 0, "the newest run IS the best"
@@ -242,7 +242,7 @@ def test_converged_regions_merge_and_history_survives(tmp_path):
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
 
-    merges = reg.merge_overlapping(radius=0.05, at_run=12)
+    merges = reg.merge_overlapping(radius=0.05, at_run=12, persist_checks=1)
     assert merges == [(b.region_id, a.region_id)], "the better-scoring anchor survives"
     assert reg.get(a.region_id).n_runs == 2, "the absorbed region's budget is not lost"
     assert reg.get(b.region_id).flag == MERGED
@@ -250,11 +250,94 @@ def test_converged_regions_merge_and_history_survives(tmp_path):
     assert [r.region_id for r in reg.active()] == [a.region_id]
 
 
+def test_merge_compares_centers_not_anchors(tmp_path):
+    """THE BUG THIS FIXES. Anchors are written once at open_region and never
+    again, so an anchor-to-anchor comparison could only fire for regions
+    CREATED close together -- which Agent 4's _too_close_to_known explicitly
+    refuses to do, at twice the merge radius. The convergence the merge exists
+    to catch was therefore undetectable.
+
+    Here the two anchors are far apart and stay far apart; only the searches
+    have walked together.
+    """
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
+    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    reg.assign_run(a.region_id, "a0", 1.20)
+    reg.assign_run(b.region_id, "b0", 1.40)
+
+    assert distance(a.anchor, b.anchor, reg.bounds) > 0.05, "anchors are far apart"
+    assert reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1) == []
+
+    # Both searches walk to the same place. The anchors do not move.
+    converged = hp(n_layer=12, n_embd=640)
+    a.center = dict(converged)
+    b.center = dict(converged)
+
+    merges = reg.merge_overlapping(radius=0.05, at_run=2, persist_checks=1)
+    assert merges == [(b.region_id, a.region_id)], "converged searches must merge"
+    assert distance(a.anchor, b.anchor, reg.bounds) > 0.05, "anchors still never moved"
+
+
+def test_a_single_crossing_does_not_merge(tmp_path):
+    """A merge is irreversible and a center can jump a long way in one
+    proposal, so the overlap has to persist before it counts as convergence."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
+    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    reg.assign_run(a.region_id, "a0", 1.20)
+    reg.assign_run(b.region_id, "b0", 1.40)
+
+    same = hp(n_layer=12, n_embd=640)
+    a.center, b.center = dict(same), dict(same)
+    assert reg.merge_overlapping(radius=0.05, at_run=1) == [], "one crossing is not enough"
+
+    # They separate again -- the streak must reset, not accumulate.
+    b.center = hp(n_layer=20, n_embd=1000)
+    assert reg.merge_overlapping(radius=0.05, at_run=2) == []
+    a.center, b.center = dict(same), dict(same)
+    assert reg.merge_overlapping(radius=0.05, at_run=3) == [], "streak restarted from zero"
+    assert reg.merge_overlapping(radius=0.05, at_run=4) != [], "two in a row does merge"
+
+
+def test_overlap_streaks_survive_a_restart(tmp_path):
+    """A campaign restarting mid-streak should not silently start counting
+    over and delay a merge that was already all but decided."""
+    path = str(tmp_path / "regions.json")
+    reg = RegionRegistry(path)
+    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
+    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    reg.assign_run(a.region_id, "a0", 1.20)
+    reg.assign_run(b.region_id, "b0", 1.40)
+    same = hp(n_layer=12, n_embd=640)
+    a.center, b.center = dict(same), dict(same)
+    assert reg.merge_overlapping(radius=0.05, at_run=1) == []
+    reg.save()
+
+    reloaded = RegionRegistry(path)
+    assert reloaded.merge_overlapping(radius=0.05, at_run=2) != [], \
+        "the streak carried across the restart"
+
+
+def test_merge_falls_back_to_the_anchor_when_a_center_is_empty(tmp_path):
+    """A registry written before centers were stored, or a hand-built region
+    in a test, must still be comparable rather than reading as coordinate
+    0.5 on every axis."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    a = reg.open_region(hp(n_layer=8, n_embd=512), at_run=0)
+    b = reg.open_region(hp(n_layer=8, n_embd=520), at_run=0)
+    reg.assign_run(a.region_id, "a0", 1.20)
+    reg.assign_run(b.region_id, "b0", 1.40)
+    a.center, b.center = {}, {}
+
+    assert reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1) != []
+
+
 def test_distant_regions_are_left_alone(tmp_path):
     reg = RegionRegistry(str(tmp_path / "regions.json"))
     reg.open_region(hp(n_layer=1, n_embd=128), at_run=0)
     reg.open_region(hp(n_layer=24, n_embd=1024), at_run=0)
-    assert reg.merge_overlapping(radius=0.05, at_run=1) == []
+    assert reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1) == []
     assert len(reg.active()) == 2
 
 
@@ -269,7 +352,7 @@ def test_a_ruled_out_region_is_never_resurrected_by_a_merge(tmp_path):
     live = reg.open_region(hp(n_layer=8, n_embd=515), at_run=6)
     reg.assign_run(live.region_id, "y", 1.22)
 
-    assert reg.merge_overlapping(radius=0.05, at_run=7) == []
+    assert reg.merge_overlapping(radius=0.05, at_run=7, persist_checks=1) == []
     assert reg.get(live.region_id).n_runs == 1
     assert reg.get(live.region_id).best_val_bpb == pytest.approx(1.22)
 
@@ -284,7 +367,7 @@ def test_merging_is_transitive_in_one_pass(tmp_path):
     reg.open_region(hp(n_embd=520), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
 
-    reg.merge_overlapping(radius=0.05, at_run=3)
+    reg.merge_overlapping(radius=0.05, at_run=3, persist_checks=1)
     assert len(reg.active()) == 1
 
 
@@ -324,7 +407,7 @@ def test_merged_regions_are_excluded_from_reporting(tmp_path):
     a = reg.open_region(hp(), at_run=0)
     reg.open_region(hp(n_embd=515), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.2)
-    reg.merge_overlapping(radius=0.05, at_run=1)
+    reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1)
     assert len(reg.flags_snapshot()) == 1
     assert len(reg.summary_rows()) == 1
 
