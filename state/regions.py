@@ -53,7 +53,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from state.results_analysis import HYPERPARAM_COLUMNS
+from state.results_analysis import (
+    ARCHITECTURE_COLUMNS,
+    HYPERPARAM_COLUMNS,
+    TUNABLE_COLUMNS,
+)
 from state.surrogate import normalized_value
 
 REGISTRY_PATH_DEFAULT = "state/regions.json"
@@ -105,8 +109,20 @@ def _bounds() -> Dict[str, Tuple[float, float]]:
 
 
 def to_vector(hyperparams: Dict[str, Any],
-              bounds: Optional[Dict[str, Tuple[float, float]]] = None) -> List[float]:
-    """The 11-D normalized coordinate of a configuration.
+              bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+              columns: Sequence[str] = TUNABLE_COLUMNS) -> List[float]:
+    """The normalized coordinate of a configuration, over `columns`.
+
+    Defaults to TUNABLE_COLUMNS -- the 8 settings Agent 1 varies -- NOT all 11.
+    A region is now identified by its exact architecture (see
+    `Region.architecture`), so architecture is an equality key, not a distance:
+    two configurations either are in the same region or they are not, and
+    asking how far apart their depths are answers no question anyone asks.
+    Leaving n_layer/n_embd/n_head in the distance also drowned the tunables --
+    three of eleven axes, and the ones that move furthest.
+
+    Pass `columns=HYPERPARAM_COLUMNS` for the old whole-space geometry (the
+    landscape visualization still wants it).
 
     Reuses state/surrogate.py::normalized_value rather than normalizing here,
     so the log-scale treatment of the LR groups and batch_size is applied by
@@ -116,7 +132,7 @@ def to_vector(hyperparams: Dict[str, Any],
     """
     b = bounds if bounds is not None else _bounds()
     out = []
-    for col in HYPERPARAM_COLUMNS:
+    for col in columns:
         v = hyperparams.get(col)
         if isinstance(v, (int, float)) and math.isfinite(float(v)):
             out.append(normalized_value(col, float(v), b))
@@ -125,18 +141,45 @@ def to_vector(hyperparams: Dict[str, Any],
     return out
 
 
+def architecture_of(hyperparams: Dict[str, Any]) -> Tuple[Optional[int], ...]:
+    """The (n_layer, n_embd, n_head) triple that names a region.
+
+    Rounded to integers because that is what train.py actually builds, and
+    because the shared-weights property needs EXACT equality -- "about 20
+    layers" is not a region, since 20 and 21 layers draw different weights.
+    A missing value stays None rather than defaulting, so an incomplete
+    configuration can never accidentally match a real region.
+    """
+    out: List[Optional[int]] = []
+    for col in ARCHITECTURE_COLUMNS:
+        v = hyperparams.get(col)
+        out.append(int(round(float(v))) if isinstance(v, (int, float))
+                   and math.isfinite(float(v)) else None)
+    return tuple(out)
+
+
+def same_architecture(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Do these two configurations belong to the same region's architecture?
+    False when either is incomplete -- an unknown architecture matches nothing.
+    """
+    va, vb = architecture_of(a), architecture_of(b)
+    return None not in va and va == vb
+
+
 def distance(a: Dict[str, Any], b: Dict[str, Any],
-             bounds: Optional[Dict[str, Tuple[float, float]]] = None) -> float:
-    """Normalized Euclidean distance between two configurations, divided by
-    sqrt(11) so the result is on a 0-1 scale regardless of how many
-    dimensions the search space happens to have.
+             bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+             columns: Sequence[str] = TUNABLE_COLUMNS) -> float:
+    """Normalized Euclidean distance over `columns`, divided by sqrt(len) so
+    the result is on a 0-1 scale regardless of how many dimensions there are.
 
     That rescaling is what lets a radius keep its meaning if a parameter is
-    ever added to or dropped from HYPERPARAM_COLUMNS -- an un-normalized
-    Euclidean distance in 11-D and one in 12-D are not the same number, so a
-    radius tuned against one would silently change meaning against the other.
+    ever added or dropped -- an un-normalized Euclidean distance in 8-D and one
+    in 11-D are not the same number, so a radius tuned against one would
+    silently change meaning against the other. Note this is exactly why the
+    existing radius values must be RE-DERIVED for the 8-D space rather than
+    carried over: the same 0.05 means something different here.
     """
-    va, vb = to_vector(a, bounds), to_vector(b, bounds)
+    va, vb = to_vector(a, bounds, columns), to_vector(b, bounds, columns)
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(va, vb))) / math.sqrt(len(va))
 
 
@@ -208,6 +251,19 @@ class Region:
         if isinstance(val_bpb, (int, float)) and math.isfinite(float(val_bpb)):
             self.val_bpbs.append(float(val_bpb))
             self.measured_run_ids.append(run_id)
+
+    @property
+    def architecture(self) -> Tuple[Optional[int], ...]:
+        """(n_layer, n_embd, n_head) -- this region's identity.
+
+        Read from the ANCHOR, never the center: the anchor is fixed at
+        creation, and the architecture is the one thing about a region that
+        must never drift. Agent 1 cannot change these (they are not in
+        TUNABLE_COLUMNS), so in practice the center agrees -- but reading the
+        anchor makes that structural rather than a convention anyone could
+        accidentally break.
+        """
+        return architecture_of(self.anchor)
 
     @property
     def n_runs(self) -> int:
@@ -391,7 +447,11 @@ class RegionRegistry:
         that can say so.
         """
         pool = [r for r in self.regions
-                if r.merged_into is None and (include_terminal or r.schedulable or r.flag == PAUSED)]
+                if r.merged_into is None and (include_terminal or r.schedulable or r.flag == PAUSED)
+                # A different architecture is a different region, full stop --
+                # not a far-away one. Two configurations with different depths
+                # cannot share weights, so no radius makes them the same place.
+                and same_architecture(hyperparams, r.anchor)]
         if not pool:
             return None, float("inf")
         scored = [(distance(hyperparams, r.anchor, self.bounds), r) for r in pool]
@@ -499,6 +559,11 @@ class RegionRegistry:
         overlapping: Dict[str, Tuple["Region", "Region"]] = {}
         for i, a in enumerate(pool):
             for b in pool[i + 1:]:
+                # Different architectures are never the same place, however
+                # close their tunables happen to sit: they cannot share weights,
+                # so merging their histories would pool two different models.
+                if not same_architecture(a.anchor, b.anchor):
+                    continue
                 if distance(self._merge_point(a), self._merge_point(b), self.bounds) <= radius:
                     overlapping[self._pair_key(a, b)] = (a, b)
 

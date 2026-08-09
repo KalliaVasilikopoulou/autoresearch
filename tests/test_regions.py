@@ -27,10 +27,12 @@ from state.regions import (
     PAUSED,
     Region,
     RegionRegistry,
+    architecture_of,
     distance,
+    same_architecture,
     to_vector,
 )
-from state.results_analysis import HYPERPARAM_COLUMNS
+from state.results_analysis import HYPERPARAM_COLUMNS, TUNABLE_COLUMNS
 
 
 BASE = {
@@ -50,10 +52,32 @@ def hp(**overrides):
 # -- geometry --------------------------------------------------------------
 
 
-def test_vector_covers_every_searched_dimension():
+def test_vector_covers_the_tunable_dimensions_only():
+    """Geometry is measured over what Agent 1 can actually MOVE. Architecture
+    is an equality key, not a distance -- two configurations either share it
+    (same region) or they do not, and no radius makes 20 layers and 21 layers
+    the same place, because they cannot share initial weights."""
     v = to_vector(BASE)
-    assert len(v) == len(HYPERPARAM_COLUMNS)
+    assert len(v) == len(TUNABLE_COLUMNS) == 8
     assert all(0.0 <= x <= 1.0 for x in v)
+    # The old whole-space geometry is still available for the landscape chart.
+    assert len(to_vector(BASE, columns=HYPERPARAM_COLUMNS)) == len(HYPERPARAM_COLUMNS)
+
+
+def test_architecture_is_the_region_identity():
+    assert architecture_of(BASE) == (8, 512, 4)
+    assert same_architecture(BASE, hp(matrix_lr=0.19, batch_size=32768))
+    assert not same_architecture(BASE, hp(n_layer=9))
+    assert not same_architecture(BASE, hp(n_head=8))
+
+
+def test_an_incomplete_architecture_matches_nothing():
+    """Otherwise a half-specified proposal would land in whichever region
+    happened to share its defaults."""
+    partial = {k: v for k, v in BASE.items() if k != "n_embd"}
+    assert architecture_of(partial) == (8, None, 4)
+    assert not same_architecture(partial, BASE)
+    assert not same_architecture(partial, partial)
 
 
 def test_missing_parameter_maps_to_midpoint_not_zero():
@@ -61,19 +85,27 @@ def test_missing_parameter_maps_to_midpoint_not_zero():
     place the configuration at the extreme edge of that axis and make it look
     maximally far from everything."""
     partial = {k: v for k, v in BASE.items() if k != "matrix_lr"}
-    i = HYPERPARAM_COLUMNS.index("matrix_lr")
+    i = TUNABLE_COLUMNS.index("matrix_lr")
     assert to_vector(partial)[i] == 0.5
 
 
 def test_distance_is_zero_to_self_and_scale_free():
     assert distance(BASE, BASE) == pytest.approx(0.0)
-    # Opposite corners of the whole space are 1.0 apart *because* of the
-    # sqrt(n_dims) division -- without it this would be sqrt(11).
+    # Opposite corners of the tunable space are 1.0 apart *because* of the
+    # sqrt(n_dims) division -- without it this would be sqrt(8).
     from agents.agent1_training_specialist import SEARCH_SPACE
 
-    lo = {k: SEARCH_SPACE[k][0] for k in HYPERPARAM_COLUMNS}
-    hi = {k: SEARCH_SPACE[k][1] for k in HYPERPARAM_COLUMNS}
+    lo = {k: SEARCH_SPACE[k][0] for k in TUNABLE_COLUMNS}
+    hi = {k: SEARCH_SPACE[k][1] for k in TUNABLE_COLUMNS}
     assert distance(lo, hi) == pytest.approx(1.0)
+
+
+def test_architecture_does_not_enter_the_distance():
+    """Two configurations differing ONLY in architecture are at distance 0 in
+    the tunable space -- they are simply not in the same region, which
+    same_architecture says and the radius must not be asked to."""
+    assert distance(BASE, hp(n_layer=24, n_embd=1024, n_head=16)) == pytest.approx(0.0)
+    assert not same_architecture(BASE, hp(n_layer=24, n_embd=1024, n_head=16))
 
 
 def test_learning_rates_are_compared_on_a_log_scale():
@@ -222,8 +254,8 @@ def test_a_merge_restores_chronological_order(tmp_path):
     two searches ran concurrently. runs_since_improvement is order-dependent,
     so a merged region would read as stuck purely as an artifact of that."""
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_embd=512), at_run=0)
-    b = reg.open_region(hp(n_embd=516), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.040), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.041), at_run=0)
     # Interleaved in real time: a improves late, b was worse early.
     reg.assign_run(a.region_id, "run_0000", 1.40)
     reg.assign_run(b.region_id, "run_0001", 1.60)
@@ -237,8 +269,8 @@ def test_a_merge_restores_chronological_order(tmp_path):
 
 def test_converged_regions_merge_and_history_survives(tmp_path):
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_layer=8), at_run=0)
-    b = reg.open_region(hp(n_layer=8, n_embd=520), at_run=1)
+    a = reg.open_region(hp(matrix_lr=0.040), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.041), at_run=1)
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
 
@@ -261,8 +293,8 @@ def test_merge_compares_centers_not_anchors(tmp_path):
     have walked together.
     """
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
-    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.006, batch_size=2048), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.19, batch_size=32768), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
 
@@ -270,7 +302,7 @@ def test_merge_compares_centers_not_anchors(tmp_path):
     assert reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1) == []
 
     # Both searches walk to the same place. The anchors do not move.
-    converged = hp(n_layer=12, n_embd=640)
+    converged = hp(matrix_lr=0.04, batch_size=8192)
     a.center = dict(converged)
     b.center = dict(converged)
 
@@ -283,17 +315,17 @@ def test_a_single_crossing_does_not_merge(tmp_path):
     """A merge is irreversible and a center can jump a long way in one
     proposal, so the overlap has to persist before it counts as convergence."""
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
-    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.006, batch_size=2048), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.19, batch_size=32768), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
 
-    same = hp(n_layer=12, n_embd=640)
+    same = hp(matrix_lr=0.04, batch_size=8192)
     a.center, b.center = dict(same), dict(same)
     assert reg.merge_overlapping(radius=0.05, at_run=1) == [], "one crossing is not enough"
 
     # They separate again -- the streak must reset, not accumulate.
-    b.center = hp(n_layer=20, n_embd=1000)
+    b.center = hp(matrix_lr=0.19, batch_size=32768)
     assert reg.merge_overlapping(radius=0.05, at_run=2) == []
     a.center, b.center = dict(same), dict(same)
     assert reg.merge_overlapping(radius=0.05, at_run=3) == [], "streak restarted from zero"
@@ -305,11 +337,11 @@ def test_overlap_streaks_survive_a_restart(tmp_path):
     over and delay a merge that was already all but decided."""
     path = str(tmp_path / "regions.json")
     reg = RegionRegistry(path)
-    a = reg.open_region(hp(n_layer=4, n_embd=256), at_run=0)
-    b = reg.open_region(hp(n_layer=20, n_embd=1000), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.006, batch_size=2048), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.19, batch_size=32768), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
-    same = hp(n_layer=12, n_embd=640)
+    same = hp(matrix_lr=0.04, batch_size=8192)
     a.center, b.center = dict(same), dict(same)
     assert reg.merge_overlapping(radius=0.05, at_run=1) == []
     reg.save()
@@ -324,8 +356,8 @@ def test_merge_falls_back_to_the_anchor_when_a_center_is_empty(tmp_path):
     in a test, must still be comparable rather than reading as coordinate
     0.5 on every axis."""
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_layer=8, n_embd=512), at_run=0)
-    b = reg.open_region(hp(n_layer=8, n_embd=520), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.040), at_run=0)
+    b = reg.open_region(hp(matrix_lr=0.041), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
     reg.assign_run(b.region_id, "b0", 1.40)
     a.center, b.center = {}, {}
@@ -345,11 +377,11 @@ def test_a_ruled_out_region_is_never_resurrected_by_a_merge(tmp_path):
     """Absorbing a no_optimum region into a live one would turn a negative
     result into evidence in the live region's favour."""
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    dead = reg.open_region(hp(n_layer=8), at_run=0)
+    dead = reg.open_region(hp(matrix_lr=0.040), at_run=0)
     dead.set_flag(NO_OPTIMUM, at_run=5)
     for v in (1.70, 1.72, 1.75):
         reg.assign_run(dead.region_id, "x", v)
-    live = reg.open_region(hp(n_layer=8, n_embd=515), at_run=6)
+    live = reg.open_region(hp(matrix_lr=0.041), at_run=6)
     reg.assign_run(live.region_id, "y", 1.22)
 
     assert reg.merge_overlapping(radius=0.05, at_run=7, persist_checks=1) == []
@@ -362,9 +394,9 @@ def test_merging_is_transitive_in_one_pass(tmp_path):
     -- a single pass that stops after the first merge would leave a duplicate
     holding a GPU."""
     reg = RegionRegistry(str(tmp_path / "regions.json"))
-    a = reg.open_region(hp(n_embd=512), at_run=0)
-    reg.open_region(hp(n_embd=516), at_run=0)
-    reg.open_region(hp(n_embd=520), at_run=0)
+    a = reg.open_region(hp(matrix_lr=0.040), at_run=0)
+    reg.open_region(hp(matrix_lr=0.041), at_run=0)
+    reg.open_region(hp(matrix_lr=0.042), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.20)
 
     reg.merge_overlapping(radius=0.05, at_run=3, persist_checks=1)
@@ -405,7 +437,7 @@ def test_flags_snapshot_matches_the_shape_the_chart_already_reads(tmp_path):
 def test_merged_regions_are_excluded_from_reporting(tmp_path):
     reg = RegionRegistry(str(tmp_path / "regions.json"))
     a = reg.open_region(hp(), at_run=0)
-    reg.open_region(hp(n_embd=515), at_run=0)
+    reg.open_region(hp(matrix_lr=0.041), at_run=0)
     reg.assign_run(a.region_id, "a0", 1.2)
     reg.merge_overlapping(radius=0.05, at_run=1, persist_checks=1)
     assert len(reg.flags_snapshot()) == 1

@@ -69,6 +69,26 @@ HYPERPARAM_COLUMNS = (
     "weight_decay", "warmup_ratio", "batch_size",
 )
 
+# The two halves of HYPERPARAM_COLUMNS, split by WHO OWNS THEM and, underneath
+# that, by whether they touch the initial weights.
+#
+# Verified 2026-08-09 (scripts/verify_shared_init.py): the RNG draw order in
+# GPT.init_weights consumes randomness proportional to vocab_size, n_embd and
+# n_layer alone. n_head only reshapes `ve_gate`, which is zero-initialized. So
+# two configurations agreeing on these three start from BIT-IDENTICAL weights
+# (46/46 tensors, across two opposite extreme corners of everything below).
+#
+# That is what makes a region's comparisons paired: fix the architecture and
+# the initialization cancels, so a difference between two configurations inside
+# one region is the configuration, not the luck of the draw.
+ARCHITECTURE_COLUMNS = ("n_layer", "n_embd", "n_head")
+
+# Everything Agent 1 may vary within a region. None of these touches a single
+# weight at initialization -- confirmed by probing the real train.py with the
+# learning rates spanning their full ranges, batch_size from 2048 to 32768,
+# weight_decay 0 to 0.48, warmup 0 to 0.19 and window_s_fraction 0.05 to 0.95.
+TUNABLE_COLUMNS = tuple(c for c in HYPERPARAM_COLUMNS if c not in ARCHITECTURE_COLUMNS)
+
 _NUMERIC_FIELDS = set(HYPERPARAM_COLUMNS) | {
     "val_bpb", "training_time", "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps",
     "holdout_val_bpb",

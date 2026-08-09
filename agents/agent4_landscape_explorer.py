@@ -71,6 +71,7 @@ from state.regions import (
     Region,
     RegionRegistry,
     distance,
+    same_architecture,
 )
 from state.results_analysis import HYPERPARAM_COLUMNS
 from state.surrogate import fit_surrogate
@@ -307,7 +308,15 @@ class Agent4LandscapeExplorer:
         region, dist = registry.nearest(candidate, include_terminal=True)
         if region is not None and dist <= self.region_radius:
             return True
-        return any(distance(candidate, r.anchor, registry.bounds) <= self.region_radius
+        # `nearest` already restricts itself to regions sharing this
+        # candidate's architecture; this second check covers the regions opened
+        # earlier in THIS wave, which are not in the registry's pool yet, and
+        # must apply the same rule. A different architecture is a different
+        # region however close its tunables sit, so proximity alone must not
+        # veto it -- that would refuse to open, say, a 12-layer region merely
+        # because a 20-layer one already uses similar learning rates.
+        return any(same_architecture(candidate, r.anchor)
+                   and distance(candidate, r.anchor, registry.bounds) <= self.region_radius
                    for r in opened)
 
     # -- job 2: judge regions -----------------------------------------------

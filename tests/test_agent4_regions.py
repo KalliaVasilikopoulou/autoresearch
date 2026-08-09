@@ -301,8 +301,12 @@ def test_maintain_merges_before_judging(agent4, registry):
     accidental crossing of two centers should not destroy a region.
     """
     a = registry.open_region(_hyperparams(0), at_run=0)
+    # Same ARCHITECTURE, a hair apart in a tunable. Two different
+    # architectures can never merge now, however close their tunables sit --
+    # they cannot share initial weights, so pooling their histories would pool
+    # two different models.
     near = dict(_hyperparams(0))
-    near["n_embd"] = near["n_embd"] + 4
+    near["matrix_lr"] = float(near["matrix_lr"]) * 1.02
     b = registry.open_region(near, at_run=0)
     # Interleaved in real time, as two concurrently-searched regions are.
     # Both improving steadily (so neither reads as stalled) and only ~0.001
