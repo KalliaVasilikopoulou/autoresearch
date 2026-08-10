@@ -148,6 +148,17 @@ class Agent1TrainingSpecialist:
         # (triggering the existing evidence/heuristic fallback unchanged)
         # whenever scipy/scikit-learn aren't installed or there isn't yet
         # enough data to fit -- this flag just lets it be disabled outright.
+        # How far a proposal may sit from its region's anchor, in normalized
+        # 8-D tunable distance (state/regions.py::distance).
+        #
+        # PROVISIONAL -- 0.05 is carried over from the old 11-D geometry and is
+        # NOT the right number here. The distance divides by sqrt(n_dims), so
+        # the same 0.05 covers a different amount of space in 8-D than it did
+        # in 11-D. Step 4 of the redesign re-derives it from measured
+        # within-region spread; until then this is a placeholder chosen to be
+        # roughly the previous behaviour rather than a calibrated value.
+        self.fence_radius = float(self.agent1_config.get("region_fence_radius", 0.05))
+
         self.use_surrogate = bool(self.agent1_config.get("use_surrogate", True))
         self.surrogate_cold_start_n = int(self.agent1_config.get("surrogate_min_observations", 15))
         self.surrogate_cycle_runs = int(self.agent1_config.get("surrogate_cycle_runs", 10))
@@ -653,6 +664,14 @@ class Agent1TrainingSpecialist:
             # Keeps EI's denoised incumbent local to this region, matching what
             # search_region already does for best_val_bpb.
             f_best_region_id=self._active_region.region_id if self._active_region else None,
+            # The fence is anchored at the region's ANCHOR, not its drifting
+            # center. Fencing around the center would let the region walk
+            # anywhere one small step at a time -- the anchor is what makes it
+            # a fixed place, and it is also what makes escape pressure mean
+            # "this region is anchored in the wrong spot" rather than "the last
+            # proposal was unusual".
+            fence_center=self._active_region.anchor if self._active_region else None,
+            fence_radius=self.fence_radius if self._active_region else None,
         )
         if result is None:
             return None

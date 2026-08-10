@@ -449,6 +449,31 @@ def expected_improvement(mu: float, sigma: float, f_best: float, xi: float = 0.0
     return float((f_best - mu - xi) * norm.cdf(z) + sigma * norm.pdf(z))
 
 
+def _sample_in_ball(center_norm, max_euclid: float, n: int, rng) -> Any:
+    """`n` points drawn uniformly inside a ball of radius `max_euclid` around
+    `center_norm`, in normalized [0,1] space, then clipped to stay legal.
+
+    A random Gaussian direction normalized to unit length is uniform on the
+    sphere; scaling by u**(1/d) makes the radius uniform by VOLUME rather than
+    by length, which would otherwise pile most candidates near the centre and
+    barely probe the edge of the region -- the opposite of what a search that
+    is trying to leave wants.
+
+    Clipping to [0,1] does distort the ball for a region whose anchor sits near
+    a parameter's limit: candidates bunch against that face. Accepted rather
+    than rejection-sampled, because a region ANCHORED at the edge of the search
+    space genuinely has less room on that side, and pretending otherwise would
+    propose values the clamps would reject anyway.
+    """
+    d = len(center_norm)
+    direction = rng.normal(size=(n, d))
+    norms = np.linalg.norm(direction, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    direction /= norms
+    radius = max_euclid * rng.random(n) ** (1.0 / d)
+    return np.clip(np.asarray(center_norm) + direction * radius[:, None], 0.0, 1.0)
+
+
 def propose_via_ei(
     surrogate: SurrogateModel,
     f_best: float,
@@ -458,6 +483,9 @@ def propose_via_ei(
     n_candidates: int = 2000,
     seed: Optional[int] = None,
     return_diagnostics: bool = False,
+    fence_center: Optional[Dict[str, Any]] = None,
+    fence_radius: Optional[float] = None,
+    fence_dims: Optional[int] = None,
 ) -> Any:
     """Random-search EI maximization: draws `n_candidates` points uniformly
     (in normalized space) over `free_params`, holds everything else at
@@ -494,6 +522,27 @@ def propose_via_ei(
             t = float(rng.uniform(0.0, 1.0))
             candidate[p] = _denormalize(p, t, bounds)
         candidates.append(_snap_discrete(candidate))
+    n_unfenced = len(candidates)
+
+    # The fence. Candidates so far roam each free parameter's FULL range, which
+    # is why a region's centre could jump 6-10x its own radius in one proposal.
+    # Those are still generated and scored -- they are the escape signal, free
+    # of charge -- but when a fence is set they are not eligible to be run.
+    fenced = bool(fence_center) and fence_radius is not None and len(free_params) > 0
+    if fenced:
+        # The region metric divides by sqrt(total tunable dims), and parameters
+        # outside the active block sit exactly at the centre and contribute
+        # nothing, so the budget for the free ones is radius * sqrt(dims).
+        dims = fence_dims if fence_dims else len(free_params)
+        max_euclid = float(fence_radius) * math.sqrt(dims)
+        center_norm = [normalized_value(p, float(fence_center.get(p, 0.0)), bounds)
+                       for p in free_params]
+        pts = _sample_in_ball(center_norm, max_euclid, n_candidates, rng)
+        for row in pts:
+            candidate = dict(fixed_values)
+            for p, t in zip(free_params, row):
+                candidate[p] = _denormalize(p, float(t), bounds)
+            candidates.append(_snap_discrete(candidate))
 
     x = np.array([[float(c.get(name, 0.0)) for name in surrogate.feature_names] for c in candidates])
     tree_preds = np.array([tree.predict(x) for tree in surrogate.model.estimators_])  # [n_trees, n_candidates]
@@ -501,7 +550,10 @@ def propose_via_ei(
     sigmas = tree_preds.std(axis=0)
 
     eis = [expected_improvement(float(mu), float(sigma), f_best) for mu, sigma in zip(mus, sigmas)]
-    best_idx = int(np.argmax(eis))
+    # Two winners: the one we run (inside the fence) and the one the search
+    # WANTED (ignoring it). Their gap is the escape pressure.
+    unfenced_best = int(np.argmax(eis[:n_unfenced]))
+    best_idx = (n_unfenced + int(np.argmax(eis[n_unfenced:]))) if fenced else unfenced_best
     winner = candidates[best_idx]
     if not return_diagnostics:
         return winner
@@ -513,7 +565,29 @@ def propose_via_ei(
         "sigmas": [float(v) for v in sigmas],
         "eis": [float(v) for v in eis],
         "best_idx": best_idx,
+        "fenced": fenced,
     }
+    if fenced:
+        want = candidates[unfenced_best]
+        # Signed, in normalized units, so a direction can be averaged across
+        # iterations -- which is what turns one stray proposal into a trend
+        # Agent 4 can act on.
+        diagnostics["escape"] = {
+            "unfenced_best_idx": unfenced_best,
+            "ei_inside": float(eis[best_idx]),
+            "ei_outside": float(eis[unfenced_best]),
+            "distance": float(math.sqrt(sum(
+                (normalized_value(p, float(want[p]), bounds)
+                 - normalized_value(p, float(fence_center.get(p, 0.0)), bounds)) ** 2
+                for p in free_params)) / math.sqrt(dims)),
+            "radius": float(fence_radius),
+            "direction": {
+                p: float(normalized_value(p, float(want[p]), bounds)
+                         - normalized_value(p, float(fence_center.get(p, 0.0)), bounds))
+                for p in free_params
+            },
+        }
+        diagnostics["escape"]["escaped"] = diagnostics["escape"]["distance"] > float(fence_radius)
     return winner, diagnostics
 
 

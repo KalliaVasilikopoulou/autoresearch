@@ -102,6 +102,9 @@ def test_agent1_actually_passes_its_region_through_to_the_planner():
     class _Region:
         region_id = "r0007"
         center = {"n_layer": 8, "n_embd": 512, "n_head": 4}
+        # The fence is anchored here, not at the drifting centre -- see
+        # Agent1._surrogate_adjustment.
+        anchor = {"n_layer": 8, "n_embd": 512, "n_head": 4, "matrix_lr": 0.04}
         best_val_bpb = 1.30
         val_bpbs = [1.30]
 

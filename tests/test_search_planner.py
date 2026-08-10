@@ -32,10 +32,16 @@ def _random_hp(rng):
     return {name: rng.uniform(lo, hi) for name, (lo, hi) in SEARCH_SPACE.items()}
 
 
-def _synthetic_rows(n, seed=0, effect_param="n_layer", effect_coef=0.05, noise=0.001):
+def _synthetic_rows(n, seed=0, effect_param="matrix_lr", effect_coef=0.05, noise=0.001):
     """val_bpb depends only on `effect_param` (linearly, over its real
     SEARCH_SPACE range) -- every other HYPERPARAM_COLUMNS entry is present
     (required for a row to count as "usable") but has zero true effect.
+
+    The effect parameter must be a TUNABLE one. It used to be n_layer, which
+    Agent 1 no longer searches -- architecture belongs to Agent 4 and defines
+    the region. With the effect on n_layer, every parameter Agent 1 CAN move
+    is flat, so it correctly freezes all of them and proposes nothing, and
+    these tests failed for the right reason.
     """
     rng = random.Random(seed)
     lo, _hi = SEARCH_SPACE[effect_param]
@@ -153,7 +159,7 @@ def test_propose_next_transitions_out_of_cold_start_via_real_results_tsv_pipelin
         log_result(f"run_{i:04d}", hp, {"val_bpb": val_bpb, "status": "remote_ok"}, results_path=str(results_path))
 
     rows = load_results(str(results_path))
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(),
         current_best_val_bpb=min(r["val_bpb"] for r in rows),
@@ -174,8 +180,8 @@ def test_propose_next_transitions_out_of_cold_start_via_real_results_tsv_pipelin
 # ---------------------------------------------------------------------------
 
 def test_propose_next_surrogate_path_freezes_the_no_effect_param(tmp_path):
-    rows = _synthetic_rows(200, seed=1, effect_param="n_layer", effect_coef=0.1)
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)  # 2*sigma=0.2; n_layer's total effect ~2.0, everything else ~0
+    rows = _synthetic_rows(200, seed=1, effect_param="matrix_lr", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)  # 2*sigma=0.002; matrix_lr carries the whole effect, everything else ~0
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
         iteration=100, cold_start_n=15, state_path=str(tmp_path / "state.json"),
@@ -187,7 +193,7 @@ def test_propose_next_surrogate_path_freezes_the_no_effect_param(tmp_path):
 
     report = json.loads((tmp_path / "reports" / "plan_0100.json").read_text())
     assert "weight_decay" in report["frozen"]
-    assert "n_layer" not in report["frozen"]
+    assert "matrix_lr" not in report["frozen"]
 
 
 def test_propose_next_returns_none_without_deps(monkeypatch):
@@ -220,8 +226,8 @@ def test_propose_next_age_based_reprobe_gives_frozen_param_another_chance(tmp_pa
     # Hand-seed a state where "weight_decay" has been frozen since iteration 0.
     SearchPlannerState(frozen={"weight_decay": 0}).save(str(state_path))
 
-    rows = _synthetic_rows(200, seed=3, effect_param="n_layer", effect_coef=0.1)
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    rows = _synthetic_rows(200, seed=3, effect_param="matrix_lr", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
         iteration=25, cold_start_n=15, reprobe_every=20,  # 25 - 0 >= 20 -> reprobe fires
@@ -278,8 +284,8 @@ def test_propose_next_block_rotation_advances_after_budget_exhausted(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_propose_next_writes_report_files_with_expected_structure(tmp_path):
-    rows = _synthetic_rows(200, seed=5, effect_param="n_layer", effect_coef=0.1)
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    rows = _synthetic_rows(200, seed=5, effect_param="matrix_lr", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)
     report_dir = tmp_path / "reports"
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
@@ -298,8 +304,8 @@ def test_propose_next_writes_report_files_with_expected_structure(tmp_path):
 
 
 def test_propose_next_generate_charts_false_produces_no_chart_files(tmp_path):
-    rows = _synthetic_rows(200, seed=6, effect_param="n_layer", effect_coef=0.1)
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    rows = _synthetic_rows(200, seed=6, effect_param="matrix_lr", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)
     report_dir = tmp_path / "reports"
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),
@@ -312,8 +318,8 @@ def test_propose_next_generate_charts_false_produces_no_chart_files(tmp_path):
 
 
 def test_propose_next_generate_charts_true_produces_expected_chart_files(tmp_path):
-    rows = _synthetic_rows(200, seed=8, effect_param="n_layer", effect_coef=0.1)
-    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.1)
+    rows = _synthetic_rows(200, seed=8, effect_param="matrix_lr", effect_coef=0.1)
+    noise_floor_path = _write_noise_floor(tmp_path, sigma=0.001)
     report_dir = tmp_path / "reports"
     result = propose_next(
         rows=rows, current_best_hyperparams=_default_best_hyperparams(), current_best_val_bpb=min(r["val_bpb"] for r in rows),

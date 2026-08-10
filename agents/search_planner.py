@@ -18,10 +18,10 @@ import json
 import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from state import surrogate
-from state.results_analysis import HYPERPARAM_COLUMNS
+from state.results_analysis import HYPERPARAM_COLUMNS, TUNABLE_COLUMNS
 
 STATE_PATH_DEFAULT = "state/search_planner_state.json"
 NOISE_FLOOR_PATH_DEFAULT = "state/noise_floor.json"
@@ -183,6 +183,9 @@ def propose_next(
     report_dir: str = REPORT_DIR_DEFAULT,
     generate_charts: bool = True,
     f_best_region_id: Optional[str] = None,
+    search_columns: Optional[Sequence[str]] = None,
+    fence_center: Optional[Dict[str, Any]] = None,
+    fence_radius: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Returns a full hyperparams dict (pass-through keys like `ablation_k`
     from current_best_hyperparams are preserved), or None when scipy/
@@ -195,7 +198,20 @@ def propose_next(
         return None
 
     from agents.agent1_training_specialist import SEARCH_SPACE
+
+    # TWO parameter sets, and the distinction is the point.
+    #
+    # `params` (all 11) are the surrogate's FEATURES. Architecture must stay a
+    # feature: it is the strongest predictor of val_bpb there is (size alone
+    # correlates -0.76), and a model fitted without it would blame architecture
+    # differences on noise and mis-rank everything else.
+    #
+    # `search_params` (the 8 tunables) are what Agent 1 may MOVE. Architecture
+    # belongs to Agent 4 and defines the region; changing it here would produce
+    # a run whose weights differ from the rest of its own region, destroying
+    # exactly the pairing that makes a within-region comparison readable.
     params = list(HYPERPARAM_COLUMNS)
+    search_params = list(search_columns) if search_columns else list(TUNABLE_COLUMNS)
     state = SearchPlannerState.load(state_path)
     report_dir_path = Path(report_dir)
 
@@ -242,12 +258,12 @@ def propose_next(
         sm = surrogate.fit_surrogate(rows, feature_columns=params, min_n=cold_start_n)
     if sm is None:
         if not state.cold_start_points:
-            state.cold_start_points = surrogate.sobol_cold_start(SEARCH_SPACE, params, cold_start_n, seed=0)
+            state.cold_start_points = surrogate.sobol_cold_start(SEARCH_SPACE, search_params, cold_start_n, seed=0)
             if generate_charts:
                 try:
                     from state.visualize import chart_sobol_coverage
                     report_dir_path.mkdir(parents=True, exist_ok=True)
-                    chart_sobol_coverage(state.cold_start_points, params, report_dir_path / "cold_start_coverage.png")
+                    chart_sobol_coverage(state.cold_start_points, search_params, report_dir_path / "cold_start_coverage.png")
                 except Exception as _e:
                     print(f"[search_planner] Chart generation (Sobol coverage) failed: {_e}")
         if state.cold_start_used < len(state.cold_start_points):
@@ -260,7 +276,7 @@ def propose_next(
             return proposal
         # Sobol batch exhausted but n_usable still short (some runs failed)
         # -- generate one more ad hoc point rather than stalling forever.
-        extra = surrogate.sobol_cold_start(SEARCH_SPACE, params, 1, seed=1000 + iteration)
+        extra = surrogate.sobol_cold_start(SEARCH_SPACE, search_params, 1, seed=1000 + iteration)
         proposal = dict(current_best_hyperparams)
         if extra:
             proposal.update(extra[0])
@@ -288,7 +304,7 @@ def propose_next(
     # run wider. That is the honest answer -- more parameters really are
     # measurable now -- but it means EI varies more dimensions per proposal
     # than it used to, on the same 2000 candidates.
-    kept_now, frozen_now = surrogate.prune_by_noise_floor(sm, params, center, sm.bounds, sigma, k=2.0)
+    kept_now, frozen_now = surrogate.prune_by_noise_floor(sm, search_params, center, sm.bounds, sigma, k=2.0)
 
     # Age-based unfreeze: a param frozen >= reprobe_every iterations ago gets
     # one more chance this round even if prune_by_noise_floor still wants to
@@ -371,9 +387,22 @@ def propose_next(
         sm, f_best=f_best, bounds=sm.bounds,
         free_params=active_block, fixed_values=center, n_candidates=2000, seed=iteration,
         return_diagnostics=True,
+        # The fence keeps the proposal inside the region. Without it the active
+        # block was sampled across each parameter's FULL range, which moved a
+        # region's centre 6-10x its own radius on essentially every proposal --
+        # so "region" named a starting point rather than a place.
+        fence_center=fence_center, fence_radius=fence_radius,
+        fence_dims=len(search_params),
     )
     full = dict(current_best_hyperparams)
     full.update(proposal)
+
+    escape = (ei_diagnostics or {}).get("escape")
+    if escape and escape.get("escaped"):
+        print(f"[search_planner] Escape pressure: the best candidate ignoring the fence "
+              f"sits {escape['distance']:.4f} away (radius {escape['radius']:.4f}), "
+              f"EI {escape['ei_outside']:.6g} vs {escape['ei_inside']:.6g} inside. "
+              f"Recorded, not run.")
 
     state.budget_used_in_block += 1
     state.save(state_path)
@@ -387,6 +416,11 @@ def propose_next(
         "frozen": frozen, "active_block": active_block, "proposal": full,
         "interaction_matrix": {"|".join(k): v for k, v in interactions.items()},
         "ei_diagnostics": ei_diagnostics,
+        # Persisted separately from ei_diagnostics so Agent 4 can read a run of
+        # these across iterations without loading every candidate's score. One
+        # escape is noise; a consistent direction over several is the signal
+        # that the region is anchored in the wrong place.
+        "escape": escape,
         "oob_actual": list(sm.oob_actual),
         "oob_predicted": list(sm.oob_predicted),
     }, indent=2))
