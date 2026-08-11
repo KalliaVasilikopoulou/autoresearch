@@ -49,6 +49,10 @@ from prepare import (
     MAX_SEQ_LEN, MAX_TRAIN_SECONDS, TOKEN_BUDGET, Tokenizer, make_dataloader,
     evaluate_bpb, get_token_bytes,
 )
+# Also as a module: EVAL_TOKENS has to be read and written THROUGH it, because
+# evaluate_bpb resolves that name from prepare's own globals. Rebinding a
+# from-import copy here would change nothing, and would do it silently.
+import prepare as _prepare
 
 # ---------------------------------------------------------------------------
 # GPT Model
@@ -592,6 +596,27 @@ try:
         WINDOW_PATTERN = _build_window_pattern(DEPTH, _window_s_fraction)
         if "seed" in _hp:
             SEED = _clamp("seed", int(_hp["seed"]), 0, 2**31 - 1)
+        # THE TWO BUDGETS. Overridable so they can be MEASURED against wall
+        # clock rather than argued about, and so a probe can vary one without
+        # editing prepare.py on the remote.
+        #
+        # Both are CAMPAIGN CONSTANTS, never search dimensions -- like `seed`,
+        # and for a sharper reason: val_bpb is only comparable between runs
+        # that saw the same amount of training and were scored on the same
+        # amount of validation. A search allowed to vary either would discover
+        # that training less looks better, because a shorter run is a
+        # different question, not a better answer. Neither appears in
+        # SEARCH_SPACE or HYPERPARAM_COLUMNS, and both are echoed back below so
+        # results.tsv records what was actually used.
+        if "token_budget" in _hp:
+            TOKEN_BUDGET = _clamp("token_budget", int(_hp["token_budget"]),
+                                  100_000, 1_000_000_000)
+        if "eval_tokens" in _hp:
+            # Written through the module, not into a local name: evaluate_bpb
+            # reads prepare.EVAL_TOKENS from its own module globals, so
+            # rebinding a copy here would change nothing and silently.
+            _prepare.EVAL_TOKENS = _clamp("eval_tokens", int(_hp["eval_tokens"]),
+                                          65_536, 1_000_000_000)
         print(f"[hyperparams] DEPTH={DEPTH} N_HEAD={N_HEAD} target_n_embd={_target_embd} "
               f"EMBEDDING_LR={EMBEDDING_LR} UNEMBEDDING_LR={UNEMBEDDING_LR} MATRIX_LR={MATRIX_LR} SCALAR_LR={SCALAR_LR} "
               f"WEIGHT_DECAY={WEIGHT_DECAY} WARMUP_RATIO={WARMUP_RATIO} TOTAL_BATCH_SIZE={TOTAL_BATCH_SIZE} "
@@ -892,6 +917,12 @@ print(f"total_seconds:    {t_end - t_start:.1f}")
 # startup + eval, however far it is cut.
 print(f"startup_seconds:  {startup_time:.1f}")
 print(f"eval_seconds:     {eval_seconds:.1f}")
+# Echoed back, like `seed`: val_bpb is only comparable between runs that saw
+# the same amount of training and were scored on the same amount of
+# validation, so the two budgets a run ACTUALLY used have to be recoverable
+# from its row rather than assumed from whatever prepare.py says today.
+print(f"token_budget:     {TOKEN_BUDGET}")
+print(f"eval_tokens:      {_prepare.EVAL_TOKENS}")
 print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
 print(f"mfu_percent:      {steady_state_mfu:.2f}")
 print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")

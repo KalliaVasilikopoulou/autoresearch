@@ -45,6 +45,11 @@ FIELDS: Dict[str, Tuple[str, Callable[[str], Any]]] = {
     # sensibly without seeing them apart.
     "startup_seconds:": ("startup_seconds", float),
     "eval_seconds:": ("eval_seconds", float),
+    # The two budgets this run ACTUALLY used, echoed back for the same reason
+    # as `seed`: val_bpb is only comparable between runs that saw the same
+    # amount of training and were scored on the same amount of validation.
+    "token_budget:": ("token_budget", int),
+    "eval_tokens:": ("eval_tokens", int),
     "peak_vram_mb:": ("peak_vram_mb", float),
     "mfu_percent:": ("mfu_percent", float),
     "total_tokens_m:": ("total_tokens_M", float),
