@@ -458,7 +458,11 @@ class Orchestrator:
         if wanted_new:
             rows = load_results(str(self.results_path))
             opened = self.agent4.propose_regions(
-                rows, self.registry, wanted_new, at_run, self.agent1.best_val_bpb)
+                rows, self.registry, wanted_new, at_run, self.agent1.best_val_bpb,
+                # Agent 2's interpretability findings reach the search here, and
+                # only here: every one of them is about depth, width or heads,
+                # which only Agent 4 can change.
+                evidence=self.state_mgr.get_recent_evidence(limit=10))
             for region in opened:
                 plan.assignments[plan.assignments.index(None)] = region.region_id
 

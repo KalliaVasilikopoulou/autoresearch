@@ -91,6 +91,58 @@ FINGERPRINT_SATURATION_RATIO = 0.85         # attn_distance already >=85% of its
 FINGERPRINT_MAX_STEP = 2                    # cap on |sum of votes| applied to n_layer/n_head per iteration
 
 
+def _late_slice(values: List[float]) -> List[float]:
+    """Last FINGERPRINT_LATE_LAYER_FRACTION of a per-layer array (>=1
+    element), used by the dla/x0_lambda rules below."""
+    n = len(values)
+    k = max(1, int(round(n * FINGERPRINT_LATE_LAYER_FRACTION)))
+    return values[-k:]
+
+def fingerprint_votes(fingerprint: Dict[str, Any]) -> Dict[str, List[int]]:
+    """The 5 Tier 4 rules (see dev/INNOVATION_PLAN.md), each casting a
+    simple +-1 vote on one param when its threshold trips. Every
+    comparison is relative to the fingerprint's own peak for that
+    array -- never an absolute number tied to one run's scale, since
+    model magnitude varies a lot across the search.
+    """
+    votes: Dict[str, List[int]] = {}
+
+    def vote(param: str, direction: int) -> None:
+        votes.setdefault(param, []).append(direction)
+
+    dla = [float(v) for v in (fingerprint.get("dla") or [])]
+    if dla:
+        peak = max(abs(v) for v in dla)
+        if peak > 1e-9 and max(abs(v) for v in _late_slice(dla)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
+            vote("n_layer", -1)  # late layers aren't writing to the output
+
+    x0_lambda = [float(v) for v in (fingerprint.get("x0_lambda") or [])]
+    if x0_lambda:
+        peak = max(x0_lambda)
+        if peak > 1e-9 and max(_late_slice(x0_lambda)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
+            vote("n_layer", 1)  # depth is being used, not just echoing the embedding shortcut
+
+    attn_entropy = [float(v) for v in (fingerprint.get("attn_entropy") or [])]
+    if attn_entropy:
+        mean_entropy = sum(attn_entropy) / len(attn_entropy)
+        if mean_entropy < FINGERPRINT_LOW_ENTROPY_NATS:
+            vote("n_head", -1)
+            vote("n_embd", 1)
+
+    induction_score = fingerprint.get("induction_score")
+    if isinstance(induction_score, (int, float)) and induction_score > FINGERPRINT_HIGH_INDUCTION:
+        vote("n_layer", 1)  # found the easy structure fast -> raise the difficulty
+
+    attn_distance = [float(v) for v in (fingerprint.get("attn_distance") or [])]
+    if attn_distance:
+        peak = max(attn_distance)
+        idx = min(FINGERPRINT_SATURATION_LAYER_IDX, len(attn_distance) - 1)
+        if peak > 1e-9 and attn_distance[idx] >= FINGERPRINT_SATURATION_RATIO * peak:
+            vote("window_s_fraction", 1)  # reach stopped growing early -> more short-window layers are safe
+
+    return votes
+
+
 class Agent1TrainingSpecialist:
     """Trains models and adjusts hyperparameters based on agent feedback."""
 
@@ -862,56 +914,16 @@ class Agent1TrainingSpecialist:
         target = self._clamp_lr(key, target)
         new_params[key] = self._clamp_lr(key, current * (1.0 - pull) + target * pull)
 
+    # Thin delegates. The logic is module-level (see fingerprint_votes below)
+    # because Agent 4 needs the ARCHITECTURE half of these votes -- every one
+    # of these signals is a statement about depth, width or heads, which are
+    # Agent 4's parameters now -- and importing an instance method to get them
+    # would be worse than sharing a function.
     def _fingerprint_late_slice(self, values: List[float]) -> List[float]:
-        """Last FINGERPRINT_LATE_LAYER_FRACTION of a per-layer array (>=1
-        element), used by the dla/x0_lambda rules below."""
-        n = len(values)
-        k = max(1, int(round(n * FINGERPRINT_LATE_LAYER_FRACTION)))
-        return values[-k:]
+        return _late_slice(values)
 
     def _fingerprint_votes(self, fingerprint: Dict[str, Any]) -> Dict[str, List[int]]:
-        """The 5 Tier 4 rules (see dev/INNOVATION_PLAN.md), each casting a
-        simple +-1 vote on one param when its threshold trips. Every
-        comparison is relative to the fingerprint's own peak for that
-        array -- never an absolute number tied to one run's scale, since
-        model magnitude varies a lot across the search.
-        """
-        votes: Dict[str, List[int]] = {}
-
-        def vote(param: str, direction: int) -> None:
-            votes.setdefault(param, []).append(direction)
-
-        dla = [float(v) for v in (fingerprint.get("dla") or [])]
-        if dla:
-            peak = max(abs(v) for v in dla)
-            if peak > 1e-9 and max(abs(v) for v in self._fingerprint_late_slice(dla)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
-                vote("n_layer", -1)  # late layers aren't writing to the output
-
-        x0_lambda = [float(v) for v in (fingerprint.get("x0_lambda") or [])]
-        if x0_lambda:
-            peak = max(x0_lambda)
-            if peak > 1e-9 and max(self._fingerprint_late_slice(x0_lambda)) < FINGERPRINT_DEAD_LAYER_RATIO * peak:
-                vote("n_layer", 1)  # depth is being used, not just echoing the embedding shortcut
-
-        attn_entropy = [float(v) for v in (fingerprint.get("attn_entropy") or [])]
-        if attn_entropy:
-            mean_entropy = sum(attn_entropy) / len(attn_entropy)
-            if mean_entropy < FINGERPRINT_LOW_ENTROPY_NATS:
-                vote("n_head", -1)
-                vote("n_embd", 1)
-
-        induction_score = fingerprint.get("induction_score")
-        if isinstance(induction_score, (int, float)) and induction_score > FINGERPRINT_HIGH_INDUCTION:
-            vote("n_layer", 1)  # found the easy structure fast -> raise the difficulty
-
-        attn_distance = [float(v) for v in (fingerprint.get("attn_distance") or [])]
-        if attn_distance:
-            peak = max(attn_distance)
-            idx = min(FINGERPRINT_SATURATION_LAYER_IDX, len(attn_distance) - 1)
-            if peak > 1e-9 and attn_distance[idx] >= FINGERPRINT_SATURATION_RATIO * peak:
-                vote("window_s_fraction", 1)  # reach stopped growing early -> more short-window layers are safe
-
-        return votes
+        return fingerprint_votes(fingerprint)
 
     def _fingerprint_adjustment(self, new_params: Dict[str, Any], evidence: Optional[list]) -> Dict[str, Any]:
         """Tier 4: nudge new_params using the most recent fingerprint-bearing
@@ -934,34 +946,19 @@ class Agent1TrainingSpecialist:
         votes = self._fingerprint_votes(fingerprint)
         applied: List[Dict[str, Any]] = []
 
-        if "n_layer" in votes:
-            delta = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_layer"])))
-            if delta != 0:
-                lo, hi = ARCH_SAFE_RANGES["n_layer"]
-                current = int(new_params.get("n_layer", 8))
-                new_value = max(int(lo), min(current + delta, int(hi)))
-                new_params["n_layer"] = new_value
-                applied.append({"param": "n_layer", "votes": votes["n_layer"], "delta": delta, "new_value": new_value})
-
-        if "n_head" in votes:
-            delta = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_head"])))
-            if delta != 0:
-                lo, hi = ARCH_SAFE_RANGES["n_head"]
-                current = int(new_params.get("n_head", 4))
-                new_value = max(int(lo), min(current + delta, int(hi)))
-                new_params["n_head"] = new_value
-                applied.append({"param": "n_head", "votes": votes["n_head"], "delta": delta, "new_value": new_value})
-
-        if "n_embd" in votes:
-            vote_sum = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["n_embd"])))
-            delta = vote_sum * 64
-            if delta != 0:
-                lo, hi = ARCH_SAFE_RANGES["n_embd"]
-                current = int(new_params.get("n_embd", 512))
-                new_value = max(int(lo), min(current + delta, int(hi)))
-                new_params["n_embd"] = new_value
-                applied.append({"param": "n_embd", "votes": votes["n_embd"], "delta": delta, "new_value": new_value})
-
+        # ARCHITECTURE VOTES ARE NOT APPLIED HERE ANY MORE. n_layer, n_embd and
+        # n_head belong to Agent 4 and define the region; nudging them here
+        # would produce a run whose initial weights differ from the rest of its
+        # own region, destroying the pairing that makes a within-region
+        # comparison readable -- the very thing steps 1-3 established. This pass
+        # ran on EVERY decision path, including the surrogate one, so it
+        # bypassed the fence 3b put on the EI search.
+        #
+        # The signals are not discarded: agents/xai_direction.py hands the
+        # architecture half to Agent 4, which is the agent that can act on them.
+        # Only window_s_fraction remains, and it belongs here because it does
+        # not touch a single weight (verified in step 1: 0.05 vs 0.95 gave
+        # 46/46 identical tensors).
         if "window_s_fraction" in votes:
             vote_sum = max(-FINGERPRINT_MAX_STEP, min(FINGERPRINT_MAX_STEP, sum(votes["window_s_fraction"])))
             delta = vote_sum * 0.1

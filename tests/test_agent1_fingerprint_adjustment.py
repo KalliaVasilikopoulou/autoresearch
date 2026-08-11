@@ -80,45 +80,52 @@ def test_no_op_when_fingerprint_trips_no_rule(specialist):
 # The 5 rules, isolated
 # ---------------------------------------------------------------------------
 
-def test_rule_dead_late_layers_reduces_n_layer(specialist):
+def test_rule_dead_late_layers_votes_to_reduce_n_layer(specialist):
+    """The rule still lives here; APPLYING it moved to Agent 4, which owns
+    architecture. Agent 1 applying it would change a region's architecture
+    mid-flight and break the shared-weights pairing (see
+    agents/xai_direction.py).  """
     fp = _neutral_fingerprint()
     fp["dla"] = [0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.001, 0.001]  # late 25% (last 2) ~= 0
+    votes = specialist._fingerprint_votes(fp)
+    assert sum(votes["n_layer"]) == -1
+    # and Agent 1 does not act on it any more
     params = _base_hyperparams()
     result = specialist._fingerprint_adjustment(dict(params), _evidence_with(fp))
-    assert result["n_layer"] == params["n_layer"] - 1
-    for key in ("n_head", "n_embd", "window_s_fraction"):
-        assert result[key] == params[key]
+    assert result["n_layer"] == params["n_layer"]
 
 
-def test_rule_late_x0_lambda_near_zero_increases_n_layer(specialist):
+def test_rule_late_x0_lambda_near_zero_votes_to_increase_n_layer(specialist):
     fp = _neutral_fingerprint()
     fp["x0_lambda"] = [50.0, 40.0, 30.0, 20.0, 10.0, 5.0, 0.001, 0.001]
+    votes = specialist._fingerprint_votes(fp)
+    assert sum(votes["n_layer"]) == 1
+    # and Agent 1 does not act on it any more
     params = _base_hyperparams()
     result = specialist._fingerprint_adjustment(dict(params), _evidence_with(fp))
-    assert result["n_layer"] == params["n_layer"] + 1
-    for key in ("n_head", "n_embd", "window_s_fraction"):
-        assert result[key] == params[key]
+    assert result["n_layer"] == params["n_layer"]
 
 
-def test_rule_low_entropy_shrinks_heads_grows_embd(specialist):
+def test_rule_low_entropy_votes_fewer_heads_more_embd(specialist):
     fp = _neutral_fingerprint()
     fp["attn_entropy"] = [0.3] * 8  # well below ln(4)
+    votes = specialist._fingerprint_votes(fp)
+    assert sum(votes["n_head"]) == -1 and sum(votes["n_embd"]) == 1
     params = _base_hyperparams()
     result = specialist._fingerprint_adjustment(dict(params), _evidence_with(fp))
-    assert result["n_head"] == params["n_head"] - 1
-    assert result["n_embd"] == params["n_embd"] + 64
-    for key in ("n_layer", "window_s_fraction"):
-        assert result[key] == params[key]
+    assert result["n_head"] == params["n_head"]
+    assert result["n_embd"] == params["n_embd"]
 
 
-def test_rule_high_induction_score_increases_n_layer(specialist):
+def test_rule_high_induction_score_votes_to_increase_n_layer(specialist):
     fp = _neutral_fingerprint()
     fp["induction_score"] = 0.8
+    votes = specialist._fingerprint_votes(fp)
+    assert sum(votes["n_layer"]) == 1
+    # and Agent 1 does not act on it any more
     params = _base_hyperparams()
     result = specialist._fingerprint_adjustment(dict(params), _evidence_with(fp))
-    assert result["n_layer"] == params["n_layer"] + 1
-    for key in ("n_head", "n_embd", "window_s_fraction"):
-        assert result[key] == params[key]
+    assert result["n_layer"] == params["n_layer"]
 
 
 def test_rule_early_saturation_increases_window_s_fraction(specialist):
@@ -166,13 +173,16 @@ def test_uses_most_recent_fingerprint_bearing_evidence(specialist):
 
 def test_decision_log_records_fingerprint_adjustments(specialist):
     fp = _neutral_fingerprint()
-    fp["induction_score"] = 0.8
+    # attn_distance saturating early is the rule Agent 1 still ACTS on
+    # (window_s_fraction changes no weights, so it may vary inside a
+    # region). induction_score votes on n_layer, which is Agent 4's now.
+    fp["attn_distance"] = [9.0, 9.5, 9.9, 10.0]
     params = _base_hyperparams()
     specialist._fingerprint_adjustment(dict(params), _evidence_with(fp))
     assert len(specialist._last_fingerprint_adjustments) == 1
     entry = specialist._last_fingerprint_adjustments[0]
-    assert entry["param"] == "n_layer"
-    assert entry["delta"] == 1
+    assert entry["param"] == "window_s_fraction"
+    assert entry["delta"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +236,10 @@ def test_fingerprint_adjustment_applies_on_evidence_fallback_path(tmp_path):
     specialist.current_hyperparams = _base_hyperparams()
 
     fp = _neutral_fingerprint()
-    fp["induction_score"] = 0.8
+    # attn_distance saturating early is the rule Agent 1 still ACTS on
+    # (window_s_fraction changes no weights, so it may vary inside a
+    # region). induction_score votes on n_layer, which is Agent 4's now.
+    fp["attn_distance"] = [9.0, 9.5, 9.9, 10.0]
     evidence = [{"hyperparameter_importance": {"n_layer": 0.9}}, {"token_fingerprint": fp}]
 
     before_n_layer = specialist.current_hyperparams["n_layer"]
@@ -237,7 +250,8 @@ def test_fingerprint_adjustment_applies_on_evidence_fallback_path(tmp_path):
     # The evidence path itself may also move n_layer from hyperparameter_importance;
     # what matters here is that the fingerprint's own +1 vote was applied on top --
     # verified directly via the audit trail rather than guessing the evidence path's own delta.
-    assert any(e["param"] == "n_layer" for e in specialist._last_fingerprint_adjustments)
+    assert any(e["param"] == "window_s_fraction"
+               for e in specialist._last_fingerprint_adjustments)
 
 
 def test_fingerprint_adjustment_applies_on_surrogate_path(tmp_path):
@@ -262,7 +276,10 @@ def test_fingerprint_adjustment_applies_on_surrogate_path(tmp_path):
                    results_path=str(tmp_path / "results.tsv"))
 
     fp = _neutral_fingerprint()
-    fp["induction_score"] = 0.8
+    # attn_distance saturating early is the rule Agent 1 still ACTS on
+    # (window_s_fraction changes no weights, so it may vary inside a
+    # region). induction_score votes on n_layer, which is Agent 4's now.
+    fp["attn_distance"] = [9.0, 9.5, 9.9, 10.0]
     evidence = [{"token_fingerprint": fp}]
 
     result = specialist.decide_next_hyperparams(
@@ -272,4 +289,5 @@ def test_fingerprint_adjustment_applies_on_surrogate_path(tmp_path):
     assert specialist.last_decision_log["path_taken"] == "surrogate", (
         f"expected the surrogate path to be active for this test to be meaningful, got {specialist.last_decision_log['path_taken']}"
     )
-    assert any(e["param"] == "n_layer" for e in specialist._last_fingerprint_adjustments)
+    assert any(e["param"] == "window_s_fraction"
+               for e in specialist._last_fingerprint_adjustments)

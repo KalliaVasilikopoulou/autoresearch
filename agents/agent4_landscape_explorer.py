@@ -154,6 +154,15 @@ class Agent4LandscapeExplorer:
         #: region is being explored, not mis-anchored. 0.6 demands the mean
         #: vector keep most of its length through the averaging.
         self.escape_coherence = float(cfg.get("escape_coherence", 0.6))
+
+        #: How hard XAI may push the architecture proposal, before being scaled
+        #: down by the surrogate's own accuracy. Deliberately SMALL: the
+        #: FINGERPRINT_* thresholds these votes fire on are uncalibrated by the
+        #: code's own admission, so a large weight would only amplify a guess.
+        #: Raise it once those thresholds have been checked against real
+        #: fingerprint history.
+        self.xai_weight = float(cfg.get("xai_weight", 0.25))
+        self._last_xai_direction: Optional[Dict[str, Any]] = None
         self.sigma_region = float(cfg.get("sigma_region", 0.0028))
         self.retire_margin_sigma = float(cfg.get("retire_margin_sigma", 3.0))
         self.improvement_sigma = float(cfg.get("improvement_sigma", 1.0))
@@ -226,6 +235,7 @@ class Agent4LandscapeExplorer:
         n: int,
         at_run: int,
         best_val_bpb: Optional[float] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Region]:
         """Open up to `n` new regions and return them.
 
@@ -260,6 +270,7 @@ class Agent4LandscapeExplorer:
             candidate = self._candidate_for(criterion, landscape, sm, f_best, at_run + i)
             if candidate is None:
                 continue
+            candidate = self._apply_xai_direction(candidate, sm, evidence)
             if self._too_close_to_known(candidate, registry, opened):
                 continue
             region = registry.open_region(candidate, at_run=at_run, origin=criterion)
@@ -275,6 +286,48 @@ class Agent4LandscapeExplorer:
                 "live_regions": len(registry.active()),
             })
         return opened
+
+    def _apply_xai_direction(self, candidate: Dict[str, Any], sm: Any,
+                             evidence: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Nudge a proposed architecture toward what the trained models are
+        actually showing.
+
+        This is where interpretability stops being decorative. Everything Agent
+        2 measures -- dead heads, layers contributing nothing to the output,
+        attention that stops reaching -- is about depth, width and heads, which
+        only Agent 4 can change. The surrogate cannot see any of it: it knows
+        settings and scores, so it cannot tell "bad because it is too deep"
+        from "bad because the learning rate was wrong".
+
+        A BIAS, NOT AN OVERRIDE, and sized by how much the surrogate deserves
+        trust right now (its own out-of-bag accuracy, free from the fit). The
+        base weight is small on purpose -- these thresholds are uncalibrated,
+        and weighting a guess heavily just produces a confident guess.
+        """
+        from agents import xai_direction
+
+        votes = xai_direction.architecture_votes(evidence)
+        if not votes:
+            return candidate
+        accuracy = xai_direction.surrogate_accuracy(sm)
+        steps = xai_direction.weighted_step(votes, accuracy, self.xai_weight)
+        if not steps:
+            return candidate
+
+        out = dict(candidate)
+        for param, step in steps.items():
+            lo, hi = SEARCH_SPACE[param]
+            scale = 64.0 if param == "n_embd" else 1.0  # n_embd moves in head-sized chunks
+            moved = float(out.get(param, (lo + hi) / 2)) + step * scale
+            out[param] = int(round(max(lo, min(moved, hi))))
+        # n_head must still divide the width with an even quotient, or train.py
+        # silently re-snaps the width and the region is not the one proposed.
+        out["n_embd"] = surrogate.snap_n_embd(out["n_embd"], out["n_head"])
+        print(f"[Agent 4] XAI direction {votes} (surrogate R2="
+              f"{'n/a' if accuracy is None else f'{accuracy:.2f}'}, weight {self.xai_weight}) "
+              f"-> {steps}")
+        self._last_xai_direction = {"votes": votes, "accuracy": accuracy, "steps": steps}
+        return out
 
     def _candidate_for(self, criterion: str, landscape: Dict[str, Any], sm: Any,
                        f_best: float, seed: int) -> Optional[Dict[str, Any]]:
