@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from state.results_logger import COLUMNS as CURRENT_COLUMNS
-from state.results_logger import PRE_SEED_COLUMNS
+from state.results_logger import PRE_SEED_COLUMNS, PRE_TIME_BREAKDOWN_COLUMNS
 
 # Frozen historical layout used before the 4-LR-group refactor. Its
 # `learning_rate` column is known to contain corrupted values for real runs
@@ -30,14 +30,22 @@ LEGACY_COLUMNS = (
 )
 LEGACY_DROP_FIELDS = {"learning_rate"}
 
-# PRE_SEED_COLUMNS (imported above) is the frozen 25-column layout used between
-# the window_s_fraction addition and the seed addition. Rows are told apart here
-# by FIELD COUNT, so every superseded width needs a frozen tuple or its rows
-# silently stop parsing the moment COLUMNS grows -- they match neither the new
-# width nor LEGACY_COLUMNS and get skipped, which looks identical to having no
-# history. It lives in results_logger because that module also needs it to
-# migrate such a file in place; defining it in both would be two things to keep
-# in sync.
+# PRE_SEED_COLUMNS (25 columns, before the seed addition) and
+# PRE_TIME_BREAKDOWN_COLUMNS (26, before startup_seconds/eval_seconds) are the
+# frozen superseded layouts. Rows are told apart here by FIELD COUNT, so every
+# superseded width needs a frozen tuple or its rows silently stop parsing the
+# moment COLUMNS grows -- they match neither the new width nor LEGACY_COLUMNS
+# and get skipped, which looks identical to having no history at all.
+#
+# THAT IS NOT HYPOTHETICAL. Adding the two timing columns without touching this
+# dispatch took results.tsv, region_geometry.tsv, seed_variance.tsv and
+# size_sweep.tsv to ZERO rows each in one edit -- every measurement this
+# project has made, invisible, with no error raised anywhere. In-place header
+# migration does not save you: it only runs when a file is WRITTEN, and these
+# experiment files are only ever read.
+#
+# They live in results_logger because that module also needs them to migrate a
+# file in place; defining them in both would be two things to keep in sync.
 
 # Statuses whose val_bpb is a synthetic placeholder, not a measured result:
 # "dry_run" (agents/agent1_training_specialist.py::train_model) returns
@@ -215,6 +223,9 @@ def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Di
                         continue
                 if len(fields) == len(CURRENT_COLUMNS):
                     row = _coerce_row(CURRENT_COLUMNS, fields, "current")
+                elif len(fields) == len(PRE_TIME_BREAKDOWN_COLUMNS):
+                    row = _coerce_row(PRE_TIME_BREAKDOWN_COLUMNS, fields,
+                                      "pre_time_breakdown")
                 elif len(fields) == len(PRE_SEED_COLUMNS):
                     row = _coerce_row(PRE_SEED_COLUMNS, fields, "pre_seed")
                 elif len(fields) == len(LEGACY_COLUMNS):

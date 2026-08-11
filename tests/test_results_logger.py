@@ -73,8 +73,13 @@ def test_previous_schema_is_never_silently_appended_to(tmp_path):
     under another, unparseable as a table) -- and an append-only change now
     satisfies that by MIGRATING instead of parking, which keeps the history.
     Parking is still asserted for headers that can't be migrated, below."""
+    from state.results_logger import SUPERSEDED_SCHEMAS
+
     path = tmp_path / "results.tsv"
-    old_header = "\t".join(COLUMNS[:-1])  # the schema one column back
+    # The most recent REAL superseded layout, not COLUMNS[:-1]: a schema change
+    # can append more than one column at a time, and then COLUMNS[:-1] is a
+    # width that never existed and is correctly parked rather than migrated.
+    old_header = "\t".join(SUPERSEDED_SCHEMAS[0])
     path.write_text(old_header + "\n" + "2024-01-01T00:00:00\trun_0000\t8\n")
 
     log_result("run_0001", {"n_layer": 8}, {"val_bpb": 1.0, "status": "ok"}, results_path=str(path))
@@ -186,8 +191,8 @@ def test_rows_written_before_the_seed_column_still_load(tmp_path):
     shape."""
     from state.results_analysis import PRE_SEED_COLUMNS
 
-    assert len(PRE_SEED_COLUMNS) == len(COLUMNS) - 1
-    assert PRE_SEED_COLUMNS == tuple(c for c in COLUMNS if c != "seed")
+    assert PRE_SEED_COLUMNS == tuple(
+        c for c in COLUMNS if c not in ("seed", "startup_seconds", "eval_seconds"))
 
     path = tmp_path / "archived.tsv"
     values = {"timestamp": "2026-08-06T18:57:44", "run_id": "run_0029", "n_layer": "19",
@@ -205,3 +210,49 @@ def test_rows_written_before_the_seed_column_still_load(tmp_path):
     assert rows[0]["val_bpb"] == 1.319072
     assert rows[0]["window_s_fraction"] == 0.368
     assert "seed" not in rows[0]  # honestly absent, never fabricated as 42
+
+
+def test_every_superseded_width_still_parses(tmp_path):
+    """THE GUARD THAT WAS MISSING. load_results tells rows apart by FIELD
+    COUNT, so a superseded layout that is frozen in results_logger but absent
+    from results_analysis's dispatch does not error -- its rows are skipped,
+    which is indistinguishable from the file being empty.
+
+    Adding startup_seconds/eval_seconds without updating that dispatch took
+    results.tsv, region_geometry.tsv, seed_variance.tsv and size_sweep.tsv to
+    zero rows each in a single edit. In-place migration does not cover it:
+    that only runs when a file is WRITTEN, and the experiment files are only
+    ever read.
+    """
+    from state.results_analysis import load_results
+    from state.results_logger import SUPERSEDED_SCHEMAS
+
+    for i, schema in enumerate(SUPERSEDED_SCHEMAS):
+        values = {"timestamp": "2026-08-06T18:57:44", "run_id": f"run_{i:04d}",
+                  "n_layer": "19", "n_embd": "832", "n_head": "13",
+                  "val_bpb": "1.319072", "status": "remote_ok"}
+        path = tmp_path / f"schema_{len(schema)}.tsv"
+        path.write_text("\t".join(schema) + "\n"
+                        + "\t".join(values.get(c, "") for c in schema) + "\n",
+                        encoding="utf-8")
+
+        rows = load_results(str(path))
+        assert len(rows) == 1, (
+            f"a {len(schema)}-column row was skipped: that width is frozen in "
+            f"SUPERSEDED_SCHEMAS but missing from load_results' dispatch")
+        assert rows[0]["val_bpb"] == 1.319072
+
+
+def test_the_real_results_files_on_disk_still_parse():
+    """The end-to-end version of the above, against the actual measurements
+    this project has made. Cheap, and it fails loudly the moment a schema
+    change orphans them."""
+    import os
+
+    from state.results_analysis import load_results
+
+    for name in ("results.tsv", "state/region_geometry.tsv",
+                 "state/seed_variance.tsv", "state/size_sweep.tsv"):
+        if not os.path.exists(name):
+            continue
+        assert load_results(name), f"{name} parsed to zero rows"

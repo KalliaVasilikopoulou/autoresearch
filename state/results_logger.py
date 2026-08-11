@@ -66,6 +66,14 @@ COLUMNS = [
     # made seed-to-seed spread unmeasurable after the fact; that history cannot
     # be recovered retroactively, only recorded from here on.
     "seed",
+    # The rest of a run's wall clock. training_time alone is only ~62% of it,
+    # so a third of every run was unrecorded -- and the three parts scale with
+    # different things: startup is roughly fixed, training scales with
+    # TOKEN_BUDGET, eval scales with prepare.EVAL_TOKENS. Sizing the token
+    # budget without them is guesswork, which is why they are logged rather
+    # than merely printed.
+    "startup_seconds",
+    "eval_seconds",
 ]
 
 # Frozen superseded layouts, newest first. A file written under one of these is
@@ -88,7 +96,16 @@ PRE_SEED_COLUMNS = (
     "region_id", "window_s_fraction",
 )
 
-SUPERSEDED_SCHEMAS = (PRE_SEED_COLUMNS,)
+PRE_TIME_BREAKDOWN_COLUMNS = (
+    "timestamp", "run_id", "n_layer", "n_embd", "n_head",
+    "embedding_lr", "unembedding_lr", "matrix_lr", "scalar_lr",
+    "weight_decay", "warmup_ratio", "batch_size", "val_bpb", "training_time",
+    "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps", "depth",
+    "status", "holdout_val_bpb", "budget_shortfall_pct", "device",
+    "region_id", "window_s_fraction", "seed",
+)
+
+SUPERSEDED_SCHEMAS = (PRE_TIME_BREAKDOWN_COLUMNS, PRE_SEED_COLUMNS)
 
 # Karpathy's published baseline for DEPTH=8 on the same dataset/budget.
 # Update this if you find a more precise figure.
@@ -212,6 +229,9 @@ def log_result(
         # when the hyperparams file failed to load and train.py fell back to
         # its default, which is the case this ordering is here to catch.
         "seed": metrics.get("seed", hyperparams.get("seed", "")),
+        # Measured by train.py, never derivable from anything else here.
+        "startup_seconds": metrics.get("startup_seconds", ""),
+        "eval_seconds": metrics.get("eval_seconds", ""),
     }
 
     with open(path, "a", newline="") as f:

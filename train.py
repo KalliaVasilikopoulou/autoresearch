@@ -867,8 +867,10 @@ budget_shortfall_pct = max(0.0, 100.0 * (TOKEN_BUDGET - total_tokens) / TOKEN_BU
 # agents/remote_runner.py and drop a training run that actually succeeded).
 print("[train.py] Starting validation eval...")
 model.eval()
+t_start_eval = time.time()
 with autocast_ctx:
     val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
+eval_seconds = time.time() - t_start_eval
 
 # Final summary
 t_end = time.time()
@@ -880,6 +882,16 @@ print("---")
 print(f"val_bpb:          {val_bpb:.6f}")
 print(f"training_seconds: {total_training_time:.1f}")
 print(f"total_seconds:    {t_end - t_start:.1f}")
+# WHERE THE TIME ACTUALLY GOES. Only training_seconds was ever reported, and
+# it is 61-65% of a run -- so a third of every run was unaccounted for and any
+# decision about the token budget was being made half-blind. It matters
+# because these three scale with completely different things: startup is
+# roughly fixed, training scales with TOKEN_BUDGET, and eval scales with
+# prepare.EVAL_TOKENS -- which is 21.0M, i.e. 1.68x the entire training
+# budget. Cutting TOKEN_BUDGET alone therefore cannot take a run below
+# startup + eval, however far it is cut.
+print(f"startup_seconds:  {startup_time:.1f}")
+print(f"eval_seconds:     {eval_seconds:.1f}")
 print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
 print(f"mfu_percent:      {steady_state_mfu:.2f}")
 print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")

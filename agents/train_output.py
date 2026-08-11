@@ -39,6 +39,12 @@ FIELDS: Dict[str, Tuple[str, Callable[[str], Any]]] = {
     "val_bpb:": ("val_bpb", float),
     "training_seconds:": ("training_time", float),
     "total_seconds:": ("total_seconds", float),
+    # The other two thirds of a run. They scale with different things --
+    # startup is roughly fixed, eval scales with prepare.EVAL_TOKENS, and only
+    # training scales with TOKEN_BUDGET -- so the budget cannot be sized
+    # sensibly without seeing them apart.
+    "startup_seconds:": ("startup_seconds", float),
+    "eval_seconds:": ("eval_seconds", float),
     "peak_vram_mb:": ("peak_vram_mb", float),
     "mfu_percent:": ("mfu_percent", float),
     "total_tokens_m:": ("total_tokens_M", float),
