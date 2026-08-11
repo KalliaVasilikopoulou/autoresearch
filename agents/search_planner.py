@@ -28,6 +28,11 @@ NOISE_FLOOR_PATH_DEFAULT = "state/noise_floor.json"
 #: Looked for beside whatever noise_floor.json a caller passes, so redirecting
 #: a state directory redirects both. See _load_sigma.
 SEED_VARIANCE_FILENAME = "seed_variance.json"
+#: scripts/region_geometry.py's in-region measurement. Preferred over the
+#: seed-variance one because it is the RIGHT quantity for a within-region
+#: decision: measured with the architecture frozen, across configurations that
+#: all sit inside one fence. See _load_sigma.
+REGION_GEOMETRY_FILENAME = "region_geometry.json"
 REPORT_DIR_DEFAULT = "reports/agent1_search_plan"
 DEFAULT_SIGMA = 0.01  # conservative fallback if noise_floor.json is missing
 
@@ -88,16 +93,48 @@ def _seed_sigma(seed_variance_path: str) -> Optional[float]:
     return stds[mid] if len(stds) % 2 else (stds[mid - 1] + stds[mid]) / 2
 
 
+def measured_a_within(state_dir: str) -> Optional[float]:
+    """The in-region noise, ONLY if it has actually been measured.
+
+    Returns None rather than a fallback, and that distinction is load-bearing.
+    `_load_sigma` degrades to DEFAULT_SIGMA = 0.01 when nothing has been
+    measured, which is ~7.5x the real value (0.001342) -- and any rule that
+    ABANDONS a region on the strength of that number would retire essentially
+    every region on a fresh checkout, silently. A decision that throws work away
+    has to be backed by a measurement or not made at all.
+
+    Deliberately reads only region_geometry.json. seed_variance.json measures
+    across DIFFERENT architectures and noise_floor.json holds the seed fixed;
+    neither is the within-region quantity a saturation test needs.
+    """
+    path = Path(state_dir) / REGION_GEOMETRY_FILENAME
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text()).get("a_within")
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None
+    return float(value) if isinstance(value, (int, float)) and value > 0 else None
+
+
 def _load_sigma(noise_floor_path: str,
                 seed_variance_path: Optional[str] = None) -> float:
     """The measurement noise every "is this difference real" test is sized
     against.
 
-    seed_variance_path defaults to seed_variance.json BESIDE noise_floor_path,
-    never to a fixed repo-root location: every caller that redirects its state
-    directory (tests, or a campaign with a custom state_dir) must get its own
-    file, or the redirection silently only half applies and the real repo's
-    measurement leaks into an isolated run.
+    Three sources, most specific first, all looked for BESIDE noise_floor_path
+    so redirecting a state directory redirects all of them (a fixed repo-root
+    default would let the real repo's measurement leak into an isolated run):
+
+      1. region_geometry.json's `a_within` -- one configuration repeated across
+         seeds with the ARCHITECTURE FROZEN, i.e. exactly the noise a
+         within-region decision faces. Measured 0.001342.
+      2. seed_variance.json -- the same idea but measured across three
+         DIFFERENT architectures, so it is a campaign-wide figure (0.00197) and
+         too broad for a within-region question.
+      3. noise_floor.json -- seed, data and budget all fixed, so it captures
+         only bf16/kernel nondeterminism (0.000797) and no statistical
+         variation whatsoever.
 
     Prefers the SEED-inclusive spread when it has been measured. This ordering
     is the whole correction: state/noise_floor.json repeats one configuration
@@ -108,8 +145,21 @@ def _load_sigma(noise_floor_path: str,
     parameters whose true effect is smaller than the run-to-run bounce were
     being kept and tuned.
     """
+    state_dir = Path(noise_floor_path).parent
+
+    # Most specific first. Each level below measures something broader and
+    # therefore less appropriate for a within-region judgement.
+    geometry = state_dir / REGION_GEOMETRY_FILENAME
+    if geometry.exists():
+        try:
+            a_within = json.loads(geometry.read_text()).get("a_within")
+            if isinstance(a_within, (int, float)) and a_within > 0:
+                return float(a_within)
+        except (json.JSONDecodeError, OSError, AttributeError):
+            pass
+
     if seed_variance_path is None:
-        seed_variance_path = str(Path(noise_floor_path).parent / SEED_VARIANCE_FILENAME)
+        seed_variance_path = str(state_dir / SEED_VARIANCE_FILENAME)
     seed_sigma = _seed_sigma(seed_variance_path)
     if seed_sigma is not None:
         return seed_sigma

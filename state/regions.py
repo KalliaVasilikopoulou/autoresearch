@@ -82,6 +82,12 @@ PAUSED = "exploitation_paused"
 CAPACITY_PAUSED = "capacity_paused"
 NO_OPTIMUM = "no_optimum"
 LOCAL_OPTIMUM = "local_optimum"
+#: The real variation left inside the region has fallen to the measurement
+#: noise, so no amount of further searching can rank what is in there. Terminal,
+#: and a DIFFERENT claim from local_optimum: that one says "we stopped
+#: improving" (which can be bad luck and can recover), this one says "there is
+#: nothing here we are able to read". See Region.is_saturated.
+SATURATED = "saturated"
 MERGED = "merged"
 
 #: Flags that still consume GPU budget. PAUSED regions are kept for a later
@@ -308,6 +314,49 @@ class Region:
             if v < best - min_improvement:
                 best, last_improved = v, i
         return len(values) - 1 - last_improved
+
+    def real_signal(self, a_within: float, min_runs: int = 5) -> Optional[float]:
+        """How much genuine configuration-to-configuration variation is left
+        here, with the measurement noise removed.
+
+        The spread you observe already CONTAINS the noise -- every run's score
+        is its true value plus a wobble of size `a_within` -- and spreads add
+        as squares, so:
+
+            real = sqrt(max(0, observed^2 - a_within^2))
+
+        None until `min_runs` measurements exist: a standard deviation from two
+        or three points is mostly noise itself, and this number decides whether
+        to abandon a region.
+        """
+        if len(self.val_bpbs) < max(2, min_runs):
+            return None
+        observed = statistics.stdev(self.val_bpbs)
+        return math.sqrt(max(0.0, observed ** 2 - a_within ** 2))
+
+    def is_saturated(self, a_within: float, min_runs: int = 5,
+                     margin: float = 1.0) -> Optional[bool]:
+        """Has this region run out of readable differences?
+
+        True when the real variation left has fallen to the noise floor:
+        whatever separates the configurations here can no longer be measured,
+        so more runs cannot rank them however many you spend. That is a
+        stronger and better-evidenced claim than "no improvement in 15 runs",
+        because it says WHY the region is finished rather than only that it
+        stopped moving -- a region can also stop moving because the search got
+        unlucky, and that recovers.
+
+        Measured instance of the failure this prevents: at fence radius 0.02
+        the real signal was 7% of the noise, so a region opened there would be
+        saturated on arrival and every run spent inside it would be measuring
+        nothing. At 0.05 it is 8x the noise. (scripts/region_geometry.py)
+
+        None when there is not yet enough evidence to say.
+        """
+        real = self.real_signal(a_within, min_runs=min_runs)
+        if real is None:
+            return None
+        return real <= a_within * margin
 
     def elite_score(self) -> Optional[float]:
         """How good this region is, for ranking it against the others.

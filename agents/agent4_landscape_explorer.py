@@ -68,6 +68,7 @@ from state.regions import (
     LOCAL_OPTIMUM,
     NO_OPTIMUM,
     PAUSED,
+    SATURATED,
     Region,
     RegionRegistry,
     distance,
@@ -179,6 +180,20 @@ class Agent4LandscapeExplorer:
         except (OSError, yaml.YAMLError) as e:
             print(f"[Agent 4] Could not read {config_path}: {e}")
             return {}
+
+    def _a_within(self) -> Optional[float]:
+        """The in-region measurement noise -- or None when it has never been
+        measured, in which case the saturation test simply does not run.
+
+        Not `_load_sigma`, which falls back to DEFAULT_SIGMA = 0.01 when
+        nothing has been measured. That is ~7.5x the real value (0.001342), and
+        at 0.01 almost any region looks saturated -- so a fresh checkout would
+        silently retire every region it opened. A verdict that throws work away
+        must rest on a measurement or not be reached.
+        """
+        from agents.search_planner import measured_a_within
+
+        return measured_a_within(str(self.registry_path.parent))
 
     @property
     def improvement_margin(self) -> float:
@@ -362,6 +377,24 @@ class Agent4LandscapeExplorer:
         # lifted saw runs_since_improvement = 15 and retired the region as a
         # local optimum. That happened on the first real 20-run campaign, at
         # exactly run 16.
+        # SATURATION FIRST -- it is the better-evidenced claim. "No improvement
+        # in 15 runs" says the region stopped moving, which can be bad luck and
+        # can recover. Saturation says the differences still inside it are
+        # smaller than we can measure, so no further spending can rank them.
+        # It also explains WHY, which a run counter never does.
+        a_within = self._a_within()
+        if a_within is not None:
+            saturated = region.is_saturated(a_within,
+                                            min_runs=self.min_runs_before_judgement)
+            if saturated and not alone:
+                return self._retire(region, registry, SATURATED, at_run, {
+                    "real_signal": region.real_signal(
+                        a_within, min_runs=self.min_runs_before_judgement),
+                    "a_within": a_within,
+                    "n_measured": region.n_measured,
+                    "best_val_bpb": region.best_val_bpb,
+                })
+
         stuck_for = region.runs_since_improvement(
             self.improvement_margin, skip_first=self._cold_start_runs(region))
 
