@@ -6,9 +6,43 @@
 # Re-derived 2026-08-05 against state/noise_floor.json and the 582 finite runs
 # in archive/campaign-20260804-timebudget/results.tsv.
 #
+# 2026-08-11: EVERY NUMBER BELOW WAS MEASURED AT TOKEN_BUDGET = 12.5M TOKENS.
+# The budget is now 4.19M (see prepare.py), and noise is a property of how much
+# training a run gets -- less training leaves a run further from convergence and
+# so more dependent on its initial weights. Re-measured at the new budget,
+# 15 runs, 3 configs x 5 seeds, state/seed_variance.json:
+#
+#   sigma_seed = 0.003215   campaign-wide, up 1.63x from 0.00197
+#   _load_sigma returns 0.003729 (the MEDIAN per-config spread, which is what
+#   the freeze bar and stagnation test are sized against) -- up 2.8x from the
+#   0.001342 a_within they were using, because that came from
+#   region_geometry.json, a 12.5M measurement.
+#
+#   Freeze bar (2*sigma):  0.002684 -> 0.007458.
+#
+#   sigma_paired_diff = 0.004655 against an independent reference of 0.004547,
+#   so 0% of the seed effect is now SHARED across configurations (it was 4%).
+#   Nothing cancels in a comparison.
+#
+#   PER-CONFIG SPREAD VARIES 5x: 0.003729 / 0.004073 / 0.000724, and the quiet
+#   one is the SMALLEST model. At 187 optimizer steps the large models are the
+#   undertrained ones. No single global threshold describes this space well;
+#   the median is a compromise, not a fact.
+#
+#   The frontier pair FLIPPED 3-2 at a gap of 0.003563, which would need 32
+#   seeds each to resolve. Treat the top of the ladder as a plateau.
+#
+# NOTHING BELOW THIS BLOCK HAS BEEN RE-DERIVED. The consumers that read
+# _load_sigma (prune_by_noise_floor, _detect_stagnation) pick the new value up
+# automatically; any HARDCODED number below is still a 12.5M figure and should
+# be treated as stale until re-measured. region_geometry.json is stale too, so
+# measured_a_within() returns None and the saturation rule is currently
+# disabled by design -- re-run scripts/region_geometry.py to restore it.
+#
 # 2026-08-07: scripts/seed_variance.py (15 runs, 3 configs x 5 seeds) measured
 # the scale that was MISSING from everything below, and it changes which
 # yardstick is correct. Read this part first.
+# (SUPERSEDED by the block above, kept because the reasoning still applies.)
 #
 #   sigma_seed   = 0.00197    MEDIAN of the per-config seed spreads
 #                  (measured 0.00154 / 0.00197 / 0.00887 -- a ~6x range that

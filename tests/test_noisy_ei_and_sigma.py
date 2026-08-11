@@ -132,8 +132,19 @@ def test_agent1_actually_passes_its_region_through_to_the_planner():
 
 
 def _write(tmp_path, name, payload):
+    """Writes a measurement report, stamped with the token budget in force.
+
+    The stamp is not decoration: noise is a property of how much training a run
+    gets (sigma_seed went 0.00197 -> 0.003215 when TOKEN_BUDGET went 12.5M ->
+    4.19M), so _load_sigma refuses a report from another budget, and an
+    unstamped one reads as stale. A fixture without it is not testing the
+    loader, it is testing the refusal.
+    """
+    from prepare import TOKEN_BUDGET
+
     p = tmp_path / name
-    p.write_text(json.dumps(payload), encoding="utf-8")
+    p.write_text(json.dumps({"token_budget": int(TOKEN_BUDGET), **payload}),
+                 encoding="utf-8")
     return str(p)
 
 
@@ -223,3 +234,50 @@ def test_the_new_sigma_raises_the_freeze_bar_as_intended(tmp_path):
     assert old_bar == pytest.approx(0.001594)
     assert new_bar == pytest.approx(0.00394)
     assert new_bar / old_bar == pytest.approx(2.47, rel=0.01)
+
+
+# --- a noise floor is not portable across token budgets ---------------------
+
+
+def test_a_sigma_measured_at_another_budget_is_refused(tmp_path):
+    """sigma_seed went 0.00197 -> 0.003215 when TOKEN_BUDGET went 12.5M ->
+    4.19M: less training leaves a run further from convergence and so more
+    dependent on its initial weights. A stale floor is wrong in one consistent
+    direction -- it UNDERSTATES the noise, so sub-noise parameters stay in the
+    search and unresolvable differences get called real."""
+    from prepare import TOKEN_BUDGET
+
+    floor = _write(tmp_path, "noise_floor.json", {"std": 0.000797})
+    (tmp_path / "seed_variance.json").write_text(json.dumps(
+        {"token_budget": int(TOKEN_BUDGET) * 3,
+         "per_config": {"0": {"std": 0.00197}}}), encoding="utf-8")
+
+    # falls through to the noise floor rather than using another budget's sigma
+    assert search_planner._load_sigma(floor) == pytest.approx(0.000797)
+
+
+def test_a_report_with_no_budget_stamp_is_treated_as_stale(tmp_path):
+    """Unstamped is positive evidence of age, not an absence of it: every
+    report on disk when the stamp was introduced was measured at 12.5M."""
+    floor = _write(tmp_path, "noise_floor.json", {"std": 0.000797})
+    (tmp_path / "seed_variance.json").write_text(
+        json.dumps({"per_config": {"0": {"std": 0.00197}}}), encoding="utf-8")
+
+    assert search_planner._load_sigma(floor) == pytest.approx(0.000797)
+
+
+def test_saturation_will_not_fire_on_a_stale_in_region_noise(tmp_path):
+    """The rule that ABANDONS a region must not run on a number measured under
+    a different amount of training -- it would understate the noise, so regions
+    look further from saturation than they are and keep being searched after
+    they have stopped paying. None means "do not judge", which is the same
+    guard that already covers an absent measurement."""
+    from prepare import TOKEN_BUDGET
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "region_geometry.json").write_text(json.dumps(
+        {"a_within": 0.001342, "token_budget": int(TOKEN_BUDGET) * 3}),
+        encoding="utf-8")
+
+    assert search_planner.measured_a_within(str(state)) is None

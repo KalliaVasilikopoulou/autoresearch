@@ -90,6 +90,7 @@ from state.results_analysis import (
     HYPERPARAM_COLUMNS,
     TUNABLE_COLUMNS,
     load_results,
+    report_at_budget,
     same_token_budget,
 )
 from state.results_logger import log_result
@@ -434,18 +435,9 @@ def architecture_noise(state_dir: Path = Path("state")) -> Tuple[float, str]:
     budget = current_token_budget()
 
     def _fresh(path: Path) -> Optional[Dict[str, Any]]:
-        """The report, or None if it was measured under a different amount of
-        training. A noise floor is not portable across budgets -- sigma_seed
-        went 0.00197 -> 0.003215 when TOKEN_BUDGET went 12.5M -> 4.19M, a 1.6x
-        move -- and a report that predates the stamp cannot claim to match, so
-        it is treated as stale rather than assumed current."""
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            return None
-        return data if data.get("token_budget") == budget else None
+        """One definition of "was this measured under the budget in force",
+        shared with search_planner's _load_sigma and measured_a_within."""
+        return report_at_budget(path, budget)
 
     seedv = _fresh(state_dir / "seed_variance.json")
     if seedv:

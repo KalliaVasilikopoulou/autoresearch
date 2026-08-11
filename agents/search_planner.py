@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from state import surrogate
-from state.results_analysis import HYPERPARAM_COLUMNS, TUNABLE_COLUMNS
+from state.results_analysis import (
+    HYPERPARAM_COLUMNS, TUNABLE_COLUMNS, report_at_budget,
+)
 
 STATE_PATH_DEFAULT = "state/search_planner_state.json"
 NOISE_FLOOR_PATH_DEFAULT = "state/noise_floor.json"
@@ -106,14 +108,20 @@ def measured_a_within(state_dir: str) -> Optional[float]:
     Deliberately reads only region_geometry.json. seed_variance.json measures
     across DIFFERENT architectures and noise_floor.json holds the seed fixed;
     neither is the within-region quantity a saturation test needs.
+
+    A MEASUREMENT FROM ANOTHER TOKEN BUDGET IS NOT A MEASUREMENT HERE, and is
+    refused for the same reason as an absent one. The in-region noise is a
+    property of how much training a run gets: sigma_seed went 0.00197 ->
+    0.003215 when the budget went 12.5M -> 4.19M. A stale a_within understates
+    it, so regions would look further from saturation than they are and keep
+    being searched after they had stopped paying.
     """
-    path = Path(state_dir) / REGION_GEOMETRY_FILENAME
-    if not path.exists():
+    from prepare import TOKEN_BUDGET
+
+    data = report_at_budget(Path(state_dir) / REGION_GEOMETRY_FILENAME, TOKEN_BUDGET)
+    if data is None:
         return None
-    try:
-        value = json.loads(path.read_text()).get("a_within")
-    except (json.JSONDecodeError, OSError, AttributeError):
-        return None
+    value = data.get("a_within")
     return float(value) if isinstance(value, (int, float)) and value > 0 else None
 
 
@@ -145,24 +153,29 @@ def _load_sigma(noise_floor_path: str,
     parameters whose true effect is smaller than the run-to-run bounce were
     being kept and tuned.
     """
+    from prepare import TOKEN_BUDGET
+
     state_dir = Path(noise_floor_path).parent
 
-    # Most specific first. Each level below measures something broader and
-    # therefore less appropriate for a within-region judgement.
-    geometry = state_dir / REGION_GEOMETRY_FILENAME
-    if geometry.exists():
-        try:
-            a_within = json.loads(geometry.read_text()).get("a_within")
-            if isinstance(a_within, (int, float)) and a_within > 0:
-                return float(a_within)
-        except (json.JSONDecodeError, OSError, AttributeError):
-            pass
+    # EVERY LEVEL IS ALSO GATED ON THE TOKEN BUDGET. Noise is a property of how
+    # much training a run gets -- it grew 1.6x when the budget was cut 3x -- so
+    # a measurement from another budget is not a less-specific answer, it is
+    # the wrong one, and wrong in the direction that costs runs: understating
+    # the noise keeps sub-noise parameters in the search and calls unresolvable
+    # differences real. A report with no stamp is treated as stale, because
+    # every report on disk when the stamp was added was measured at 12.5M.
+    geometry = report_at_budget(state_dir / REGION_GEOMETRY_FILENAME, TOKEN_BUDGET)
+    if geometry:
+        a_within = geometry.get("a_within")
+        if isinstance(a_within, (int, float)) and a_within > 0:
+            return float(a_within)
 
     if seed_variance_path is None:
         seed_variance_path = str(state_dir / SEED_VARIANCE_FILENAME)
-    seed_sigma = _seed_sigma(seed_variance_path)
-    if seed_sigma is not None:
-        return seed_sigma
+    if report_at_budget(seed_variance_path, TOKEN_BUDGET) is not None:
+        seed_sigma = _seed_sigma(seed_variance_path)
+        if seed_sigma is not None:
+            return seed_sigma
 
     p = Path(noise_floor_path)
     if not p.exists():

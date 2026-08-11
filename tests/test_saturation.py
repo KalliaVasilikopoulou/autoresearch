@@ -104,7 +104,12 @@ def _agent4(tmp_path, a_within=A):
 
     state = tmp_path / "state"
     state.mkdir(parents=True, exist_ok=True)
-    (state / "region_geometry.json").write_text(json.dumps({"a_within": a_within}))
+    # Stamped with the budget in force: measured_a_within refuses a report
+    # from another one, because the in-region noise a saturation test needs is
+    # a property of how much training a run gets.
+    from prepare import TOKEN_BUDGET
+    (state / "region_geometry.json").write_text(
+        json.dumps({"a_within": a_within, "token_budget": int(TOKEN_BUDGET)}))
     cfg = tmp_path / "agents_config.yaml"
     # llm_mode statistics: the decisions are deterministic either way (the LLM
     # only narrates an already-made verdict), but leaving it on made this file

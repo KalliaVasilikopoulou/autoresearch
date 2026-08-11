@@ -12,6 +12,7 @@ as "unknown", never substitute a fabricated default.
 """
 
 import csv
+import json
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -162,6 +163,38 @@ def same_token_budget(row: Dict[str, Any], budget: float, rel_tol: float = 0.02)
     """
     seen = tokens_seen(row)
     return seen is not None and math.isclose(seen, budget, rel_tol=rel_tol)
+
+
+def report_at_budget(path: Union[str, Path], budget: float) -> Optional[Dict[str, Any]]:
+    """A measurement report's contents, or None if it was not measured under
+    `budget` tokens of training.
+
+    A NOISE FLOOR IS NOT PORTABLE ACROSS BUDGETS. sigma_seed went 0.00197 ->
+    0.003215 when TOKEN_BUDGET went 12.5M -> 4.19M, because less training
+    leaves a run further from convergence and so more dependent on its initial
+    weights. Every threshold sized from a stale floor is then wrong in the SAME
+    direction -- it understates the noise, so differences that cannot be
+    resolved get treated as real, parameters below the noise stay in the
+    search, and regions that are finished keep being searched. All three waste
+    runs.
+
+    A report with no `token_budget` key is treated as stale, not as current.
+    Every report on disk when this stamp was introduced was measured at 12.5M,
+    so "unstamped" is positive evidence of age rather than an absence of it.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    stamped = data.get("token_budget")
+    if not isinstance(stamped, (int, float)):
+        return None
+    return data if math.isclose(float(stamped), float(budget), rel_tol=0.02) else None
 
 
 def holdout_drift(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

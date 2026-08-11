@@ -530,6 +530,11 @@ def main():
         run_all(cells, args.results_path, args.timeout)
 
     report = analyze(args.results_path)
+    # STAMP THE BUDGET. a_within is what the saturation rule and _load_sigma
+    # both read, and it is a property of how much training a run gets -- it is
+    # not portable to another TOKEN_BUDGET. Unstamped reads as stale.
+    from prepare import TOKEN_BUDGET
+    report["token_budget"] = int(TOKEN_BUDGET)
     REPORT_JSON.parent.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     text = render(report)
