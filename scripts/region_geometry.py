@@ -59,6 +59,7 @@ from state.results_analysis import (
     HYPERPARAM_COLUMNS,
     TUNABLE_COLUMNS,
     load_results,
+    same_token_budget,
 )
 from state.results_logger import log_result
 
@@ -91,11 +92,16 @@ def _search_space() -> Dict[str, Tuple[float, float]]:
 
 
 def pick_anchor(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """The campaign's best complete run. The frontier is where the radius
-    actually matters -- a radius calibrated in a bad part of the space would
-    describe a neighbourhood the search never visits."""
+    """The best complete run AT THE BUDGET IN FORCE. The frontier is where the
+    radius actually matters -- a radius calibrated in a bad part of the space
+    would describe a neighbourhood the search never visits, and a frontier
+    established under a different amount of training is not this one. When the
+    budget went 12.5M -> 4.19M the same configuration read 1.2486 -> 1.7063."""
+    from prepare import TOKEN_BUDGET
+
     usable = [r for r in rows
               if r.get("status") in OK_STATUSES
+              and same_token_budget(r, TOKEN_BUDGET)
               and isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
               and not (isinstance(r.get("budget_shortfall_pct"), (int, float))
                        and r["budget_shortfall_pct"] > 0)
