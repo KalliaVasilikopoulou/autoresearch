@@ -588,6 +588,12 @@ def main():
 
     print(render(report, configs))
 
+    # STAMP THE BUDGET INTO THE REPORT. Every consumer of this file sizes a
+    # threshold from it, and a noise floor measured under a different amount of
+    # training is simply the wrong number -- sigma_seed went 0.00197 -> 0.003215
+    # when TOKEN_BUDGET went 12.5M -> 4.19M. Without this the file cannot say
+    # which it is, and a reader has no way to notice it is stale.
+    report["token_budget"] = _current_token_budget()
     REPORT_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_JSON_PATH.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(f"[seed_variance] Written to {REPORT_JSON_PATH}")

@@ -28,7 +28,7 @@
     {
       "budget_shortfall_pct": "0.0",
       "delta": -0.052119000000000026,
-      "delta_sigma": -26.212522098036207,
+      "delta_sigma": -16.20878783082822,
       "n_embd": 320,
       "n_head": 2,
       "n_layer": 7,
@@ -41,7 +41,7 @@
     {
       "budget_shortfall_pct": "0.0",
       "delta": -0.019710000000000116,
-      "delta_sigma": -9.912868830029288,
+      "delta_sigma": -6.129726359784838,
       "n_embd": 480,
       "n_head": 3,
       "n_layer": 11,
@@ -54,7 +54,7 @@
     {
       "budget_shortfall_pct": "0.0",
       "delta": -0.009233999999999964,
-      "delta_sigma": -4.644111150506826,
+      "delta_sigma": -2.8717348151320468,
       "n_embd": 640,
       "n_head": 4,
       "n_layer": 14,
@@ -67,7 +67,7 @@
     {
       "budget_shortfall_pct": "0.0",
       "delta": -0.006288000000000071,
-      "delta_sigma": -3.162461654146347,
+      "delta_sigma": -1.9555413166071676,
       "n_embd": 800,
       "n_head": 5,
       "n_layer": 18,
@@ -80,7 +80,7 @@
     {
       "budget_shortfall_pct": "0.0",
       "delta": -0.003562999999999983,
-      "delta_sigma": -1.7919610168134943,
+      "delta_sigma": -1.1080778802594187,
       "n_embd": 960,
       "n_head": 6,
       "n_layer": 21,
@@ -107,11 +107,11 @@
       2.427832049400891e-05
     ]
   },
-  "sigma": 0.0019883245040317843,
-  "sigma_source": "region_geometry.json (A-between, paired difference)",
-  "step_threshold": 0.0039766490080635685,
-  "steps_below_noise": 1,
+  "sigma": 0.0032154779582512986,
+  "sigma_source": "seed_variance.json (sigma_seed, this budget)",
+  "step_threshold": 0.006430955916502597,
+  "steps_below_noise": 2,
   "still_falling_at_the_top": false,
   "unimodal": true,
-  "verdict": "ONE HILL -- at most one change of direction, so Agent 4 can walk downhill on size instead of exploring it. (1 of 5 steps were below the noise, so those stretches are flat rather than sloped.)"
+  "verdict": "ONE HILL -- at most one change of direction, so Agent 4 can walk downhill on size instead of exploring it. (2 of 5 steps were below the noise, so those stretches are flat rather than sloped.)"
 }

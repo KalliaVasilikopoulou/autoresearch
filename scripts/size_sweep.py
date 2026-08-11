@@ -431,28 +431,39 @@ def architecture_noise(state_dir: Path = Path("state")) -> Tuple[float, str]:
     here: an overstated noise floor can only make this experiment dismiss a
     real wiggle as noise, never manufacture smoothness.
     """
-    geom = state_dir / "region_geometry.json"
-    if geom.exists():
+    budget = current_token_budget()
+
+    def _fresh(path: Path) -> Optional[Dict[str, Any]]:
+        """The report, or None if it was measured under a different amount of
+        training. A noise floor is not portable across budgets -- sigma_seed
+        went 0.00197 -> 0.003215 when TOKEN_BUDGET went 12.5M -> 4.19M, a 1.6x
+        move -- and a report that predates the stamp cannot claim to match, so
+        it is treated as stale rather than assumed current."""
+        if not path.exists():
+            return None
         try:
-            data = json.loads(geom.read_text(encoding="utf-8"))
-            stds = [e["std_of_gap"] for e in (data.get("a_between") or {}).values()
-                    if isinstance(e.get("std_of_gap"), (int, float))]
-            if stds:
-                return max(stds), "region_geometry.json (A-between, paired difference)"
-            if isinstance(data.get("a_within"), (int, float)):
-                return data["a_within"], "region_geometry.json (A-within -- understates)"
-        except (ValueError, KeyError):
-            pass
-    seedv = state_dir / "seed_variance.json"
-    if seedv.exists():
-        try:
-            data = json.loads(seedv.read_text(encoding="utf-8"))
-            for key in ("sigma_seed", "pooled_std", "sigma"):
-                if isinstance(data.get(key), (int, float)):
-                    return data[key], f"seed_variance.json ({key})"
+            data = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
-            pass
-    return FALLBACK_SIGMA, "fallback constant (nothing measured on disk)"
+            return None
+        return data if data.get("token_budget") == budget else None
+
+    seedv = _fresh(state_dir / "seed_variance.json")
+    if seedv:
+        for key in ("sigma_seed", "pooled_std", "sigma"):
+            if isinstance(seedv.get(key), (int, float)):
+                return seedv[key], f"seed_variance.json ({key}, this budget)"
+
+    geom = _fresh(state_dir / "region_geometry.json")
+    if geom:
+        stds = [e["std_of_gap"] for e in (geom.get("a_between") or {}).values()
+                if isinstance(e.get("std_of_gap"), (int, float))]
+        if stds:
+            return max(stds), "region_geometry.json (A-between, this budget)"
+        if isinstance(geom.get("a_within"), (int, float)):
+            return geom["a_within"], "region_geometry.json (A-within -- understates)"
+
+    return FALLBACK_SIGMA, ("fallback constant -- NO NOISE MEASUREMENT AT THIS "
+                            "BUDGET, so every 'below noise' call here is a guess")
 
 
 def fit_scaling_law(params: List[float], ys: List[float]) -> Dict[str, Any]:

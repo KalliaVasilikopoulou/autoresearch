@@ -238,15 +238,65 @@ def test_a_scaling_law_fits_a_scaling_curve(tmp_path):
 def test_the_noise_floor_says_where_it_came_from(tmp_path):
     """A threshold that decides how machinery gets built must never run on a
     guessed constant without saying so."""
+    import json
+
     sigma, source = size_sweep.architecture_noise(tmp_path)  # empty dir
     assert sigma == size_sweep.FALLBACK_SIGMA
     assert "fallback" in source
 
-    (tmp_path / "region_geometry.json").write_text(
-        '{"a_between": {"depth_neighbour": {"std_of_gap": 0.0031}}}', encoding="utf-8")
+    budget = size_sweep.current_token_budget()
+    (tmp_path / "region_geometry.json").write_text(json.dumps(
+        {"token_budget": budget,
+         "a_between": {"depth_neighbour": {"std_of_gap": 0.0031}}}), encoding="utf-8")
     sigma, source = size_sweep.architecture_noise(tmp_path)
     assert sigma == pytest.approx(0.0031)
     assert "region_geometry" in source
+
+
+def test_a_noise_floor_from_another_budget_is_refused(tmp_path):
+    """A noise floor is not portable across budgets: sigma_seed went 0.00197 ->
+    0.003215 when TOKEN_BUDGET went 12.5M -> 4.19M. Reading a stale one would
+    make every "below noise" call in this report wrong in the same direction --
+    understating the noise, so unresolvable steps get reported as real."""
+    import json
+
+    (tmp_path / "region_geometry.json").write_text(json.dumps(
+        {"token_budget": size_sweep.current_token_budget() * 3,
+         "a_between": {"depth_neighbour": {"std_of_gap": 0.0031}}}), encoding="utf-8")
+
+    sigma, source = size_sweep.architecture_noise(tmp_path)
+    assert sigma == size_sweep.FALLBACK_SIGMA
+    assert "NO NOISE MEASUREMENT AT THIS BUDGET" in source
+
+
+def test_a_report_predating_the_budget_stamp_is_treated_as_stale(tmp_path):
+    """It cannot claim to match, so it is not assumed to. Every report on disk
+    when the stamp was added was measured at 12.5M."""
+    import json
+
+    (tmp_path / "seed_variance.json").write_text(
+        json.dumps({"sigma_seed": 0.00197}), encoding="utf-8")
+
+    sigma, _ = size_sweep.architecture_noise(tmp_path)
+    assert sigma == size_sweep.FALLBACK_SIGMA
+
+
+def test_the_current_budgets_measurement_wins_over_an_older_experiment(tmp_path):
+    """Both stamped and both current: seed_variance is preferred because it
+    measures the seed effect directly, where region_geometry's A-between was
+    anchor-dominated and only ever an upper bound."""
+    import json
+
+    budget = size_sweep.current_token_budget()
+    (tmp_path / "region_geometry.json").write_text(json.dumps(
+        {"token_budget": budget,
+         "a_between": {"d": {"std_of_gap": 0.0099}}}), encoding="utf-8")
+    (tmp_path / "seed_variance.json").write_text(json.dumps(
+        {"token_budget": budget, "sigma_seed": 0.0032}), encoding="utf-8")
+
+    sigma, source = size_sweep.architecture_noise(tmp_path)
+    assert sigma == pytest.approx(0.0032)
+    assert "seed_variance" in source
 
 
 def test_a_row_from_a_different_token_budget_is_not_reused(tmp_path):
