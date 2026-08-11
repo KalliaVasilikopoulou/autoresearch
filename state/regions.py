@@ -197,6 +197,88 @@ def distance(a: Dict[str, Any], b: Dict[str, Any],
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(va, vb))) / math.sqrt(len(va))
 
 
+#: A region's own noise estimate is only trusted once its runs are packed
+#: closer together than this fraction of the fence radius. The estimator reads
+#: the spread between NEAREST NEIGHBOURS, so if the closest pair is still half a
+#: region apart that spread is mostly real variation, not noise -- and an
+#: overstated noise floor makes a region look saturated when it is merely
+#: sparsely sampled.
+LOCAL_NOISE_MAX_NN_FRACTION = 0.5
+
+#: Below this many measured runs there are too few neighbour pairs for the
+#: estimate to mean anything.
+LOCAL_NOISE_MIN_RUNS = 5
+
+
+def local_noise(
+    configs: Sequence[Dict[str, Any]],
+    values: Sequence[float],
+    radius: float,
+    min_runs: int = LOCAL_NOISE_MIN_RUNS,
+    max_nn_fraction: float = LOCAL_NOISE_MAX_NN_FRACTION,
+    bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    columns: Sequence[str] = TUNABLE_COLUMNS,
+) -> Optional[float]:
+    """The measurement noise INSIDE ONE REGION, estimated from that region's
+    own runs. None when the region cannot support the estimate.
+
+    WHY LOCAL AT ALL. The campaign-wide figure is a median over configurations
+    whose spreads differ 5x (measured 0.003729 / 0.004073 / 0.000724 at
+    TOKEN_BUDGET=4.19M, the quietest being the SMALLEST model). One global
+    threshold is therefore roughly right at the frontier and badly wrong
+    elsewhere: too loose for a quiet region, where it freezes parameters that
+    genuinely matter, and too tight for a noisy one, where it keeps sub-noise
+    parameters in the search. Neither error announces itself.
+
+    HOW. For each run, take its nearest neighbour in normalized tunable space
+    and the gap between their scores. Two configurations a very short distance
+    apart differ mostly by noise, so `mean(gap^2) / 2` estimates its variance --
+    the standard nearest-neighbour variance estimator, and it costs nothing
+    because it reuses runs the region has already paid for.
+
+    WHY THIS SHAPE SUITS SATURATION EXACTLY. The estimate is an UPPER bound: it
+    also contains whatever real variation exists across a neighbour gap. Paired
+    with `real_signal`, which compares it against the spread across the WHOLE
+    region, that stops being a flaw and becomes the question worth asking --
+    is there more variation at region scale than at the smallest scale sampled?
+    Flat region: the two are equal and the region reads as saturated. Real
+    structure: the region-wide spread is larger and it does not. Both numbers
+    come from the same runs, so they need no common calibration, and the test
+    stops depending on a constant measured somewhere else entirely.
+
+    The guards matter in one direction. Too few runs, or runs still spread
+    across most of the region, and the estimate is inflated -- which would
+    retire a region for being sparsely sampled rather than for being finished.
+    Both return None, and None means "do not judge".
+    """
+    n = min(len(configs), len(values))
+    if n < max(3, min_runs):
+        return None
+
+    gaps: List[float] = []
+    nn_distances: List[float] = []
+    for i in range(n):
+        best_d, best_j = None, None
+        for j in range(n):
+            if i == j:
+                continue
+            d = distance(configs[i], configs[j], bounds, columns)
+            if best_d is None or d < best_d:
+                best_d, best_j = d, j
+        if best_j is None or best_d is None:
+            continue
+        nn_distances.append(best_d)
+        gaps.append(float(values[i]) - float(values[best_j]))
+
+    if len(gaps) < max(3, min_runs):
+        return None
+    # Median, not mean: one duplicated configuration would otherwise drag the
+    # typical neighbour distance to nearly zero and wave the estimate through.
+    if radius > 0 and statistics.median(nn_distances) > max_nn_fraction * radius:
+        return None
+    return math.sqrt(sum(g * g for g in gaps) / (2.0 * len(gaps)))
+
+
 def _absorb_history(survivor: "Region", absorbed: "Region") -> None:
     """Fold one region's runs into another's, IN CHRONOLOGICAL ORDER.
 

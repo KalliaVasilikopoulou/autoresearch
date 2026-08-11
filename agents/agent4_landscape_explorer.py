@@ -75,7 +75,7 @@ from state.regions import (
     distance,
     same_architecture,
 )
-from state.results_analysis import HYPERPARAM_COLUMNS
+from state.results_analysis import HYPERPARAM_COLUMNS, TUNABLE_COLUMNS
 from state.surrogate import fit_surrogate
 
 # Lifecycle verdicts from judge(). Strings rather than an enum to match how
@@ -204,19 +204,60 @@ class Agent4LandscapeExplorer:
             print(f"[Agent 4] Could not read {config_path}: {e}")
             return {}
 
-    def _a_within(self) -> Optional[float]:
+    def _a_within(self, region: Optional[Region] = None) -> Optional[float]:
         """The in-region measurement noise -- or None when it has never been
         measured, in which case the saturation test simply does not run.
 
-        Not `_load_sigma`, which falls back to DEFAULT_SIGMA = 0.01 when
-        nothing has been measured. That is ~7.5x the real value (0.001342), and
-        at 0.01 almost any region looks saturated -- so a fresh checkout would
-        silently retire every region it opened. A verdict that throws work away
-        must rest on a measurement or not be reached.
+        THE REGION'S OWN RUNS COME FIRST when they can support the estimate.
+        The campaign-wide figure is a median over configurations whose spreads
+        differ 5x (0.003729 / 0.004073 / 0.000724 at TOKEN_BUDGET=4.19M), so it
+        is roughly right at the frontier and wrong everywhere else -- and a
+        region is judged against its own neighbourhood, not against the median
+        of somewhere else. `state.regions.local_noise` reads the spread between
+        nearest-neighbour configurations here, which costs nothing because
+        those runs are already paid for.
+
+        Falls back to the campaign-wide measurement, and then to None. Not
+        `_load_sigma`, which degrades to DEFAULT_SIGMA = 0.01 when nothing has
+        been measured -- ~7.5x the real value, at which almost any region looks
+        saturated, so a fresh checkout would silently retire every region it
+        opened. A verdict that throws work away must rest on a measurement or
+        not be reached.
         """
         from agents.search_planner import measured_a_within
 
+        if region is not None:
+            local = self._local_noise(region)
+            if local is not None:
+                return local
         return measured_a_within(str(self.registry_path.parent))
+
+    def _local_noise(self, region: Region) -> Optional[float]:
+        """`local_noise` for one region, or None if its runs cannot support it.
+
+        The configurations come from results.tsv rather than the registry: a
+        Region records run ids and scores, not the hyperparameters behind them,
+        and this estimator needs the distances between them.
+        """
+        from state.regions import local_noise
+        from state.results_analysis import load_results
+
+        measured = dict(zip(region.measured_run_ids, region.val_bpbs))
+        if not measured:
+            return None
+        try:
+            rows = load_results(str(self.results_path))
+        except OSError:
+            return None
+
+        configs, values = [], []
+        for row in rows:
+            run_id = str(row.get("run_id", ""))
+            if run_id in measured and all(c in row for c in TUNABLE_COLUMNS):
+                configs.append(row)
+                values.append(measured[run_id])
+        return local_noise(configs, values, radius=self.region_radius,
+                           min_runs=self.min_runs_before_judgement)
 
     @property
     def improvement_margin(self) -> float:
@@ -449,7 +490,7 @@ class Agent4LandscapeExplorer:
         # can recover. Saturation says the differences still inside it are
         # smaller than we can measure, so no further spending can rank them.
         # It also explains WHY, which a run counter never does.
-        a_within = self._a_within()
+        a_within = self._a_within(region)
         if a_within is not None:
             saturated = region.is_saturated(a_within,
                                             min_runs=self.min_runs_before_judgement)

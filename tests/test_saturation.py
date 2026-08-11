@@ -207,3 +207,99 @@ def test_a_region_with_signal_left_survives_judgement(tmp_path):
         reg.assign_run(good.region_id, f"g{i}", v)
 
     assert agent4.judge(good, reg, at_run=20) == "keep"
+
+
+# --- a region is judged against its OWN noise, not the campaign median -------
+
+
+def _cfg(**over):
+    base = {"n_layer": 12, "n_embd": 512, "n_head": 8, "window_s_fraction": 0.5,
+            "embedding_lr": 0.5, "unembedding_lr": 0.004, "matrix_lr": 0.04,
+            "scalar_lr": 0.5, "weight_decay": 0.2, "warmup_ratio": 0.05,
+            "batch_size": 8192}
+    base.update(over)
+    return base
+
+
+def _spread_configs(n, jitter):
+    """`n` configurations packed within `jitter` of each other in matrix_lr,
+    which is one of the eight tunables the distance is measured over."""
+    return [_cfg(matrix_lr=0.04 + jitter * i / max(1, n - 1)) for i in range(n)]
+
+
+def test_local_noise_reads_the_spread_between_nearest_neighbours():
+    """Configurations a short distance apart differ mostly by noise, so the
+    gap between them estimates it -- and it costs nothing, because those runs
+    are already paid for."""
+    from state.regions import local_noise
+
+    configs = _spread_configs(8, 0.002)
+    # a flat response plus a +-0.004 wobble: nothing but noise to find
+    values = [1.30 + (0.004 if i % 2 else -0.004) for i in range(8)]
+
+    est = local_noise(configs, values, radius=0.05, min_runs=5)
+    assert est == pytest.approx(0.008, rel=0.35)
+
+
+def test_local_noise_is_none_when_the_region_is_too_sparsely_sampled():
+    """THE GUARD THAT MATTERS. The estimate reads neighbour gaps, so if the
+    closest pair is still most of a region apart that gap is real variation
+    rather than noise -- and an overstated noise floor retires a region for
+    being sparsely sampled instead of for being finished."""
+    from state.regions import local_noise
+
+    spread_out = [_cfg(matrix_lr=lr) for lr in (0.006, 0.05, 0.1, 0.15, 0.19)]
+    values = [1.40, 1.35, 1.32, 1.31, 1.30]
+
+    assert local_noise(spread_out, values, radius=0.05, min_runs=5) is None
+
+
+def test_local_noise_is_none_below_the_minimum_run_count():
+    from state.regions import local_noise
+
+    configs = _spread_configs(3, 0.002)
+    assert local_noise(configs, [1.30, 1.31, 1.30], radius=0.05, min_runs=5) is None
+
+
+def test_the_typical_neighbour_distance_is_used_not_the_smallest():
+    """One duplicated configuration would drag the minimum to zero and wave a
+    sparse region through, so the guard reads the median."""
+    from state.regions import local_noise
+
+    configs = [_cfg(matrix_lr=0.04), _cfg(matrix_lr=0.04)] + [
+        _cfg(matrix_lr=lr) for lr in (0.09, 0.14, 0.19)]
+    values = [1.30, 1.31, 1.33, 1.35, 1.37]
+
+    assert local_noise(configs, values, radius=0.05, min_runs=5) is None
+
+
+def test_a_regions_own_noise_beats_the_campaign_median(tmp_path):
+    """The campaign figure is a median over configurations whose spreads differ
+    5x, so it describes the frontier and nowhere else. A region that has
+    measured its own neighbourhood should use that."""
+    from state.results_logger import log_result
+
+    agent4 = _agent4(tmp_path, a_within=0.004)      # campaign-wide
+    registry = RegionRegistry(str(tmp_path / "state" / "regions.json"))
+    region = registry.open_region(_cfg(), at_run=0)
+
+    configs = _spread_configs(6, 0.002)
+    for i, (cfg, val) in enumerate(zip(configs, [1.30, 1.3002, 1.2999, 1.3001, 1.3000, 1.2998])):
+        run_id = f"run_{i:04d}"
+        log_result(run_id, cfg, {"val_bpb": val, "status": "remote_ok"},
+                   results_path=str(tmp_path / "results.tsv"))
+        registry.assign_run(region.region_id, run_id, val)
+
+    local = agent4._a_within(region)
+    assert local is not None
+    assert local < 0.004, "this region is far quieter than the campaign median"
+
+
+def test_without_enough_local_evidence_the_campaign_figure_is_used(tmp_path):
+    """Falling back is right; inventing a local number from two runs is not."""
+    agent4 = _agent4(tmp_path, a_within=0.004)
+    registry = RegionRegistry(str(tmp_path / "state" / "regions.json"))
+    region = registry.open_region(_cfg(), at_run=0)
+    registry.assign_run(region.region_id, "run_0000", 1.30)
+
+    assert agent4._a_within(region) == pytest.approx(0.004)
