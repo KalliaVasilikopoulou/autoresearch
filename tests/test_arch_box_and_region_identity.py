@@ -220,3 +220,66 @@ def test_outside_a_region_the_architecture_is_free(agent):
                    {"n_layer": 1.0, "n_embd": 1.0, "n_head": 1.0}}],
         iteration=2)
     assert any(out[c] != BASE[c] for c in ARCHITECTURE_COLUMNS)
+
+
+# --- run ids must never be reissued ------------------------------------------
+
+
+def _write_results(path, run_ids):
+    from state.results_logger import log_result
+
+    for rid in run_ids:
+        log_result(rid, hp(), {"val_bpb": 1.3, "status": "remote_ok"},
+                   results_path=str(path))
+
+
+def test_a_resumed_campaign_continues_the_run_numbering(tmp_path):
+    """run_id is f"run_{iteration:04d}" and `iteration` used to start at 0
+    every launch. Against an existing results.tsv that reissues ids already
+    taken -- and load_results de-duplicates by run_id, so the collision does
+    not error, it quietly drops one of the two runs."""
+    from agents.orchestrator import Orchestrator
+
+    results = tmp_path / "results.tsv"
+    _write_results(results, [f"run_{i:04d}" for i in range(32)])
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.results_path = results
+    assert orch._next_run_index() == 32
+
+
+def test_experiment_run_ids_do_not_move_the_campaign_numbering(tmp_path):
+    """`geom_...` and `size_...` rows live in their own results files, but
+    anything unexpected here must not be able to push the numbering somewhere
+    strange."""
+    from agents.orchestrator import Orchestrator
+
+    results = tmp_path / "results.tsv"
+    _write_results(results, ["run_0005", "size_h6", "geom_anchor_s42"])
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.results_path = results
+    assert orch._next_run_index() == 6
+
+
+def test_a_fresh_campaign_still_starts_at_zero(tmp_path):
+    from agents.orchestrator import Orchestrator
+
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.results_path = tmp_path / "results.tsv"   # does not exist yet
+    assert orch._next_run_index() == 0
+
+
+def test_the_numbering_reads_results_tsv_not_the_session_metadata(tmp_path):
+    """The near-miss worth pinning. state_manager's metadata.json is
+    per-session bookkeeping and starts empty in a fresh process, so reading it
+    reports "0 recorded runs" against a results.tsv holding 32 -- and reissues
+    every id. results.tsv is where log_result appends, so it is the only place
+    two runs can actually collide."""
+    from agents.orchestrator import Orchestrator
+
+    results = tmp_path / "results.tsv"
+    _write_results(results, [f"run_{i:04d}" for i in range(32)])
+
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.results_path = results
+    orch.state_mgr = type("S", (), {"get_all_results": staticmethod(lambda: [])})()
+    assert orch._next_run_index() == 32

@@ -265,6 +265,38 @@ class Orchestrator:
             escalation = " (SIGTERM didn't stop it in time -- escalated to SIGKILL)" if entry["escalated_to_sigkill"] else " (stopped cleanly with SIGTERM)"
             print(f"[Orchestrator]   Killed stale process PID {entry['pid']}: {entry['cmd']}{escalation}")
 
+    def _next_run_index(self) -> int:
+        """One past the highest run_NNNN already in results.tsv.
+
+        Reads RESULTS.TSV, deliberately, and not state_manager's metadata.json:
+        results.tsv is the file log_result appends to and therefore the only
+        place two runs can collide, while metadata.json is per-session
+        bookkeeping that a fresh process starts empty. Reading the latter would
+        report "0 recorded runs" against a results.tsv holding 32 of them and
+        reissue every id -- the exact failure this method exists to prevent.
+
+        Ids that do not parse (an experiment script's `geom_...` or `size_...`)
+        are ignored: they live in their own results files, and anything
+        unexpected here should not be able to push the numbering somewhere
+        strange.
+        """
+        from state.results_analysis import load_results
+
+        highest = -1
+        try:
+            for row in load_results(str(self.results_path)):
+                run_id = str(row.get("run_id", ""))
+                if not run_id.startswith("run_"):
+                    continue
+                try:
+                    highest = max(highest, int(run_id[4:]))
+                except ValueError:
+                    continue
+        except Exception as e:  # a missing/corrupt results file is a fresh start
+            print(f"[Orchestrator] Could not read existing results ({e}); starting at 0.")
+            return 0
+        return highest + 1
+
     def run(self, max_iterations: Optional[int] = None):
         """Main orchestration loop with structured evidence flow."""
         print("[Orchestrator] Starting autonomous multi-agent loop...\n")
@@ -272,9 +304,21 @@ class Orchestrator:
 
         self._kill_stale_remote_training()
 
-        iteration = 0
+        # RESUME, never restart the numbering. run_id is f"run_{iteration:04d}",
+        # so starting from 0 against an existing results.tsv silently reissues
+        # ids that are already taken -- and load_results de-duplicates by
+        # run_id, so the collision does not error, it quietly drops one of the
+        # two runs. A campaign relaunched against 32 runs of history would have
+        # overwritten every one of them.
+        iteration = self._next_run_index()
         report_batch: List[str] = []
-        max_iterations = max_iterations or self.max_iterations
+        # `max_iterations` is therefore how many MORE runs to do this session,
+        # which is also the only reading that stays meaningful on a resume:
+        # "100 total" against a campaign already past 100 would exit instantly.
+        max_iterations = iteration + (max_iterations or self.max_iterations)
+        if iteration:
+            print(f"[Orchestrator] Resuming after {iteration} recorded run(s); "
+                  f"ids continue at run_{iteration:04d}.")
 
         while iteration < max_iterations:
             print(f"\n{'='*60}")
@@ -995,7 +1039,10 @@ class Orchestrator:
 def main():
     parser = argparse.ArgumentParser(description="Multi-agent NN optimization")
     parser.add_argument("--config", default="agents_config.yaml", help="Configuration file path")
-    parser.add_argument("--iterations", type=int, default=100, help="Maximum iterations")
+    parser.add_argument("--iterations", type=int, default=100,
+                        help="How many MORE runs to do this session. Run ids resume "
+                             "after the highest already in results.tsv rather than "
+                             "restarting at run_0000.")
     parser.add_argument("--dry-run", action="store_true", help="Run without training")
     parser.add_argument("--interactive", action="store_true",
                          help="Prompt (blocking) before continuing past a pipeline_validator ERROR. "
