@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents import claude_cli
 from agents import train_output
+from state.results_analysis import ARCHITECTURE_COLUMNS
 
 
 # The 4 learning-rate groups train.py's optimizer actually exposes (matches
@@ -58,7 +59,21 @@ ARCH_SAFE_RANGES = {
     # _build_window_pattern) is already safe at n_layer=1, so this is
     # purely widening the search's exploration range to match what the
     # model can actually run, not a new safety boundary.
-    "n_layer": (1, 24), "n_embd": (128, 1024), "n_head": (1, 16),
+    # n_layer/n_embd ceilings RAISED 24 -> 28 and 1024 -> 1280 on 2026-08-11,
+    # from the size sweep (scripts/size_sweep.py, reports/size_sweep.md): over
+    # 189x of size, val_bpb fell at every single step and was STILL FALLING at
+    # the old ceiling, so what limited model size was this box, not the search.
+    # Both move together to keep n_embd/n_layer near the ~45 the sweep held
+    # fixed -- raising width alone would let the search build models
+    # wider-and-shallower than any rung actually measured, and shape at fixed
+    # size is exactly what that experiment did NOT test.
+    # Sized against the wall clock, not by taste: the worst case the box now
+    # allows (28 x 1280 = 550M non-embedding params) projects to ~1200s of
+    # train.py's 1800s MAX_TRAIN_SECONDS, from the sweep's own measured
+    # time-vs-size fit. Do not raise again without redoing that arithmetic --
+    # a run that trips the cap is excluded as incomplete, so it costs a GPU
+    # slot and returns nothing.
+    "n_layer": (1, 28), "n_embd": (128, 1280), "n_head": (1, 16),
     # Tier 4: fraction of layers using the short attention window (see
     # train.py's _build_window_pattern, which turns this into an actual S/L
     # pattern string). Continuous so the Sobol/EI surrogate can search it
@@ -69,6 +84,20 @@ ARCH_SAFE_RANGES = {
 }
 OTHER_SAFE_RANGES = {"weight_decay": (0.0, 0.5), "warmup_ratio": (0.0, 0.2), "batch_size": (2048, 32768)}
 SEARCH_SPACE = {**LR_SAFE_RANGES, **ARCH_SAFE_RANGES, **OTHER_SAFE_RANGES}
+
+# The ceilings the NON-surrogate decision paths clamp to. Derived here rather
+# than repeated as literals in each path: the same numbers used to appear as
+# hardcoded 24/1024/16 in eight places across _evidence_adjustment,
+# _heuristic_adjustment and _radical_change, so raising the box in one place
+# would have left every one of those paths quietly dragging the model back
+# down to the old ceiling whenever it ran -- which is most of a campaign's
+# opening iterations, before the surrogate has enough data to fit.
+# The FLOORS below are deliberately left as they are: they are each path's own
+# conservatism (n_layer >= 4 on the evidence path, for instance), not the
+# search space's boundary, and nothing measured says to move them.
+MAX_N_LAYER = int(ARCH_SAFE_RANGES["n_layer"][1])
+MAX_N_EMBD = int(ARCH_SAFE_RANGES["n_embd"][1])
+MAX_N_HEAD = int(ARCH_SAFE_RANGES["n_head"][1])
 
 # The campaign's default initial-weight seed (train.py's own SEED default, kept
 # in sync here because Agent 1 is what writes it into model_hyperparams.yaml).
@@ -576,6 +605,34 @@ class Agent1TrainingSpecialist:
         # alone get bypassed most of the time in a mature search.
         new_hyperparams = self._fingerprint_adjustment(new_hyperparams, evidence)
 
+        # A REGION IS AN EXACT ARCHITECTURE (step 3a) plus a neighbourhood of
+        # the eight tunables, so its architecture is restored here -- once,
+        # after every path above, for the same reason the LR re-clamp and the
+        # n_embd snap below sit at this point rather than inside each branch.
+        #
+        # Closing _fingerprint_adjustment (step 5b) was not enough on its own:
+        # _evidence_adjustment and _heuristic_adjustment write n_layer, n_embd
+        # and n_head directly, and Claude's free-form JSON can too. Those
+        # fallbacks are not a rare path -- they are what runs during a
+        # campaign's opening iterations, before the surrogate has enough data
+        # to fit, which is exactly when a region is youngest.
+        #
+        # Changing the architecture mid-region produces a run whose INITIAL
+        # WEIGHTS differ from the rest of its own region, which destroys the
+        # pairing steps 1-3 exist to establish (verified in step 1: same
+        # architecture + same seed gives 46/46 bit-identical tensors, and a
+        # width change reshapes 41 of the 46). The run would then be compared
+        # against its region-mates as though only the tunables had moved.
+        #
+        # Read from the ANCHOR, never the drifting center: the anchor is what
+        # makes a region a fixed place. Outside a region there is nothing to
+        # preserve, so every path keeps its freedom to move architecture.
+        if self._active_region is not None:
+            anchor = self._active_region.anchor
+            for col in ARCHITECTURE_COLUMNS:
+                if col in anchor:
+                    new_hyperparams[col] = anchor[col]
+
         # Claude's suggestion is free-form JSON — re-clamp every LR group
         # before it's ever saved, since that path can otherwise bypass the
         # safety bounds the rest of this class enforces everywhere else.
@@ -897,7 +954,7 @@ class Agent1TrainingSpecialist:
         """Large random architecture jump used when the model looks stuck."""
         print("[Agent 1] Model stuck - trying radical changes")
         new_params["n_layer"] = random.randint(8, 20)
-        new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+        new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024, MAX_N_EMBD])
         for key in LR_KEYS:
             new_params[key] = self._clamp_lr(key, float(new_params.get(key, LR_DEFAULTS[key])))
         return new_params
@@ -1015,17 +1072,17 @@ class Agent1TrainingSpecialist:
             elif param == "n_layer":
                 current = int(new_params.get("n_layer", 12))
                 delta = int(round(direction * (1.0 + magnitude)))
-                new_params["n_layer"] = max(4, min(current + delta, 24))
+                new_params["n_layer"] = max(4, min(current + delta, MAX_N_LAYER))
 
             elif param == "n_embd":
                 current = int(new_params.get("n_embd", 512))
                 factor = 1.0 + direction * (0.08 * magnitude)
-                new_params["n_embd"] = min(int(current * factor), 1024)
+                new_params["n_embd"] = min(int(current * factor), MAX_N_EMBD)
 
             elif param == "n_head":
                 current = int(new_params.get("n_head", 8))
                 delta = int(round(direction * magnitude))
-                new_params["n_head"] = max(1, min(current + delta, 16))
+                new_params["n_head"] = max(1, min(current + delta, MAX_N_HEAD))
 
         # Summary-level updates: stronger than report-level (2x by default).
         if latest_summary:
@@ -1058,7 +1115,7 @@ class Agent1TrainingSpecialist:
                         current += step
                     else:
                         current += int(round(direction * summary_multiplier * (1.0 + magnitude)))
-                    new_params["n_layer"] = max(4, min(current, 24))
+                    new_params["n_layer"] = max(4, min(current, MAX_N_LAYER))
 
                 elif param == "n_embd":
                     current = int(new_params.get("n_embd", 512))
@@ -1069,7 +1126,7 @@ class Agent1TrainingSpecialist:
                     else:
                         factor = 1.0 + direction * (0.08 * summary_multiplier * magnitude)
                         current = int(current * factor)
-                    new_params["n_embd"] = min(max(128, current), 1024)
+                    new_params["n_embd"] = min(max(128, current), MAX_N_EMBD)
 
                 elif param == "n_head":
                     current = int(new_params.get("n_head", 8))
@@ -1081,7 +1138,7 @@ class Agent1TrainingSpecialist:
                         current += step
                     else:
                         current += int(round(direction * summary_multiplier * magnitude))
-                    new_params["n_head"] = max(1, min(current, 16))
+                    new_params["n_head"] = max(1, min(current, MAX_N_HEAD))
 
         # Hard safety bound for LR groups after all evidence/summary adjustments.
         for key in LR_KEYS:
@@ -1126,10 +1183,10 @@ class Agent1TrainingSpecialist:
                 delta = int(round((target_layer - current_layer) * min(1.0, 0.35 * strength)))
                 if delta == 0 and target_layer != current_layer:
                     delta = 1 if target_layer > current_layer else -1
-                new_params["n_layer"] = max(4, min(current_layer + delta, 24))
+                new_params["n_layer"] = max(4, min(current_layer + delta, MAX_N_LAYER))
             elif hints.get("n_layer"):
                 layer_delta = int(round(2 * strength))
-                new_params["n_layer"] = max(4, min(int(new_params["n_layer"]) + layer_delta, 24))
+                new_params["n_layer"] = max(4, min(int(new_params["n_layer"]) + layer_delta, MAX_N_LAYER))
             if hints.get("n_layer") or "n_layer" in recs:
                 print(f"[Agent 1] Adjusted layers: {new_params['n_layer']}")
 
@@ -1138,10 +1195,10 @@ class Agent1TrainingSpecialist:
                 target_embd = max(128, int(round(float(recs["n_embd"]))))
                 pull = min(0.8, 0.25 * strength)
                 current_embd = int(current_embd * (1.0 - pull) + target_embd * pull)
-                new_params["n_embd"] = min(max(128, current_embd), 1024)
+                new_params["n_embd"] = min(max(128, current_embd), MAX_N_EMBD)
             elif hints.get("n_embd"):
                 emb_factor = 1.0 + 0.12 * strength
-                new_params["n_embd"] = min(int(new_params["n_embd"] * emb_factor), 1024)
+                new_params["n_embd"] = min(int(new_params["n_embd"] * emb_factor), MAX_N_EMBD)
             if hints.get("n_embd") or "n_embd" in recs:
                 print(f"[Agent 1] Adjusted embedding: {new_params['n_embd']}")
         else:
@@ -1149,7 +1206,7 @@ class Agent1TrainingSpecialist:
             if iteration < 5:
                 print("[Agent 1] Early iteration - random exploration")
                 new_params["n_layer"] = random.randint(6, 18)
-                new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024])
+                new_params["n_embd"] = random.choice([256, 384, 512, 768, 1024, MAX_N_EMBD])
                 for lr_key in LR_KEYS:
                     new_params[lr_key] = self._random_lr(lr_key)
 
