@@ -88,6 +88,14 @@ LOCAL_OPTIMUM = "local_optimum"
 #: improving" (which can be bad luck and can recover), this one says "there is
 #: nothing here we are able to read". See Region.is_saturated.
 SATURATED = "saturated"
+#: The search inside this region kept wanting to leave, in a consistent
+#: direction, so a successor was opened where it was trying to go and this one
+#: was closed. Terminal, but it is not a negative result about the area -- it
+#: says the anchor was in the wrong place, and `successor_id` records where the
+#: search went instead. Kept distinct from local_optimum/saturated (which say
+#: "nothing more here") and from merged (which says "this was somewhere else
+#: all along").
+MIGRATED = "migrated"
 MERGED = "merged"
 
 #: Flags that still consume GPU budget. PAUSED regions are kept for a later
@@ -239,6 +247,11 @@ class Region:
     #: Set on the losing side of a merge, so history stays readable rather
     #: than being deleted.
     merged_into: Optional[str] = None
+    #: Set with the MIGRATED flag: the region opened where this one's search
+    #: kept trying to go. A pointer rather than a rewrite, so the trail of a
+    #: search walking downhill stays readable instead of the anchor silently
+    #: moving under it.
+    successor_id: Optional[str] = None
 
     # -- history ----------------------------------------------------------
 

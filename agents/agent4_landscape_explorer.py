@@ -51,7 +51,7 @@ import json
 import math
 import statistics
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import yaml
@@ -66,6 +66,7 @@ from state.regions import (
     ACTIVE,
     CAPACITY_PAUSED,
     LOCAL_OPTIMUM,
+    MIGRATED,
     NO_OPTIMUM,
     PAUSED,
     SATURATED,
@@ -143,6 +144,16 @@ class Agent4LandscapeExplorer:
         # against another, so this is the right yardstick -- the noise floor's
         # sigma (0.000797) measures repeatability of a single config and is
         # ~4x too sensitive for these. See the CALIBRATION REFERENCE.
+        # --- escape pressure (step 5b) ---
+        #: How many recent proposals to look at.
+        self.escape_window = int(cfg.get("escape_window", 6))
+        #: How many of them must have wanted to leave.
+        self.escape_runs_to_migrate = int(cfg.get("escape_runs_to_migrate", 3))
+        #: How much they must AGREE on a direction, 0-1. This is the real test:
+        #: escapes pointing every which way average to nothing and mean the
+        #: region is being explored, not mis-anchored. 0.6 demands the mean
+        #: vector keep most of its length through the averaging.
+        self.escape_coherence = float(cfg.get("escape_coherence", 0.6))
         self.sigma_region = float(cfg.get("sigma_region", 0.0028))
         self.retire_margin_sigma = float(cfg.get("retire_margin_sigma", 3.0))
         self.improvement_sigma = float(cfg.get("improvement_sigma", 1.0))
@@ -158,6 +169,9 @@ class Agent4LandscapeExplorer:
         _reports = Path(reports_dir) if reports_dir else Path("reports")
         self.results_path = _root / "results.tsv"
         self.decisions_dir = _reports / "agent4_decisions"
+        #: Where Agent 1 writes its per-region plan JSONs, which carry the
+        #: escape record. Must match Agent1TrainingSpecialist's report dir.
+        self._search_plan_root = str(_reports / "agent1_search_plan")
         self.registry_path = _state / "regions.json"
 
         llm_config = self.config.get("llm", {})
@@ -493,6 +507,110 @@ class Agent4LandscapeExplorer:
                               region_id=region.region_id)
         return flag
 
+    # -- escape pressure: the region is anchored in the wrong place ---------
+
+    def escape_pressure(self, region: Region) -> Optional[Dict[str, Any]]:
+        """Has this region's search repeatedly wanted to leave, in a CONSISTENT
+        direction?
+
+        Every proposal already records where the best candidate would have gone
+        with the fence ignored (see surrogate.propose_via_ei) -- it costs no
+        extra training, since those candidates are generated and scored anyway
+        and simply are not eligible to run. This reads that trail back.
+
+        Consistency is the whole test, and it is why the mean of the direction
+        VECTORS is used rather than a count of escapes. A search bouncing off
+        different walls produces escapes pointing every which way, whose mean
+        cancels to nearly nothing -- that is a region being explored, not a
+        region in the wrong place. Sustained pressure one way survives the
+        averaging. `coherence` below is the ratio of the mean vector's length
+        to the mean of the individual lengths: 1.0 is perfect agreement, 0.0 is
+        pure cancellation.
+
+        Returns None when there is not enough history, or when the pressure is
+        incoherent, or when the place it points to is inside the fence anyway.
+        """
+        plan_dir = Path(region.report_dir(self._search_plan_root))
+        if not plan_dir.exists():
+            return None
+        escapes: List[Dict[str, Any]] = []
+        for path in sorted(plan_dir.glob("plan_*.json"))[-self.escape_window:]:
+            try:
+                esc = json.loads(path.read_text(encoding="utf-8")).get("escape")
+            except (OSError, ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(esc, dict) and esc.get("escaped") and esc.get("direction"):
+                escapes.append(esc)
+        if len(escapes) < self.escape_runs_to_migrate:
+            return None
+
+        params = sorted({p for e in escapes for p in e["direction"]})
+        mean_vec = {p: sum(float(e["direction"].get(p, 0.0)) for e in escapes) / len(escapes)
+                    for p in params}
+        mean_len = math.sqrt(sum(v * v for v in mean_vec.values()))
+        lengths = [math.sqrt(sum(float(v) ** 2 for v in e["direction"].values()))
+                   for e in escapes]
+        avg_len = sum(lengths) / len(lengths) if lengths else 0.0
+        coherence = (mean_len / avg_len) if avg_len > 0 else 0.0
+        if coherence < self.escape_coherence:
+            return None
+
+        target = self._escape_target(region, mean_vec)
+        if target is None:
+            return None
+        travelled = distance(target, region.anchor, None)
+        if travelled <= self.region_radius:
+            # It wants to go somewhere the fence already allows, so there is
+            # nothing to migrate to -- the search can simply go there.
+            return None
+        return {"n_escapes": len(escapes), "coherence": coherence,
+                "mean_direction": mean_vec, "distance": travelled, "target": target}
+
+    def _escape_target(self, region: Region, mean_vec: Dict[str, float]) -> Optional[Dict[str, Any]]:
+        """Where the successor should be anchored: the region's anchor shifted
+        by the mean escape direction, in normalized space, then mapped back.
+        Architecture is copied unchanged -- escape is measured over the
+        tunables only, so a successor is the same model in a different corner
+        of its settings."""
+        from state.surrogate import _denormalize, normalized_value
+
+        bounds = SEARCH_SPACE
+        target = dict(region.anchor)
+        for p, delta in mean_vec.items():
+            if p not in bounds or not isinstance(region.anchor.get(p), (int, float)):
+                continue
+            here = normalized_value(p, float(region.anchor[p]), bounds)
+            target[p] = _denormalize(p, min(1.0, max(0.0, here + delta)), bounds)
+        return surrogate._snap_discrete(target)
+
+    def migrate(self, region: Region, registry: RegionRegistry,
+                pressure: Dict[str, Any], at_run: int) -> Optional[Region]:
+        """Close a region whose anchor is in the wrong place and open its
+        successor where the search kept trying to go.
+
+        The anchor is NOT moved. Anchor immutability is what region identity,
+        merge detection and the don't-reopen-a-ruled-out-area check all rest
+        on; moving it would let two regions silently collide and would rewrite
+        history under the runs already attributed to it. A successor plus a
+        pointer keeps the trail of a search walking downhill readable.
+        """
+        if not [r for r in registry.active() if r.region_id != region.region_id]:
+            return None  # never leave the campaign with nowhere to search
+        successor = registry.open_region(pressure["target"], at_run=at_run,
+                                         origin=f"migrated_from_{region.region_id}")
+        region.successor_id = successor.region_id
+        region.set_flag(MIGRATED, at_run)
+        registry.save()
+        print(f"[Agent 4] Region {region.region_id} kept trying to leave "
+              f"({pressure['n_escapes']} escapes, coherence {pressure['coherence']:.2f}, "
+              f"{pressure['distance']:.4f} away) -- opened {successor.region_id} there")
+        self._record_decision(at_run, MIGRATED, {
+            "region_id": region.region_id, "successor_id": successor.region_id,
+            "n_escapes": pressure["n_escapes"], "coherence": pressure["coherence"],
+            "distance": pressure["distance"],
+        }, region_id=region.region_id)
+        return successor
+
     # -- maintenance: one call per wave -------------------------------------
 
     def maintain(self, registry: RegionRegistry, at_run: int) -> Dict[str, Any]:
@@ -511,8 +629,23 @@ class Agent4LandscapeExplorer:
         verdicts: Dict[str, str] = {}
         for region in list(registry.active()):
             verdicts[region.region_id] = self.judge(region, registry, at_run)
+
+        # Migration runs AFTER judging, on regions that survived it. A region
+        # already retired should not spawn a successor -- "there is nothing
+        # here" and "the anchor is in the wrong place" are different findings,
+        # and acting on both would open a region next to somewhere just ruled
+        # out.
+        migrations: List[Tuple[str, str]] = []
+        for region in list(registry.active()):
+            pressure = self.escape_pressure(region)
+            if not pressure:
+                continue
+            successor = self.migrate(region, registry, pressure, at_run)
+            if successor is not None:
+                migrations.append((region.region_id, successor.region_id))
+
         registry.save()
-        return {"merges": merges, "verdicts": verdicts}
+        return {"merges": merges, "verdicts": verdicts, "migrations": migrations}
 
     def resume_best_paused(self, registry: RegionRegistry, at_run: int) -> Optional[Region]:
         """Bring back the most promising paused region.
