@@ -129,6 +129,13 @@ def _search_space() -> Dict[str, Tuple[float, float]]:
     return SEARCH_SPACE
 
 
+def current_token_budget() -> int:
+    """prepare.py's TOKEN_BUDGET, read live rather than captured at import, so
+    a sweep and the runs it dispatches can never disagree about it."""
+    from prepare import TOKEN_BUDGET
+    return int(TOKEN_BUDGET)
+
+
 def pick_anchor(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The campaign's best complete run -- the same anchor step 4 used.
 
@@ -227,15 +234,27 @@ def build_ladder(anchor: Dict[str, Any], n_rungs: int = N_RUNGS) -> List[Dict[st
 # ---------------------------------------------------------------------------
 
 def _same_config(row: Dict[str, Any], hp: Dict[str, Any]) -> bool:
-    """Every hyperparameter equal, and the seed equal to this sweep's.
+    """Every hyperparameter equal, the seed equal to this sweep's, AND the same
+    training budget.
 
     Used to avoid re-buying a rung the campaign or an earlier experiment has
     already paid for. Equality has to hold on ALL of them: a row that matches
     the architecture but not the learning rates is a different measurement,
     and quietly reusing it would put a differently-tuned point on the curve.
+
+    The budget check is not decoration. When TOKEN_BUDGET was cut 12.5M -> 4.19M
+    the anchor's val_bpb moved 1.2486 -> 1.7063, so splicing one old row into a
+    new ladder would drop a point half a bpb below the curve and make the
+    sweep report a hill that is purely an artefact of mixed budgets. Compared
+    via total_tokens_M, which has been logged since long before token_budget
+    existed as a column, so rows predating the override still answer honestly.
     """
     seed = row.get("seed")
     if not isinstance(seed, (int, float)) or int(seed) != SEED:
+        return False
+    tokens_m = row.get("total_tokens_M")
+    if not isinstance(tokens_m, (int, float)) or not math.isclose(
+            float(tokens_m), current_token_budget() / 1e6, rel_tol=0.02):
         return False
     for c in HYPERPARAM_COLUMNS:
         want, got = hp.get(c), row.get(c)

@@ -98,7 +98,8 @@ def test_a_row_matching_on_architecture_alone_is_not_reused():
     rates is a different measurement, and putting it on the curve would mean
     one rung was tuned differently from the rest."""
     rung = size_sweep.build_ladder(ANCHOR)[-1]
-    row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok")
+    row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok",
+               total_tokens_M=size_sweep.current_token_budget() / 1e6)
     assert size_sweep._same_config(row, rung["hyperparams"])
 
     row["matrix_lr"] = ANCHOR["matrix_lr"] * 1.1
@@ -235,3 +236,28 @@ def test_the_noise_floor_says_where_it_came_from(tmp_path):
     sigma, source = size_sweep.architecture_noise(tmp_path)
     assert sigma == pytest.approx(0.0031)
     assert "region_geometry" in source
+
+
+def test_a_row_from_a_different_token_budget_is_not_reused(tmp_path):
+    """THE ONE THAT WOULD HAVE FAKED A HILL. When TOKEN_BUDGET was cut
+    12.5M -> 4.19M the anchor's val_bpb moved 1.2486 -> 1.7063, so splicing a
+    single old row into a new ladder drops a point half a bpb below the curve
+    -- and the sweep would report a turn that is purely an artefact of mixed
+    budgets."""
+    rung = size_sweep.build_ladder(ANCHOR)[-1]
+    current_m = size_sweep.current_token_budget() / 1e6
+
+    row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok",
+               total_tokens_M=current_m)
+    assert size_sweep._same_config(row, rung["hyperparams"])
+
+    row["total_tokens_M"] = 12.5 if abs(current_m - 12.5) > 0.1 else 4.19
+    assert not size_sweep._same_config(row, rung["hyperparams"])
+
+
+def test_a_row_with_no_budget_recorded_is_not_reused(tmp_path):
+    """Absent is not "matches". A row that cannot say how much training it saw
+    cannot be placed on a curve whose x-axis assumes a fixed one."""
+    rung = size_sweep.build_ladder(ANCHOR)[-1]
+    row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok")
+    assert not size_sweep._same_config(row, rung["hyperparams"])
