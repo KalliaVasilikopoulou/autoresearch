@@ -90,6 +90,7 @@ from state.results_analysis import (
     HYPERPARAM_COLUMNS,
     TUNABLE_COLUMNS,
     load_results,
+    same_token_budget,
 )
 from state.results_logger import log_result
 
@@ -246,15 +247,15 @@ def _same_config(row: Dict[str, Any], hp: Dict[str, Any]) -> bool:
     the anchor's val_bpb moved 1.2486 -> 1.7063, so splicing one old row into a
     new ladder would drop a point half a bpb below the curve and make the
     sweep report a hill that is purely an artefact of mixed budgets. Compared
-    via total_tokens_M, which has been logged since long before token_budget
-    existed as a column, so rows predating the override still answer honestly.
+    The budget is DERIVED from num_steps and batch_size (results_analysis.
+    tokens_seen), not read from a column: total_tokens_M is parsed out of
+    train.py's summary and then thrown away, so it has never been a results.tsv
+    column at all. Deriving it answers for every run ever recorded.
     """
     seed = row.get("seed")
     if not isinstance(seed, (int, float)) or int(seed) != SEED:
         return False
-    tokens_m = row.get("total_tokens_M")
-    if not isinstance(tokens_m, (int, float)) or not math.isclose(
-            float(tokens_m), current_token_budget() / 1e6, rel_tol=0.02):
+    if not same_token_budget(row, current_token_budget()):
         return False
     for c in HYPERPARAM_COLUMNS:
         want, got = hp.get(c), row.get(c)
@@ -517,15 +518,13 @@ def history_by_size(history_path: str, n_bins: int = 5) -> List[Dict[str, Any]]:
     # table sitting half a bpb away from the ladder and invite exactly the
     # comparison it is there to make. Guarded in _same_config for reuse; this
     # is the same rule for the report.
-    budget_m = current_token_budget() / 1e6
     rows = [r for r in load_results(history_path)
             if r.get("status") in OK_STATUSES
             and isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
             and all(c in r for c in ARCHITECTURE_COLUMNS)
             and not (isinstance(r.get("budget_shortfall_pct"), (int, float))
                      and r["budget_shortfall_pct"] > 0)
-            and isinstance(r.get("total_tokens_M"), (int, float))
-            and math.isclose(float(r["total_tokens_M"]), budget_m, rel_tol=0.02)]
+            and same_token_budget(r, current_token_budget())]
     if len(rows) < n_bins * 2:
         return []
 

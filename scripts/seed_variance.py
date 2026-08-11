@@ -64,7 +64,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml
 
 from agents.agent1_training_specialist import Agent1TrainingSpecialist
-from state.results_analysis import HYPERPARAM_COLUMNS, load_results
+from state.results_analysis import (
+    HYPERPARAM_COLUMNS, load_results, same_token_budget,
+)
 from state.results_logger import log_result
 from state.surrogate import INT_PARAMS
 
@@ -85,12 +87,29 @@ OK_STATUSES = {"remote_ok", "ok"}
 # Choosing the configurations to test
 # ---------------------------------------------------------------------------
 
+def _current_token_budget() -> int:
+    """prepare.py's TOKEN_BUDGET, read live so this script and the runs it
+    dispatches can never disagree about it."""
+    from prepare import TOKEN_BUDGET
+    return int(TOKEN_BUDGET)
+
+
 def _usable(row: Dict[str, Any]) -> bool:
-    """A row is usable as a test configuration only if it completed normally
-    AND consumed its whole token budget. A truncated run (budget_shortfall_pct
-    > 0) measured less training than a full one, so its val_bpb is not on the
-    same scale as the numbers this experiment is about to produce."""
+    """A row is usable as a test configuration only if it completed normally,
+    consumed its whole token budget, and did so under the budget IN FORCE NOW.
+
+    A truncated run (budget_shortfall_pct > 0) measured less training than a
+    full one, so its val_bpb is not on the same scale as the numbers this
+    experiment is about to produce -- and neither is a run from a different
+    TOKEN_BUDGET. That matters here specifically because select_configs picks
+    the two best runs to form the frontier pair: the whole design rests on that
+    pair being separated by the small gap the search actually has to resolve,
+    and a ranking established at another budget is not that pair. When the
+    budget went 12.5M -> 4.19M the anchor moved 1.2486 -> 1.7063.
+    """
     if row.get("status") not in OK_STATUSES:
+        return False
+    if not same_token_budget(row, _current_token_budget()):
         return False
     val_bpb = row.get("val_bpb")
     if not isinstance(val_bpb, (int, float)) or val_bpb != val_bpb or val_bpb in (float("inf"), float("-inf")):

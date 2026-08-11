@@ -122,6 +122,48 @@ def _coerce_row(fieldnames: Sequence[str], raw_values: Sequence[str], schema: st
     return row
 
 
+#: DEVICE_BATCH_SIZE * MAX_SEQ_LEN in train.py -- the granularity a requested
+#: batch_size is truncated to, since grad_accum_steps is an integer division.
+TOKENS_PER_FWDBWD = 2048
+
+
+def tokens_seen(row: Dict[str, Any]) -> Optional[float]:
+    """How many training tokens this run actually consumed, or None if the row
+    cannot say.
+
+    DERIVED from num_steps and batch_size rather than read from a column,
+    because `total_tokens_M` is parsed out of train.py's summary and then
+    thrown away -- it has never been a results.tsv column. Deriving it works
+    RETROACTIVELY on every run ever recorded, which a new column could not:
+    the whole point is to tell runs from different token budgets apart, and
+    the runs that need telling apart are the ones already on disk.
+
+    The identity is `num_steps * (batch_size // 2048) * 2048`, verified exact
+    on 31/31 historical runs: train.py computes grad_accum_steps by integer
+    division, so a requested batch_size is truncated to a multiple of
+    DEVICE_BATCH_SIZE * MAX_SEQ_LEN before any token is seen.
+    """
+    steps, batch = row.get("num_steps"), row.get("batch_size")
+    if not isinstance(steps, (int, float)) or not isinstance(batch, (int, float)):
+        return None
+    snapped = (int(batch) // TOKENS_PER_FWDBWD) * TOKENS_PER_FWDBWD
+    if snapped <= 0 or steps <= 0:
+        return None
+    return float(int(steps) * snapped)
+
+
+def same_token_budget(row: Dict[str, Any], budget: float, rel_tol: float = 0.02) -> bool:
+    """Did this run see the same amount of training as `budget` asks for?
+
+    A row that cannot say is NOT a match. Absent is not "probably fine": the
+    reason to ask at all is that mixing budgets is invisible in the numbers --
+    when TOKEN_BUDGET went 12.5M -> 4.19M the same configuration moved 1.2486
+    -> 1.7063, which reads as a spectacular result rather than as an error.
+    """
+    seen = tokens_seen(row)
+    return seen is not None and math.isclose(seen, budget, rel_tol=rel_tol)
+
+
 def holdout_drift(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """How far the pinned validation shard has drifted from the untouched
     holdout shard, over the life of the campaign.

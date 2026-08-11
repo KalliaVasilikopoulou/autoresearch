@@ -129,11 +129,21 @@ def test_each_pair_reports_its_own_resolvable_gap_not_a_pooled_one():
     assert tight == pytest.approx(2.0 * by_pair[(0, 1)]["std_of_gap"])
 
 
+#: num_steps and batch_size are what _usable derives the training budget from
+#: (results_analysis.tokens_seen), so a row without them cannot say which
+#: budget it belongs to and is correctly refused. Real rows always carry both.
+def _at_current_budget():
+    """A (num_steps, batch_size) pair that reproduces the budget in force."""
+    from prepare import TOKEN_BUDGET
+    batch_size = 22528                      # already a multiple of 2048
+    return {"num_steps": TOKEN_BUDGET // batch_size, "batch_size": batch_size}
+
+
 def _ranked_rows(n, spacing=0.02):
     return [
         {"run_id": f"run_{i}", "status": "remote_ok", "val_bpb": 1.20 + spacing * i,
          "budget_shortfall_pct": 0.0,
-         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}}
+         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}, **_at_current_budget()}
         for i in range(n)
     ]
 
@@ -179,17 +189,38 @@ def test_selection_returns_the_requested_count_even_on_a_short_history():
 def test_incomplete_and_failed_runs_are_never_selected_as_configs():
     rows = [
         {"run_id": "truncated", "status": "remote_ok", "val_bpb": 1.10,
-         "budget_shortfall_pct": 12.0, **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}},
+         "budget_shortfall_pct": 12.0,
+         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}, **_at_current_budget()},
         {"run_id": "crashed", "status": "remote_error", "val_bpb": float("inf"),
-         "budget_shortfall_pct": 0.0, **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}},
+         "budget_shortfall_pct": 0.0,
+         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}, **_at_current_budget()},
+        # Complete and healthy, but trained under a DIFFERENT token budget --
+        # its val_bpb is not on the scale this experiment is about to produce,
+        # and it would displace a real frontier config from the pair the whole
+        # design rests on.
+        {"run_id": "other_budget", "status": "remote_ok", "val_bpb": 1.05,
+         "budget_shortfall_pct": 0.0,
+         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS},
+         "num_steps": 555, "batch_size": 22528},
     ] + [
         {"run_id": f"good_{i}", "status": "remote_ok", "val_bpb": 1.30 + 0.01 * i,
-         "budget_shortfall_pct": 0.0, **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}}
+         "budget_shortfall_pct": 0.0,
+         **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}, **_at_current_budget()}
         for i in range(3)
     ]
     picked = seed_variance.select_configs(rows, 3)
 
     assert all(p["run_id"].startswith("good_") for p in picked)
+
+
+def test_a_row_that_cannot_state_its_budget_is_not_selected():
+    """Absent is not "probably fine". Mixing budgets is invisible in the
+    numbers -- the same config read 1.2486 at 12.5M tokens and 1.7063 at
+    4.19M, which looks like a spectacular result rather than an error."""
+    no_budget = {"run_id": "unknown", "status": "remote_ok", "val_bpb": 1.05,
+                 "budget_shortfall_pct": 0.0,
+                 **{c: 1.0 for c in seed_variance.HYPERPARAM_COLUMNS}}
+    assert not seed_variance._usable(no_budget)
 
 
 def test_too_little_history_fails_loudly_instead_of_testing_one_config():

@@ -92,6 +92,17 @@ def test_parameter_count_matches_the_architecture():
 # --- reusing a measurement instead of re-buying it ---------------------------
 
 
+def _steps_for(batch_size):
+    """The num_steps a run at `batch_size` would record under the budget in
+    force. num_steps and batch_size are what the budget is DERIVED from
+    (results_analysis.tokens_seen) -- total_tokens_M is parsed out of train.py's
+    summary and then discarded, so it has never been a results.tsv column and
+    cannot be the thing compared. Derived from the row's OWN batch_size, since
+    _same_config also checks that one for equality."""
+    snapped = (int(batch_size) // 2048) * 2048
+    return round(size_sweep.current_token_budget() / snapped)
+
+
 def test_a_row_matching_on_architecture_alone_is_not_reused():
     """The top rung is reused from step 4 because that run was identical in
     every respect. A row that shares the architecture but not the learning
@@ -99,7 +110,7 @@ def test_a_row_matching_on_architecture_alone_is_not_reused():
     one rung was tuned differently from the rest."""
     rung = size_sweep.build_ladder(ANCHOR)[-1]
     row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok",
-               total_tokens_M=size_sweep.current_token_budget() / 1e6)
+               num_steps=_steps_for(rung["hyperparams"]["batch_size"]))
     assert size_sweep._same_config(row, rung["hyperparams"])
 
     row["matrix_lr"] = ANCHOR["matrix_lr"] * 1.1
@@ -245,13 +256,14 @@ def test_a_row_from_a_different_token_budget_is_not_reused(tmp_path):
     -- and the sweep would report a turn that is purely an artefact of mixed
     budgets."""
     rung = size_sweep.build_ladder(ANCHOR)[-1]
-    current_m = size_sweep.current_token_budget() / 1e6
 
     row = dict(rung["hyperparams"], seed=size_sweep.SEED, status="remote_ok",
-               total_tokens_M=current_m)
+               num_steps=_steps_for(rung["hyperparams"]["batch_size"]))
     assert size_sweep._same_config(row, rung["hyperparams"])
 
-    row["total_tokens_M"] = 12.5 if abs(current_m - 12.5) > 0.1 else 4.19
+    # Same config, same seed, three times the training. Derived from num_steps
+    # and batch_size, so this works on rows written before any of it existed.
+    row["num_steps"] = row["num_steps"] * 3
     assert not size_sweep._same_config(row, rung["hyperparams"])
 
 
