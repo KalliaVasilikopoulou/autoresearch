@@ -1,0 +1,325 @@
+﻿[region_geometry] Anchor: run_0000 (val_bpb 1.248540)
+[region_geometry]   architecture: n_layer=21, n_embd=960, n_head=6
+[region_geometry] 42 runs: anchor=3, ball=33, depth_neighbour=3, width_neighbour=3
+[region_geometry]   radius 0.02: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry]   radius 0.05: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry]   radius 0.10: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry] Resuming: 39 cell(s) already measured, 3 to run.
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[RemoteRunner] GPU discovery: 7 total, 4 available (util<10%, free>8000MB): [5, 6, 1, 0]
+
+[region_geometry] === wave 1 (3 run(s), 0/3 done) ===
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_anchor_s42.yaml
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_anchor_s2.yaml
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_anchor_s1.yaml
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_anchor
+_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_anchor
+_s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_anchor
+_s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=1
+[GPU5] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=42
+[GPU1] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=2
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU1] Vocab size: 8,192
+[GPU5] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 7,864,320
+[GPU6]   value_embeds            : 86,507,520
+[GPU6]   lm_head                 : 7,864,320
+[GPU6]   transformer_matrices    : 232,245,312
+[GPU6]   scalars                 : 42
+[GPU6]   total                   : 334,481,514
+[GPU6] Estimated FLOPs per token: 1.853535e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 7,864,320
+[GPU1]   value_embeds            : 86,507,520
+[GPU1]   lm_head                 : 7,864,320
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 7,864,320
+[GPU5]   value_embeds            : 86,507,520
+[GPU5]   lm_head                 : 7,864,320
+[GPU5]   transformer_matrices    : 232,245,312
+[GPU5]   scalars                 : 42
+[GPU5]   total                   : 334,481,514
+[GPU1]   transformer_matrices    : 232,245,312
+[GPU1]   scalars                 : 42
+[GPU1]   total                   : 334,481,514
+[GPU1] Estimated FLOPs per token: 1.853535e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] Estimated FLOPs per token: 1.853535e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 11
+[GPU6] [train.py] Starting training loop...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 11
+[GPU5] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 11
+[GPU1] [train.py] Starting training loop...
+[GPU5] [train.py] Starting validation eval...
+[GPU6] [train.py] Starting validation eval...
+[GPU1] [train.py] Starting validation eval...
+[GPU5] ---
+[GPU5] val_bpb:          1.248751
+[GPU5] training_seconds: 654.0
+[GPU5] total_seconds:    962.5
+[GPU5] peak_vram_mb:     7325.1
+[GPU5] mfu_percent:      3.52
+[GPU5] total_tokens_M:   12.5
+[GPU5] num_steps:        555
+[GPU5] budget_shortfall_pct: 0.00
+[GPU5] num_params_M:     334.5
+[GPU5] depth:            21
+[GPU5] seed:             42
+[GPU5] interpretable_scalars: {"resid_lambdas": [0.9995113611221313, 
+0.6716047525405884, 0.71769779920578, 0.7301366925239563, 0.758709192276001, 
+0.7511704564094543, 0.7658144235610962, 0.785914421081543, 0.7966747283935547, 
+0.894293487071991, 0.8682737350463867, 1.0002403259277344, 0.9617319703102112, 
+0.9938047528266907, 0.9536310434341431, 1.0552741289138794, 1.0175154209136963,
+1.046722412109375, 1.001637578010559, 1.052440881729126, 0.9874111413955688], 
+"x0_lambdas": [1.0599931478500366, 2.401854991912842, 1.1259443759918213, 
+0.7027428150177002, 0.2853277623653412, 0.7058637738227844, 
+0.48906728625297546, 0.6030499339103699, -0.24608956277370453, 
+0.7212041616439819, -0.218057781457901, 1.1395580768585205, 
+0.026432938873767853, 0.8236297965049744, -0.32458850741386414, 
+0.9833337664604187, 0.2916472554206848, 0.6122360825538635, 0.7411433458328247,
+-0.11726480722427368, 0.32798126339912415], "ve_gate_norm": {"0": 
+3.4387521743774414, "2": 5.083553314208984, "4": 4.72410774230957, "6": 
+5.029244422912598, "8": 5.308531284332275, "10": 5.646711826324463, "12": 
+6.176467418670654, "14": 6.077582836151123, "16": 6.437548637390137, "18": 
+6.75657320022583, "20": 7.062663555145264}}
+[GPU5] Parsed metrics: {'val_bpb': 1.248751, 'training_time': 654.0, 'status': 
+'remote_ok', 'total_seconds': 962.5, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.52, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 42, 'interpretable_scalars': 
+{'resid_lambdas': [0.9995113611221313, 0.6716047525405884, 0.71769779920578, 
+0.7301366925239563, 0.758709192276001, 0.7511704564094543, 0.7658144235610962, 
+0.785914421081543, 0.7966747283935547, 0.894293487071991, 0.8682737350463867, 
+1.0002403259277344, 0.9617319703102112, 0.9938047528266907, 0.9536310434341431,
+1.0552741289138794, 1.0175154209136963, 1.046722412109375, 1.001637578010559, 
+1.052440881729126, 0.9874111413955688], 'x0_lambdas': [1.0599931478500366, 
+2.401854991912842, 1.1259443759918213, 0.7027428150177002, 0.2853277623653412, 
+0.7058637738227844, 0.48906728625297546, 0.6030499339103699, 
+-0.24608956277370453, 0.7212041616439819, -0.218057781457901, 
+1.1395580768585205, 0.026432938873767853, 0.8236297965049744, 
+-0.32458850741386414, 0.9833337664604187, 0.2916472554206848, 
+0.6122360825538635, 0.7411433458328247, -0.11726480722427368, 
+0.32798126339912415], 've_gate_norm': {'0': 3.4387521743774414, '2': 
+5.083553314208984, '4': 4.72410774230957, '6': 5.029244422912598, '8': 
+5.308531284332275, '10': 5.646711826324463, '12': 6.176467418670654, '14': 
+6.077582836151123, '16': 6.437548637390137, '18': 6.75657320022583, '20': 
+7.062663555145264}}, 'device': 5}
+[region_geometry] geom_anchor_s42: val_bpb=1.248751 status=remote_ok
+[ResultsLogger] Logged geom_anchor_s42: val_bpb=1.248751, status=remote_ok, time=654.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU1] ---
+[GPU1] val_bpb:          1.250506
+[GPU1] training_seconds: 657.2
+[GPU1] total_seconds:    966.3
+[GPU1] peak_vram_mb:     7325.1
+[GPU1] mfu_percent:      3.50
+[GPU1] total_tokens_M:   12.5
+[GPU1] num_steps:        555
+[GPU1] budget_shortfall_pct: 0.00
+[GPU1] num_params_M:     334.5
+[GPU1] depth:            21
+[GPU1] seed:             2
+[GPU1] interpretable_scalars: {"resid_lambdas": [1.0020036697387695, 
+0.6770848035812378, 0.6760780215263367, 0.7218349575996399, 0.7334781289100647,
+0.7379593253135681, 0.767848789691925, 0.8035126328468323, 0.8091017007827759, 
+0.858048141002655, 0.826897382736206, 0.9219897389411926, 0.8905423879623413, 
+1.0371993780136108, 0.9925143122673035, 1.0177725553512573, 0.9826481938362122,
+1.0316438674926758, 0.9784108400344849, 1.0209238529205322, 
+0.9534032344818115], "x0_lambdas": [1.2818955183029175, 2.214689016342163, 
+1.9337326288223267, 0.7785958647727966, 0.6796992421150208, 0.5520656704902649,
+-0.15319080650806427, 0.8194648623466492, -0.08782137185335159, 
+0.8046175241470337, -0.2472325712442398, 0.7504521608352661, 
+-0.3250400424003601, 1.2496885061264038, 0.21270368993282318, 
+0.7454546093940735, 0.17693205177783966, 0.39832597970962524, 
+0.5553257465362549, 0.16069373488426208, 0.36939695477485657], "ve_gate_norm": 
+{"0": 3.4808380603790283, "2": 5.302915096282959, "4": 4.827703475952148, "6": 
+4.839833736419678, "8": 4.810589790344238, "10": 5.5286126136779785, "12": 
+5.397884368896484, "14": 6.334026336669922, "16": 7.008576393127441, "18": 
+6.780911445617676, "20": 7.184450626373291}}
+[GPU1] Parsed metrics: {'val_bpb': 1.250506, 'training_time': 657.2, 'status': 
+'remote_ok', 'total_seconds': 966.3, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.5, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 2, 'interpretable_scalars': 
+{'resid_lambdas': [1.0020036697387695, 0.6770848035812378, 0.6760780215263367, 
+0.7218349575996399, 0.7334781289100647, 0.7379593253135681, 0.767848789691925, 
+0.8035126328468323, 0.8091017007827759, 0.858048141002655, 0.826897382736206, 
+0.9219897389411926, 0.8905423879623413, 1.0371993780136108, 0.9925143122673035,
+1.0177725553512573, 0.9826481938362122, 1.0316438674926758, 0.9784108400344849,
+1.0209238529205322, 0.9534032344818115], 'x0_lambdas': [1.2818955183029175, 
+2.214689016342163, 1.9337326288223267, 0.7785958647727966, 0.6796992421150208, 
+0.5520656704902649, -0.15319080650806427, 0.8194648623466492, 
+-0.08782137185335159, 0.8046175241470337, -0.2472325712442398, 
+0.7504521608352661, -0.3250400424003601, 1.2496885061264038, 
+0.21270368993282318, 0.7454546093940735, 0.17693205177783966, 
+0.39832597970962524, 0.5553257465362549, 0.16069373488426208, 
+0.36939695477485657], 've_gate_norm': {'0': 3.4808380603790283, '2': 
+5.302915096282959, '4': 4.827703475952148, '6': 4.839833736419678, '8': 
+4.810589790344238, '10': 5.5286126136779785, '12': 5.397884368896484, '14': 
+6.334026336669922, '16': 7.008576393127441, '18': 6.780911445617676, '20': 
+7.184450626373291}}, 'device': 1}
+[region_geometry] geom_anchor_s2: val_bpb=1.250506 status=remote_ok
+[ResultsLogger] Logged geom_anchor_s2: val_bpb=1.250506, status=remote_ok, time=657.2s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU6] ---
+[GPU6] val_bpb:          1.252673
+[GPU6] training_seconds: 657.2
+[GPU6] total_seconds:    968.9
+[GPU6] peak_vram_mb:     7325.1
+[GPU6] mfu_percent:      3.50
+[GPU6] total_tokens_M:   12.5
+[GPU6] num_steps:        555
+[GPU6] budget_shortfall_pct: 0.00
+[GPU6] num_params_M:     334.5
+[GPU6] depth:            21
+[GPU6] seed:             1
+[GPU6] interpretable_scalars: {"resid_lambdas": [1.0057682991027832, 
+0.7068588137626648, 0.7253525257110596, 0.7262876629829407, 0.7279891967773438,
+0.7321435809135437, 0.7490019202232361, 0.7381924986839294, 0.7671341300010681,
+0.7635769248008728, 0.7727206349372864, 0.9023578763008118, 0.8678165078163147,
+0.9615792036056519, 0.9215785264968872, 1.046844482421875, 1.0034209489822388, 
+1.044154405593872, 0.9913924932479858, 1.045587420463562, 0.9784289598464966], 
+"x0_lambdas": [1.6750962734222412, 2.7210593223571777, 1.2432154417037964, 
+1.0971678495407104, 1.0690702199935913, 0.7570366263389587, 0.6461012363433838,
+0.7533466815948486, 0.3653576970100403, 0.38620609045028687, 
+-0.183454230427742, 0.7627047300338745, -0.14635255932807922, 
+0.9562677145004272, -0.1576433628797531, 0.7989442944526672, 
+0.3967081606388092, 0.7321513891220093, 0.2646379768848419, 
+-0.014890053309500217, 0.6961060166358948], "ve_gate_norm": {"0": 
+3.558561086654663, "2": 5.234294414520264, "4": 5.467227458953857, "6": 
+5.419039249420166, "8": 4.4657511711120605, "10": 4.640453815460205, "12": 
+5.484800815582275, "14": 5.953499794006348, "16": 5.809971332550049, "18": 
+6.839741230010986, "20": 5.42130708694458}}
+[GPU6] Parsed metrics: {'val_bpb': 1.252673, 'training_time': 657.2, 'status': 
+'remote_ok', 'total_seconds': 968.9, 'peak_vram_mb': 7325.1, 'mfu_percent': 
+3.5, 'total_tokens_M': 12.5, 'num_steps': 555, 'budget_shortfall_pct': 0.0, 
+'num_params_M': 334.5, 'depth': 21, 'seed': 1, 'interpretable_scalars': 
+{'resid_lambdas': [1.0057682991027832, 0.7068588137626648, 0.7253525257110596, 
+0.7262876629829407, 0.7279891967773438, 0.7321435809135437, 0.7490019202232361,
+0.7381924986839294, 0.7671341300010681, 0.7635769248008728, 0.7727206349372864,
+0.9023578763008118, 0.8678165078163147, 0.9615792036056519, 0.9215785264968872,
+1.046844482421875, 1.0034209489822388, 1.044154405593872, 0.9913924932479858, 
+1.045587420463562, 0.9784289598464966], 'x0_lambdas': [1.6750962734222412, 
+2.7210593223571777, 1.2432154417037964, 1.0971678495407104, 1.0690702199935913,
+0.7570366263389587, 0.6461012363433838, 0.7533466815948486, 0.3653576970100403,
+0.38620609045028687, -0.183454230427742, 0.7627047300338745, 
+-0.14635255932807922, 0.9562677145004272, -0.1576433628797531, 
+0.7989442944526672, 0.3967081606388092, 0.7321513891220093, 0.2646379768848419,
+-0.014890053309500217, 0.6961060166358948], 've_gate_norm': {'0': 
+3.558561086654663, '2': 5.234294414520264, '4': 5.467227458953857, '6': 
+5.419039249420166, '8': 4.4657511711120605, '10': 4.640453815460205, '12': 
+5.484800815582275, '14': 5.953499794006348, '16': 5.809971332550049, '18': 
+6.839741230010986, '20': 5.42130708694458}}, 'device': 6}
+[region_geometry] geom_anchor_s1: val_bpb=1.252673 status=remote_ok
+[ResultsLogger] Logged geom_anchor_s1: val_bpb=1.252673, status=remote_ok, time=657.2s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.38e-02
+[GPU5] [====================] 100.0% | eval step 10240/10240
+[GPU6] [====================] 100.0% | eval step 10240/10240
+[GPU1] [====================] 100.0% | eval step 10240/10240
+# Region geometry
+
+A-within (median across configurations): **0.001342**
+
+## Does A-within track batch_size?
+
+batch_size is the only tunable that changes how much training happens (`num_steps = budget / batch_size`), so it is the suspect for why noise varies inside a region. Architecture is frozen here, which is what makes this separable at all.
+
+| configuration | batch_size | seeds | std |
+|---|---:|---:|---:|
+| r0.10_c4 | 12997.0 | 3 | 0.000950 |
+| r0.10_c2 | 19434.0 | 3 | 0.001606 |
+| r0.05_c1 | 19852.0 | 3 | 0.001117 |
+| r0.02_c4 | 21160.0 | 3 | 0.001007 |
+| r0.02_c1 | 22136.0 | 3 | 0.001342 |
+| r0.05_c4 | 22576.0 | 3 | 0.000951 |
+| depth_neighbour | 23180.0 | 3 | 0.000226 |
+| width_neighbour | 23180.0 | 3 | 0.000242 |
+| anchor | 23180.0 | 3 | 0.001965 |
+| r0.02_c2 | 23243.0 | 3 | 0.002304 |
+| r0.05_c0 | 26083.0 | 3 | 0.001797 |
+| r0.10_c0 | 29373.0 | 3 | 0.001685 |
+
+## B(r): is there anything left to find inside a fence of radius r?
+
+`real signal = sqrt(B_observed^2 - A_within^2)` -- the observed spread already contains the noise. A region is saturated when real signal falls to A-within.
+
+| radius | configs | B observed | real signal | real / A-within |
+|---:|---:|---:|---:|---:|
+| 0.02 | 5 | 0.001345 | 0.000095 | 0.07 |
+| 0.05 | 5 | 0.010800 | 0.010716 | 7.99 |
+| 0.10 | 5 | 0.007683 | 0.007565 | 5.64 |
+
+## A-between, by kind of architecture change
+
+The spread of the PAIRED DIFFERENCE (neighbour minus anchor) across seeds -- how much the comparison between two regions moves, not how much either one moves on its own.
+
+Step 1 predicted these would differ: +1 layer leaves every earlier layer's weights bit-identical, while a width change reshapes 41 of 46 tensors. If they come out equal, sharing an initialization does not survive training, and nesting weights across architectures buys nothing.
+
+| neighbour | seeds | mean gap | A-between | separation |
+|---|---:|---:|---:|---:|
+| depth_neighbour | 3 | -0.000418 | 0.001988 | 0.4 |
+| width_neighbour | 3 | +0.012623 | 0.001988 | 11.0 |
+
+## Recommended fence radius
+
+**0.05** -- the smallest tested radius whose real signal is at least 3x A-within.
+
+
+[region_geometry] Written to state\region_geometry.json and reports\region_geometry.md

@@ -1,0 +1,7 @@
+ablation_k: 0
+init_probe: true
+n_embd: 384
+n_head: 6
+n_layer: 6
+seed: 42
+token_xai_enabled: false

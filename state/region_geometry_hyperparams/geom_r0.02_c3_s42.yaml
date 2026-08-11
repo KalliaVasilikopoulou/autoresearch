@@ -1,0 +1,14 @@
+ablation_k: 0
+batch_size: 23161
+embedding_lr: 0.07945407649758664
+matrix_lr: 0.023104952045965136
+n_embd: 960
+n_head: 6
+n_layer: 21
+scalar_lr: 0.2110935772521052
+seed: 42
+token_xai_enabled: false
+unembedding_lr: 0.003745838650269267
+warmup_ratio: 0.17262124539958895
+weight_decay: 0.08437226668292752
+window_s_fraction: 0.38701939826666826

@@ -1,0 +1,586 @@
+﻿[region_geometry] Anchor: run_0000 (val_bpb 1.248540)
+[region_geometry]   architecture: n_layer=21, n_embd=960, n_head=6
+[region_geometry] 39 runs: ball=33, depth_neighbour=3, width_neighbour=3
+[region_geometry]   radius 0.02: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry]   radius 0.05: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry]   radius 0.10: 11 run(s) (5 configs, 3 of them re-seeded)
+[region_geometry] Resuming: 26 cell(s) already measured, 13 to run.
+[RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[RemoteRunner] GPU discovery: 7 total, 4 available (util<10%, free>8000MB): [5, 6, 1, 0]
+
+[region_geometry] === wave 1 (4 run(s), 0/13 done) ===
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c2_s42.yaml
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c1_s42.yaml
+[GPU1] GPU 1's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c2_s2.yaml
+[GPU0] GPU 0's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU0] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c3_s42.yaml
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c2_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c1_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c2_s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU0] Executing on GPU 0: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=0 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c3_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU0] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.06855329511614161 UNEMBEDDING_LR=0.007645302790531012 
+MATRIX_LR=0.020326453422142586 SCALAR_LR=0.23325492332853334 
+WEIGHT_DECAY=0.09546400405438805 WARMUP_RATIO=0.17335611727588407 
+TOTAL_BATCH_SIZE=16384 WINDOW_PATTERN=LSLSLSLSLSLSLSLSLSLSS 
+(window_s_fraction=0.5224640556572189) SEED=42
+[GPU5] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.1222007125629289 UNEMBEDDING_LR=0.007113456991750353 
+MATRIX_LR=0.020249860042231334 SCALAR_LR=0.212752926586836 
+WEIGHT_DECAY=0.1555903660895832 WARMUP_RATIO=0.15413890204519165 
+TOTAL_BATCH_SIZE=24576 WINDOW_PATTERN=LLSLSLSLLSLSLSLLSLSLS 
+(window_s_fraction=0.41738779049968855) SEED=42
+[GPU6] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.08801600295514099 UNEMBEDDING_LR=0.004649827672874394 
+MATRIX_LR=0.012314048810513694 SCALAR_LR=0.14989366249998187 
+WEIGHT_DECAY=0.02853833000790819 WARMUP_RATIO=0.16885084781623635 
+TOTAL_BATCH_SIZE=18432 WINDOW_PATTERN=LLLSLLSLLLSLLSLLLSLLS 
+(window_s_fraction=0.3009573579267607) SEED=42
+[GPU1] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.08801600295514099 UNEMBEDDING_LR=0.004649827672874394 
+MATRIX_LR=0.012314048810513694 SCALAR_LR=0.14989366249998187 
+WEIGHT_DECAY=0.02853833000790819 WARMUP_RATIO=0.16885084781623635 
+TOTAL_BATCH_SIZE=18432 WINDOW_PATTERN=LLLSLLSLLLSLLSLLLSLLS 
+(window_s_fraction=0.3009573579267607) SEED=2
+[GPU0] Vocab size: 8,192
+[GPU0] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LSLSLSLSLSLSLSLSLSLSS'}
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLSLSLLSLSLSLLSLSLS'}
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLLSLLSLLLSLLSLLLSLLS'}
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLLSLLSLLLSLLSLLLSLLS'}
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 7,864,320
+[GPU5]   value_embeds            : 86,507,520
+[GPU5]   lm_head                 : 7,864,320
+[GPU5]   transformer_matrices    : 232,245,312
+[GPU5]   scalars                 : 42
+[GPU5]   total                   : 334,481,514
+[GPU5] Estimated FLOPs per token: 1.841738e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU0] Parameter counts:
+[GPU0]   wte                     : 7,864,320
+[GPU0]   value_embeds            : 86,507,520
+[GPU0]   lm_head                 : 7,864,320
+[GPU0]   transformer_matrices    : 232,245,312
+[GPU0]   scalars                 : 42
+[GPU0]   total                   : 334,481,514
+[GPU0] Estimated FLOPs per token: 1.818145e+09
+[GPU0] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU0] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU0] [train.py] Initializing dataloader...
+[GPU0] [train.py] Dataloader created, prefetching first batch...
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 7,864,320
+[GPU1]   value_embeds            : 86,507,520
+[GPU1]   lm_head                 : 7,864,320
+[GPU1]   transformer_matrices    : 232,245,312
+[GPU1]   scalars                 : 42
+[GPU1]   total                   : 334,481,514
+[GPU1] Estimated FLOPs per token: 1.877128e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 7,864,320
+[GPU6]   value_embeds            : 86,507,520
+[GPU6]   lm_head                 : 7,864,320
+[GPU6]   transformer_matrices    : 232,245,312
+[GPU6]   scalars                 : 42
+[GPU6]   total                   : 334,481,514
+[GPU6] Estimated FLOPs per token: 1.877128e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU0] [train.py] First batch prefetched successfully
+[GPU0] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU0] Gradient accumulation steps: 8
+[GPU0] [train.py] Starting training loop...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 12
+[GPU5] [train.py] Starting training loop...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 9
+[GPU6] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 9
+[GPU1] [train.py] Starting training loop...
+[GPU0] Remote process exited with code -1
+[GPU1] Remote process exited with code -1
+[GPU6] Remote process exited with code -1
+[GPU5] Remote process exited with code -1
+[region_geometry] geom_r0.10_c3_s42: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c3_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.03e-02
+[region_geometry] geom_r0.10_c2_s2: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c2_s2: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=1.23e-02
+[region_geometry] geom_r0.10_c2_s42: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c2_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=1.23e-02
+[region_geometry] geom_r0.10_c1_s42: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c1_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=2.02e-02
+[GPU5] [==========----------]  53.3% | loss: 4.217852 | lrm: 0.93 | tok/sec:   
+18,636 | mfu:   3.5% | remaining:  5.84M tok                                   
+[GPU6] [===========---------]  56.9% | loss: 4.102797 | lrm: 0.86 | tok/sec:   
+19,151 | mfu:   3.6% | remaining:  5.39M tok                                   
+[GPU1] [===========---------]  56.2% | loss: 4.060468 | lrm: 0.88 | tok/sec:   
+18,393 | mfu:   3.5% | remaining:  5.48M tok                                   
+[GPU0] [========------------]  43.4% | loss: 4.536247 | lrm: 1.00 | tok/sec:   
+15,653 | mfu:   2.9% | remaining:  7.08M tok                                   [RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[RemoteRunner] GPU discovery: 7 total, 3 available (util<10%, free>8000MB): [5, 6, 1]
+
+[region_geometry] === wave 2 (3 run(s), 4/13 done) ===
+[GPU5] GPU 5's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c4_s42.yaml
+[GPU6] GPU 6's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c4_s1.yaml
+[GPU1] GPU 1's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_c4_s2.yaml
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c4_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c4_s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_r0.10_
+c4_s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.10749759771613672 UNEMBEDDING_LR=0.004404582658231099 
+MATRIX_LR=0.031462752120139235 SCALAR_LR=0.1451450403674075 
+WEIGHT_DECAY=0.07516893989214836 WARMUP_RATIO=0.15691471895758102 
+TOTAL_BATCH_SIZE=12288 WINDOW_PATTERN=LLSLSLSLLSLSLSLLSLSLS 
+(window_s_fraction=0.40553481620018605) SEED=1
+[GPU5] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.10749759771613672 UNEMBEDDING_LR=0.004404582658231099 
+MATRIX_LR=0.031462752120139235 SCALAR_LR=0.1451450403674075 
+WEIGHT_DECAY=0.07516893989214836 WARMUP_RATIO=0.15691471895758102 
+TOTAL_BATCH_SIZE=12288 WINDOW_PATTERN=LLSLSLSLLSLSLSLLSLSLS 
+(window_s_fraction=0.40553481620018605) SEED=42
+[GPU1] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.10749759771613672 UNEMBEDDING_LR=0.004404582658231099 
+MATRIX_LR=0.031462752120139235 SCALAR_LR=0.1451450403674075 
+WEIGHT_DECAY=0.07516893989214836 WARMUP_RATIO=0.15691471895758102 
+TOTAL_BATCH_SIZE=12288 WINDOW_PATTERN=LLSLSLSLLSLSLSLLSLSLS 
+(window_s_fraction=0.40553481620018605) SEED=2
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLSLSLLSLSLSLLSLSLS'}
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLSLSLLSLSLSLLSLSLS'}
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLSLSLLSLSLSLLSLSLS'}
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 7,864,320
+[GPU6]   value_embeds            : 86,507,520
+[GPU6]   lm_head                 : 7,864,320
+[GPU6]   transformer_matrices    : 232,245,312
+[GPU6]   scalars                 : 42
+[GPU6]   total                   : 334,481,514
+[GPU6] Estimated FLOPs per token: 1.841738e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 7,864,320
+[GPU5]   value_embeds            : 86,507,520
+[GPU5]   lm_head                 : 7,864,320
+[GPU5]   transformer_matrices    : 232,245,312
+[GPU5]   scalars                 : 42
+[GPU5]   total                   : 334,481,514
+[GPU5] Estimated FLOPs per token: 1.841738e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 7,864,320
+[GPU1]   value_embeds            : 86,507,520
+[GPU1]   lm_head                 : 7,864,320
+[GPU1]   transformer_matrices    : 232,245,312
+[GPU1]   scalars                 : 42
+[GPU1]   total                   : 334,481,514
+[GPU1] Estimated FLOPs per token: 1.841738e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 6
+[GPU6] [train.py] Starting training loop...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 6
+[GPU5] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 6
+[GPU1] [train.py] Starting training loop...
+[GPU1] Remote process exited with code -1
+[GPU5] Remote process exited with code -1
+[GPU6] Remote process exited with code -1
+[region_geometry] geom_r0.10_c4_s2: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c4_s2: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=3.15e-02
+[region_geometry] geom_r0.10_c4_s42: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c4_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=3.15e-02
+[region_geometry] geom_r0.10_c4_s1: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_r0.10_c4_s1: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=960, matrix_lr=3.15e-02
+[GPU5] [====----------------]  23.2% | loss: 5.138118 | lrm: 1.00 | tok/sec:   
+17,651 | mfu:   3.3% | remaining:  9.60M tok                                   
+[GPU6] [====----------------]  22.7% | loss: 5.113762 | lrm: 1.00 | tok/sec:   
+17,294 | mfu:   3.2% | remaining:  9.66M tok                                   
+[GPU1] [====----------------]  22.7% | loss: 5.112072 | lrm: 1.00 | tok/sec:   
+17,471 | mfu:   3.3% | remaining:  9.66M tok                                   [RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[RemoteRunner] GPU discovery: 7 total, 3 available (util<10%, free>8000MB): [5, 6, 1]
+
+[region_geometry] === wave 3 (3 run(s), 7/13 done) ===
+[GPU5] GPU 5's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_depth_neighbour_s42.yaml
+[GPU1] GPU 1's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_depth_neighbour_s2.yaml
+[GPU6] GPU 6's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_depth_neighbour_s1.yaml
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_depth_
+neighbour_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_depth_
+neighbour_s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_depth_
+neighbour_s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU5] [hyperparams] DEPTH=22 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLLSLSLLSLLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=42
+[GPU6] [hyperparams] DEPTH=22 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLLSLSLLSLLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=1
+[GPU1] [hyperparams] DEPTH=22 N_HEAD=6 target_n_embd=960 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLLSLSLLSLLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=2
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 22, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLLSLSLLSLLSLLSLS'}
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 22, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLLSLSLLSLLSLLSLS'}
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 22, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 960, 'window_pattern': 
+'LLSLLSLLSLSLLSLLSLLSLS'}
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 7,864,320
+[GPU1]   value_embeds            : 86,507,520
+[GPU1]   lm_head                 : 7,864,320
+[GPU1]   transformer_matrices    : 243,304,512
+[GPU1]   scalars                 : 44
+[GPU1]   total                   : 345,540,716
+[GPU1] Estimated FLOPs per token: 1.943483e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 7,864,320
+[GPU5]   value_embeds            : 86,507,520
+[GPU5]   lm_head                 : 7,864,320
+[GPU5]   transformer_matrices    : 243,304,512
+[GPU5]   scalars                 : 44
+[GPU5]   total                   : 345,540,716
+[GPU5] Estimated FLOPs per token: 1.943483e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 7,864,320
+[GPU6]   value_embeds            : 86,507,520
+[GPU6]   lm_head                 : 7,864,320
+[GPU6]   transformer_matrices    : 243,304,512
+[GPU6]   scalars                 : 44
+[GPU6]   total                   : 345,540,716
+[GPU6] Estimated FLOPs per token: 1.943483e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(960/768) = 0.894427
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 11
+[GPU5] [train.py] Starting training loop...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 11
+[GPU1] [train.py] Starting training loop...
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 11
+[GPU6] [train.py] Starting training loop...
+[GPU5] Remote process exited with code -1
+[GPU6] Remote process exited with code -1
+[GPU1] Remote process exited with code -1
+[region_geometry] geom_depth_neighbour_s42: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_depth_neighbour_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=22, n_embd=960, matrix_lr=2.38e-02
+[region_geometry] geom_depth_neighbour_s1: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_depth_neighbour_s1: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=22, n_embd=960, matrix_lr=2.38e-02
+[region_geometry] geom_depth_neighbour_s2: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_depth_neighbour_s2: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=22, n_embd=960, matrix_lr=2.38e-02
+[GPU5] [=-------------------]   5.6% | loss: 6.913176 | lrm: 0.32 | tok/sec:   
+18,384 | mfu:   3.6% | remaining: 11.80M tok                                   
+[GPU6] [=-------------------]   5.6% | loss: 6.916445 | lrm: 0.32 | tok/sec:   
+18,348 | mfu:   3.6% | remaining: 11.80M tok                                   
+[GPU1] [=-------------------]   5.6% | loss: 6.915044 | lrm: 0.32 | tok/sec:   
+18,347 | mfu:   3.6% | remaining: 11.80M tok                                   [RemoteRunner] Pulling latest code on remote ...
+[RemoteRunner] git pull: Already up to date.
+[RemoteRunner] GPU discovery: 7 total, 4 available (util<10%, free>8000MB): [5, 6, 1, 0]
+
+[region_geometry] === wave 4 (3 run(s), 10/13 done) ===
+[GPU5] GPU 5's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU5] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_width_neighbour_s42.yaml
+[GPU6] GPU 6's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU6] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_width_neighbour_s1.yaml
+[GPU1] GPU 1's lock is held by another run -- proceeding anyway (best-effort 
+lock, not a hard reservation)
+[GPU1] Uploading hyperparams -> 
+/home/up1066590/autoresearch/model_hyperparams_geom_width_neighbour_s2.yaml
+[GPU5] Executing on GPU 5: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=5 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_width_
+neighbour_s42.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU6] Executing on GPU 6: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=6 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_width_
+neighbour_s1.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] Executing on GPU 1: bash -lc "source /opt/anaconda3/bin/activate 
+autoresearch && cd /home/up1066590/autoresearch && CUDA_VISIBLE_DEVICES=1 
+AUTORESEARCH_HP_PATH=/home/up1066590/autoresearch/model_hyperparams_geom_width_
+neighbour_s2.yaml AUTORESEARCH_MANAGED=1 python -u train.py"
+[GPU1] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=768 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=2
+[GPU6] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=768 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=1
+[GPU5] [hyperparams] DEPTH=21 N_HEAD=6 target_n_embd=768 
+EMBEDDING_LR=0.0886776573279423 UNEMBEDDING_LR=0.003955934722681367 
+MATRIX_LR=0.023762701040555865 SCALAR_LR=0.2101414489776221 
+WEIGHT_DECAY=0.09338780539110303 WARMUP_RATIO=0.17311601489782336 
+TOTAL_BATCH_SIZE=22528 WINDOW_PATTERN=LLSLLSLSLLSLLSLSLLSLS 
+(window_s_fraction=0.36455016024410725) SEED=42
+[GPU6] Vocab size: 8,192
+[GPU6] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 768, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU5] Vocab size: 8,192
+[GPU5] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 768, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU1] Vocab size: 8,192
+[GPU1] Model config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 21, 
+'n_head': 6, 'n_kv_head': 6, 'n_embd': 768, 'window_pattern': 
+'LLSLLSLSLLSLLSLSLLSLS'}
+[GPU6] Parameter counts:
+[GPU6]   wte                     : 6,291,456
+[GPU6]   value_embeds            : 69,206,016
+[GPU6]   lm_head                 : 6,291,456
+[GPU6]   transformer_matrices    : 148,637,760
+[GPU6]   scalars                 : 42
+[GPU6]   total                   : 230,426,730
+[GPU6] Estimated FLOPs per token: 1.259877e+09
+[GPU6] Scaling AdamW LRs by 1/sqrt(768/768) = 1.000000
+[GPU5] Parameter counts:
+[GPU5]   wte                     : 6,291,456
+[GPU5]   value_embeds            : 69,206,016
+[GPU5]   lm_head                 : 6,291,456
+[GPU5]   transformer_matrices    : 148,637,760
+[GPU5]   scalars                 : 42
+[GPU5]   total                   : 230,426,730
+[GPU5] Estimated FLOPs per token: 1.259877e+09
+[GPU5] Scaling AdamW LRs by 1/sqrt(768/768) = 1.000000
+[GPU6] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU6] [train.py] Initializing dataloader...
+[GPU6] [train.py] Dataloader created, prefetching first batch...
+[GPU1] Parameter counts:
+[GPU1]   wte                     : 6,291,456
+[GPU1]   value_embeds            : 69,206,016
+[GPU1]   lm_head                 : 6,291,456
+[GPU1]   transformer_matrices    : 148,637,760
+[GPU1]   scalars                 : 42
+[GPU1]   total                   : 230,426,730
+[GPU1] Estimated FLOPs per token: 1.259877e+09
+[GPU1] Scaling AdamW LRs by 1/sqrt(768/768) = 1.000000
+[GPU6] [train.py] First batch prefetched successfully
+[GPU6] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU6] Gradient accumulation steps: 11
+[GPU6] [train.py] Starting training loop...
+[GPU1] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU1] [train.py] Initializing dataloader...
+[GPU1] [train.py] Dataloader created, prefetching first batch...
+[GPU5] [train.py] torch.compile skipped (SDPA-only build, compiled SDPA is 
+memory-inefficient)
+[GPU5] [train.py] Initializing dataloader...
+[GPU5] [train.py] Dataloader created, prefetching first batch...
+[GPU1] [train.py] First batch prefetched successfully
+[GPU1] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU1] Gradient accumulation steps: 11
+[GPU1] [train.py] Starting training loop...
+[GPU5] [train.py] First batch prefetched successfully
+[GPU5] Token budget: 12,500,000 tokens (safety cap 1800s)
+[GPU5] Gradient accumulation steps: 11
+[GPU5] [train.py] Starting training loop...
+[GPU5] Remote process exited with code -1
+[region_geometry] geom_width_neighbour_s42: val_bpb=inf status=remote_error
+[GPU1] Remote process exited with code -1
+[GPU6] Remote process exited with code -1
+[ResultsLogger] Logged geom_width_neighbour_s42: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=768, matrix_lr=2.38e-02
+[region_geometry] geom_width_neighbour_s2: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_width_neighbour_s2: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=768, matrix_lr=2.38e-02
+[region_geometry] geom_width_neighbour_s1: val_bpb=inf status=remote_error
+[ResultsLogger] Logged geom_width_neighbour_s1: val_bpb=inf, status=remote_error, time=0.0s
+[ResultsLogger]   Hyperparams: n_layer=21, n_embd=768, matrix_lr=2.38e-02
+[GPU5] [--------------------]   1.1% | loss: 8.989065 | lrm: 0.06 | tok/sec:   
+22,390 | mfu:   2.9% | remaining: 12.36M tok                                   
+[GPU6] [--------------------]   1.1% | loss: 8.990478 | lrm: 0.06 | tok/sec:   
+22,066 | mfu:   2.8% | remaining: 12.36M tok                                   
+[GPU1] [--------------------]   1.1% | loss: 8.989710 | lrm: 0.06 | tok/sec:   
+23,012 | mfu:   2.9% | remaining: 12.36M tok                                   
+# Region geometry
+
+A-within (median across configurations): **0.001342**
+
+## Does A-within track batch_size?
+
+batch_size is the only tunable that changes how much training happens (`num_steps = budget / batch_size`), so it is the suspect for why noise varies inside a region. Architecture is frozen here, which is what makes this separable at all.
+
+| configuration | batch_size | seeds | std |
+|---|---:|---:|---:|
+| r0.05_c1 | 19852.0 | 3 | 0.001117 |
+| r0.02_c4 | 21160.0 | 3 | 0.001007 |
+| r0.02_c1 | 22136.0 | 3 | 0.001342 |
+| r0.05_c4 | 22576.0 | 3 | 0.000951 |
+| r0.02_c2 | 23243.0 | 3 | 0.002304 |
+| r0.05_c0 | 26083.0 | 3 | 0.001797 |
+| r0.10_c0 | 29373.0 | 3 | 0.001685 |
+
+## B(r): is there anything left to find inside a fence of radius r?
+
+`real signal = sqrt(B_observed^2 - A_within^2)` -- the observed spread already contains the noise. A region is saturated when real signal falls to A-within.
+
+| radius | configs | B observed | real signal | real / A-within |
+|---:|---:|---:|---:|---:|
+| 0.02 | 5 | 0.001345 | 0.000095 | 0.07 |
+| 0.05 | 5 | 0.010800 | 0.010716 | 7.99 |
+
+## Recommended fence radius
+
+**0.05** -- the smallest tested radius whose real signal is at least 3x A-within.
+
+
+[region_geometry] Written to state\region_geometry.json and reports\region_geometry.md

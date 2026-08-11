@@ -162,6 +162,15 @@ def build_plan(anchor: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every cell to run: {kind, label, seed, hyperparams}."""
     cells: List[Dict[str, Any]] = []
 
+    # The anchor itself, at every seed. Required for A-between, which is the
+    # spread of the PAIRED DIFFERENCE between a neighbour and the anchor across
+    # seeds -- not the neighbour's own spread, which is just A-within for that
+    # architecture. The first version of this grid omitted the anchor and the
+    # analysis silently reported the wrong quantity.
+    for s in SEEDS:
+        cells.append({"kind": "anchor", "radius": None, "config_idx": 0,
+                      "label": "anchor", "seed": s, "hyperparams": dict(anchor)})
+
     for radius in RADII:
         configs = configs_in_ball(anchor, radius, CONFIGS_PER_RADIUS, seed=int(radius * 1000))
         # Spread the seed-repeat picks across batch_size, so A-within can be
@@ -195,6 +204,19 @@ def _hyperparams_for(cell: Dict[str, Any]) -> Dict[str, Any]:
     return hp
 
 
+def already_done(results_path: str) -> set:
+    """run_ids already recorded with a real measurement, so a re-run does only
+    what is missing. The first attempt lost 13 of 39 cells to a dropped SSH
+    session; redoing the 26 that succeeded would have cost ~5 GPU-hours for
+    nothing."""
+    done = set()
+    for row in load_results(results_path):
+        if row.get("status") in OK_STATUSES and isinstance(row.get("val_bpb"), (int, float)) \
+                and math.isfinite(row["val_bpb"]):
+            done.add(str(row.get("run_id")))
+    return done
+
+
 def run_all(cells: List[Dict[str, Any]], results_path: str, timeout: int) -> None:
     from agents import remote_runner
     from agents.live_progress import MultiGpuProgressDisplay
@@ -202,24 +224,50 @@ def run_all(cells: List[Dict[str, Any]], results_path: str, timeout: int) -> Non
     if not remote_runner.is_remote_configured():
         raise SystemExit("[region_geometry] No remote configured.")
 
-    client = remote_runner.open_client()
-    try:
-        remote_runner.kill_stale_training_processes(client=client)
-        if not remote_runner.sync_remote_code(client=client):
-            raise SystemExit("[region_geometry] Remote code sync failed -- nothing dispatched.")
-        gpus = [g["index"] for g in remote_runner.discover_available_gpus(client=client)]
-        if not gpus:
-            raise SystemExit("[region_geometry] No free GPUs.")
-        print(f"[region_geometry] {len(cells)} run(s) across GPUs {gpus}")
+    done = already_done(results_path)
+    pending = [c for c in cells
+               if f"{RUN_ID_PREFIX}_{c['label']}_s{c['seed']}" not in done]
+    if len(pending) < len(cells):
+        print(f"[region_geometry] Resuming: {len(cells) - len(pending)} cell(s) already "
+              f"measured, {len(pending)} to run.")
+    if not pending:
+        print("[region_geometry] Nothing to run.")
+        return
 
-        hp_dir = Path("state/region_geometry_hyperparams")
-        hp_dir.mkdir(parents=True, exist_ok=True)
+    hp_dir = Path("state/region_geometry_hyperparams")
+    hp_dir.mkdir(parents=True, exist_ok=True)
 
-        for start in range(0, len(cells), len(gpus)):
-            wave = cells[start:start + len(gpus)]
+    # ONE CONNECTION PER WAVE, not one for the whole experiment. The first
+    # attempt held a single SSH session across all 10 waves (~2.5 hours); it
+    # dropped partway and every remaining run failed instantly with "SSH
+    # session not active" -- 13 of 39 cells lost, including both neighbour
+    # architectures and most of the widest radius. scripts/seed_variance.py
+    # survived 88 minutes precisely because it reconnects per block, and that
+    # is the pattern agents/orchestrator.py uses per wave too.
+    wave_no = 0
+    start = 0
+    while start < len(pending):
+        wave_no += 1
+        try:
+            client = remote_runner.open_client()
+        except Exception as e:
+            print(f"[region_geometry] Could not reach the server for wave {wave_no}: {e}")
+            break
+        try:
+            if not remote_runner.sync_remote_code(client=client):
+                print(f"[region_geometry] Sync failed on wave {wave_no} -- stopping so the "
+                      f"remaining cells stay re-runnable rather than becoming inf rows.")
+                break
+            gpus = [g["index"] for g in remote_runner.discover_available_gpus(client=client)]
+            if not gpus:
+                print("[region_geometry] No free GPUs -- stopping; re-run to continue.")
+                break
+
+            wave = pending[start:start + len(gpus)]
+            wave_statuses: List[Optional[str]] = []
             labels = [f"GPU{gpus[i]}" for i in range(len(wave))]
-            print(f"\n[region_geometry] === wave {start // len(gpus) + 1} "
-                  f"({len(wave)} run(s)) ===")
+            print(f"\n[region_geometry] === wave {wave_no} ({len(wave)} run(s), "
+                  f"{start}/{len(pending)} done) ===")
             with MultiGpuProgressDisplay(labels) as display:
                 with ThreadPoolExecutor(max_workers=len(wave)) as pool:
                     futures = {}
@@ -247,8 +295,22 @@ def run_all(cells: List[Dict[str, Any]], results_path: str, timeout: int) -> Non
                                            f"val_bpb={metrics.get('val_bpb')} "
                                            f"status={metrics.get('status')}")
                         log_result(run_id, hp, metrics, results_path=results_path)
-    finally:
-        client.close()
+                        wave_statuses.append(metrics.get("status"))
+            start += len(wave)
+
+            # A whole wave failing is not bad luck, it is a broken link -- when
+            # the SSH session drops, train.py dies with it and EVERY concurrent
+            # run in that wave dies at the same moment. Carrying on just spends
+            # the remaining cells against the same broken connection; that is
+            # how 13 of 13 were lost on the previous attempt. Resume makes
+            # stopping free.
+            if wave_statuses and all(s == "remote_error" for s in wave_statuses):
+                print(f"\n[region_geometry] Every run in wave {wave_no} failed. Stopping "
+                      f"rather than spending the remaining {len(pending) - start} cell(s) "
+                      f"against the same fault -- re-run to resume where this left off.")
+                break
+        finally:
+            client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +345,11 @@ def analyze(results_path: str) -> Dict[str, Any]:
         by_label[label]["_batch"] = row.get("batch_size")  # type: ignore[index]
 
     # --- A-within: spread of one configuration across seeds ---
+    # Ball configurations ONLY. A-within is defined inside one region, i.e. at a
+    # fixed architecture; pooling in the neighbour architectures (a different
+    # n_layer, a different n_embd) mixes three regions into one number. The
+    # first version of this analysis did exactly that and reported 0.001117
+    # where the region's own value is 0.001342.
     per_config = {}
     for label, cells in by_label.items():
         vals = [v for k, v in cells.items() if isinstance(k, int)]
@@ -290,9 +357,10 @@ def analyze(results_path: str) -> Dict[str, Any]:
             per_config[label] = {
                 "n_seeds": len(vals), "mean": statistics.mean(vals),
                 "std": statistics.stdev(vals), "batch_size": cells.get("_batch"),
+                "in_region": label.startswith("r0."),
             }
-    a_within = (statistics.median([c["std"] for c in per_config.values()])
-                if per_config else None)
+    in_region = [c["std"] for c in per_config.values() if c["in_region"]]
+    a_within = statistics.median(in_region) if in_region else None
 
     # --- B(r): spread across configurations inside each radius ---
     b_by_radius = {}
@@ -308,17 +376,41 @@ def analyze(results_path: str) -> Dict[str, Any]:
                 "ratio_to_a_within": (real / a_within) if a_within else None,
             }
 
-    # --- A-between: same configuration, neighbouring architecture ---
+    # --- A-between: how much the COMPARISON between two regions moves ---
+    # The spread of the PAIRED DIFFERENCE (neighbour - anchor) across seeds, not
+    # the neighbour's own spread. Its own spread is A-within for that
+    # architecture and says nothing about comparing two regions; the first
+    # version of this analysis reported that by mistake.
     a_between = {}
-    base_labels = [l for l in by_label if l.startswith(f"r{RADII[1]:.2f}_c")]
+    anchor_cells = {k: v for k, v in by_label.get("anchor", {}).items() if isinstance(k, int)}
     for kind in ("depth_neighbour", "width_neighbour"):
-        cells = by_label.get(kind)
-        if not cells:
+        cells = by_label.get(kind, {})
+        shared = sorted(s for s in cells if isinstance(s, int) and s in anchor_cells)
+        if len(shared) < 2:
             continue
-        vals = [v for k, v in cells.items() if isinstance(k, int)]
-        if len(vals) > 1:
-            a_between[kind] = {"n_seeds": len(vals), "mean": statistics.mean(vals),
-                               "std": statistics.stdev(vals)}
+        diffs = [cells[s] - anchor_cells[s] for s in shared]
+        # If one side of the pair is far noisier than the other, the difference
+        # is essentially that side's wobble and the comparison says nothing
+        # about the OTHER. Measured here: the anchor's own std was 0.00197
+        # while both neighbours sat near 0.00023, so std_of_gap came out
+        # identical (0.001988) for depth and width -- arithmetically forced,
+        # not a finding about either. Flagged rather than reported bare.
+        own = statistics.stdev([cells[s] for s in shared])
+        anchor_own = statistics.stdev([anchor_cells[s] for s in shared])
+        a_between[kind] = {
+            "n_seeds": len(shared),
+            "mean_gap": statistics.mean(diffs),
+            "std_of_gap": statistics.stdev(diffs),
+            "own_std": own,
+            "anchor_std": anchor_own,
+            "anchor_dominated": anchor_own > 3 * own,
+            "per_seed_gap": {str(s): d for s, d in zip(shared, diffs)},
+            # Above ~2 the two regions are genuinely different; below it the
+            # gap is unreadable however large the means look.
+            "separation": (abs(statistics.mean(diffs))
+                           / (statistics.stdev(diffs) / len(diffs) ** 0.5))
+            if statistics.stdev(diffs) > 0 else None,
+        }
 
     # --- the recommendation ---
     recommended = None
@@ -367,12 +459,33 @@ def render(report: Dict[str, Any]) -> str:
 
     if report["a_between"]:
         lines += ["", "## A-between, by kind of architecture change", "",
-                  "Step 1 showed +1 layer leaves every earlier layer bit-identical while a "
-                  "width change reshapes 41 of 46 tensors -- so these should NOT be equal, "
-                  "and one constant cannot serve both.", "",
-                  "| neighbour | seeds | mean | std |", "|---|---:|---:|---:|"]
+                  "The spread of the PAIRED DIFFERENCE (neighbour minus anchor) across "
+                  "seeds -- how much the comparison between two regions moves, not how "
+                  "much either one moves on its own.", "",
+                  "Step 1 predicted these would differ: +1 layer leaves every earlier "
+                  "layer's weights bit-identical, while a width change reshapes 41 of 46 "
+                  "tensors. If they come out equal, sharing an initialization does not "
+                  "survive training, and nesting weights across architectures buys "
+                  "nothing.", "",
+                  "| neighbour | seeds | mean gap | A-between | its own std | anchor std | separation |",
+                  "|---|---:|---:|---:|---:|---:|---:|"]
         for kind, e in sorted(report["a_between"].items()):
-            lines.append(f"| {kind} | {e['n_seeds']} | {e['mean']:.6f} | {e['std']:.6f} |")
+            sep = f"{e['separation']:.1f}" if e["separation"] else "n/a"
+            lines.append(f"| {kind} | {e['n_seeds']} | {e['mean_gap']:+.6f} | "
+                         f"{e['std_of_gap']:.6f} | {e['own_std']:.6f} | "
+                         f"{e['anchor_std']:.6f} | {sep} |")
+        if any(e["anchor_dominated"] for e in report["a_between"].values()):
+            lines += ["",
+                      "> **A-between here is ANCHOR-DOMINATED and must not be read as a "
+                      "property of the neighbours.** The anchor's own seed spread is more "
+                      "than 3x each neighbour's, so `neighbour - anchor` is essentially "
+                      "the anchor's wobble -- the same anchor in every row, which is why "
+                      "the values come out equal. This design cannot compare depth "
+                      "against width; that needs a quieter anchor or many more seeds.",
+                      "",
+                      "> The MEAN GAP is still usable where `separation` is large: it is a "
+                      "difference of means, which the anchor's noise widens but does not "
+                      "bias."]
 
     rec = report["recommended_fence_radius"]
     lines += ["", "## Recommended fence radius", "",
