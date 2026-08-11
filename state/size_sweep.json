@@ -2,53 +2,10 @@
   "best_is_largest": true,
   "best_is_smallest": false,
   "best_rung": 232243200,
-  "headroom": {
-    "fitted_gap": 0.041393929976353105,
-    "measured_gap": 0.03774758426632463,
-    "measured_gap_in_sigma": 18.984619557714417,
-    "next_doubling_gain": 0.009121629561937185,
-    "params_to_halve_it": 1600220857.9338832,
-    "size_multiple_to_halve_it": 6.8902807829632176
-  },
-  "history_agrees": true,
-  "history_bins": [
-    {
-      "best": 1.357409,
-      "median": 1.4794874999999998,
-      "n": 4,
-      "params_hi": 7501011.107732095,
-      "params_lo": 3179904.0000000014
-    },
-    {
-      "best": 1.440615,
-      "median": 1.4677995,
-      "n": 2,
-      "params_hi": 17693983.10084844,
-      "params_lo": 7501011.107732095
-    },
-    {
-      "best": 1.363585,
-      "median": 1.444063,
-      "n": 5,
-      "params_hi": 41737978.18408608,
-      "params_lo": 17693983.10084844
-    },
-    {
-      "best": 1.28023,
-      "median": 1.3406500000000001,
-      "n": 10,
-      "params_hi": 98454870.95620161,
-      "params_lo": 41737978.18408608
-    },
-    {
-      "best": 1.24854,
-      "median": 1.2953575,
-      "n": 10,
-      "params_hi": 232243199.99999982,
-      "params_lo": 98454870.95620161
-    }
-  ],
-  "last_step": -0.01347200000000015,
+  "headroom": null,
+  "history_agrees": null,
+  "history_bins": [],
+  "last_step": -0.003562999999999983,
   "n_steps": 5,
   "predictable": true,
   "readable": true,
@@ -65,96 +22,96 @@
       "params": 1228800,
       "size_ratio": 1.0,
       "total_params_M": 6.5,
-      "training_time": 127.3,
-      "val_bpb": 1.483588
+      "training_time": 39.8,
+      "val_bpb": 1.796245
     },
     {
       "budget_shortfall_pct": "0.0",
-      "delta": -0.14101699999999995,
-      "delta_sigma": -70.92252784394881,
+      "delta": -0.052119000000000026,
+      "delta_sigma": -26.212522098036207,
       "n_embd": 320,
       "n_head": 2,
       "n_layer": 7,
       "params": 8601600,
       "size_ratio": 7.0,
       "total_params_M": 24.3,
-      "training_time": 200.8,
-      "val_bpb": 1.342571
+      "training_time": 65.4,
+      "val_bpb": 1.744126
     },
     {
       "budget_shortfall_pct": "0.0",
-      "delta": -0.04292600000000002,
-      "delta_sigma": -21.589031324091064,
+      "delta": -0.019710000000000116,
+      "delta_sigma": -9.912868830029288,
       "n_embd": 480,
       "n_head": 3,
       "n_layer": 11,
       "params": 30412800,
       "size_ratio": 24.75,
       "total_params_M": 61.9,
-      "training_time": 306.0,
-      "val_bpb": 1.299645
+      "training_time": 94.6,
+      "val_bpb": 1.724416
     },
     {
       "budget_shortfall_pct": "0.0",
-      "delta": -0.02203199999999983,
-      "delta_sigma": -11.080686253840806,
+      "delta": -0.009233999999999964,
+      "delta_sigma": -4.644111150506826,
       "n_embd": 640,
       "n_head": 4,
       "n_layer": 14,
       "params": 68812800,
       "size_ratio": 56.0,
       "total_params_M": 116.0,
-      "training_time": 379.5,
-      "val_bpb": 1.277613
+      "training_time": 118.8,
+      "val_bpb": 1.715182
     },
     {
       "budget_shortfall_pct": "0.0",
-      "delta": -0.015390000000000015,
-      "delta_sigma": -7.740185250844748,
+      "delta": -0.006288000000000071,
+      "delta_sigma": -3.162461654146347,
       "n_embd": 800,
       "n_head": 5,
       "n_layer": 18,
       "params": 138240000,
       "size_ratio": 112.5,
       "total_params_M": 210.3,
-      "training_time": 501.6,
-      "val_bpb": 1.262223
+      "training_time": 161.1,
+      "val_bpb": 1.708894
     },
     {
       "budget_shortfall_pct": "0.0",
-      "delta": -0.01347200000000015,
-      "delta_sigma": -6.775553976567999,
+      "delta": -0.003562999999999983,
+      "delta_sigma": -1.7919610168134943,
       "n_embd": 960,
       "n_head": 6,
       "n_layer": 21,
       "params": 232243200,
       "size_ratio": 189.0,
       "total_params_M": 334.5,
-      "training_time": 654.0,
-      "val_bpb": 1.248751
+      "training_time": 211.5,
+      "val_bpb": 1.705331
     }
   ],
   "scaling_law": {
-    "alpha": 0.35912280701754384,
-    "c": 41.81552912555871,
-    "l_inf": 1.2110034157336753,
+    "alpha": 0.32421052631578945,
+    "c": 10.488117390251114,
+    "l_inf": 1.684965794068384,
     "n": 6,
-    "r2": 0.9988736590842029,
-    "residual_rms": 0.0037717364464464106,
+    "r2": 0.9999929074071858,
+    "residual_rms": 0.00011769524592444669,
     "residuals": [
-      0.0006490170834789755,
-      -0.0036309656316129146,
-      0.002739960136025843,
-      0.0025400123283221276,
-      0.0013483217938137226,
-      -0.0036463457100284202
+      -2.463926181528464e-06,
+      -5.5096755623429416e-05,
+      0.00013035308699693715,
+      4.152590046557769e-05,
+      -0.00013859662615689494,
+      2.427832049400891e-05
     ]
   },
   "sigma": 0.0019883245040317843,
   "sigma_source": "region_geometry.json (A-between, paired difference)",
   "step_threshold": 0.0039766490080635685,
-  "steps_below_noise": 0,
-  "still_falling_at_the_top": true,
+  "steps_below_noise": 1,
+  "still_falling_at_the_top": false,
   "unimodal": true,
-  "verdict": "ONE HILL -- at most one change of direction, so Agent 4 can walk downhill on size instead of exploring it."
+  "verdict": "ONE HILL -- at most one change of direction, so Agent 4 can walk downhill on size instead of exploring it. (1 of 5 steps were below the noise, so those stretches are flat rather than sloped.)"
 }

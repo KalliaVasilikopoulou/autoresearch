@@ -510,12 +510,22 @@ def history_by_size(history_path: str, n_bins: int = 5) -> List[Dict[str, Any]]:
     Both best and median are reported because best-of-n falls as n grows purely
     by selection, and the bins do not hold equal numbers of runs.
     """
+    # SAME BUDGET ONLY. The cross-check exists to corroborate the ladder's
+    # SHAPE with runs that were not all tuned at the anchor's rates -- it can
+    # only do that if they answer the same question. Cutting TOKEN_BUDGET moved
+    # the anchor 1.2486 -> 1.7063, so history from another budget would print a
+    # table sitting half a bpb away from the ladder and invite exactly the
+    # comparison it is there to make. Guarded in _same_config for reuse; this
+    # is the same rule for the report.
+    budget_m = current_token_budget() / 1e6
     rows = [r for r in load_results(history_path)
             if r.get("status") in OK_STATUSES
             and isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
             and all(c in r for c in ARCHITECTURE_COLUMNS)
             and not (isinstance(r.get("budget_shortfall_pct"), (int, float))
-                     and r["budget_shortfall_pct"] > 0)]
+                     and r["budget_shortfall_pct"] > 0)
+            and isinstance(r.get("total_tokens_M"), (int, float))
+            and math.isclose(float(r["total_tokens_M"]), budget_m, rel_tol=0.02)]
     if len(rows) < n_bins * 2:
         return []
 
@@ -765,11 +775,11 @@ def render(report: Dict[str, Any]) -> str:
     lines += ["", "## Where is the best size?", ""]
     if report["best_is_largest"]:
         lines += ["The **largest rung tested wins**, so the minimum is at or beyond the "
-                  "edge of the ladder. The ladder stops where it does because "
-                  "`n_embd` is capped at 1024 in `ARCH_SAFE_RANGES` -- a search-space "
-                  "setting, not a hardware limit (train.py allows 8192). If the curve "
-                  "is still falling at the cap, the binding constraint on this campaign "
-                  "is the box, not the search.", ""]
+                  "edge of the ladder. Whether that matters depends entirely on the "
+                  "final step below: a ladder still descending at its top says the "
+                  "search box is the binding constraint, while one whose last step has "
+                  "fallen into the noise says size has simply stopped paying, and "
+                  "widening the box would buy nothing.", ""]
     elif report["best_is_smallest"]:
         lines += ["The **smallest rung tested wins** -- unexpected at a fixed token "
                   "budget, and worth checking against the anchor's learning rates "

@@ -59,21 +59,25 @@ ARCH_SAFE_RANGES = {
     # _build_window_pattern) is already safe at n_layer=1, so this is
     # purely widening the search's exploration range to match what the
     # model can actually run, not a new safety boundary.
-    # n_layer/n_embd ceilings RAISED 24 -> 28 and 1024 -> 1280 on 2026-08-11,
-    # from the size sweep (scripts/size_sweep.py, reports/size_sweep.md): over
-    # 189x of size, val_bpb fell at every single step and was STILL FALLING at
-    # the old ceiling, so what limited model size was this box, not the search.
-    # Both move together to keep n_embd/n_layer near the ~45 the sweep held
-    # fixed -- raising width alone would let the search build models
-    # wider-and-shallower than any rung actually measured, and shape at fixed
-    # size is exactly what that experiment did NOT test.
-    # Sized against the wall clock, not by taste: the worst case the box now
-    # allows (28 x 1280 = 550M non-embedding params) projects to ~1200s of
-    # train.py's 1800s MAX_TRAIN_SECONDS, from the sweep's own measured
-    # time-vs-size fit. Do not raise again without redoing that arithmetic --
-    # a run that trips the cap is excluded as incomplete, so it costs a GPU
-    # slot and returns nothing.
-    "n_layer": (1, 28), "n_embd": (128, 1280), "n_head": (1, 16),
+    # RAISED to 28/1280 and PUT BACK to 24/1024, both on 2026-08-11, and the
+    # round trip is the point: HOW BIG A MODEL IS WORTH BUILDING DEPENDS ON HOW
+    # MUCH YOU TRAIN IT, so this ceiling is not a property of the search, it is
+    # a property of the budget.
+    #
+    # At TOKEN_BUDGET=12.5M the size ladder fell at every one of five steps
+    # across 189x and was still falling at 232M params by -0.0135 (6.8 sigma) --
+    # the box, not the search, was the limit, so it was raised.
+    #
+    # At TOKEN_BUDGET=4.19M the same ladder is still monotone but the returns
+    # have collapsed: the same final step is -0.0036, inside the noise, and the
+    # whole ladder spans 0.091 bpb instead of 0.235. Size stops paying somewhere
+    # around 138-232M, which 24 x 1024 = 302M already clears. Room the search
+    # cannot profit from is not free -- it costs wall clock on every oversized
+    # model it tries.
+    #
+    # If the budget moves again, re-run scripts/size_sweep.py before touching
+    # these. Do not reason about them from first principles.
+    "n_layer": (1, 24), "n_embd": (128, 1024), "n_head": (1, 16),
     # Tier 4: fraction of layers using the short attention window (see
     # train.py's _build_window_pattern, which turns this into an actual S/L
     # pattern string). Continuous so the Sobol/EI surrogate can search it

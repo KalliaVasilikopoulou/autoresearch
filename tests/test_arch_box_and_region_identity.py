@@ -72,12 +72,16 @@ def test_the_ceilings_track_the_search_space():
     assert MAX_N_HEAD == SEARCH_SPACE["n_head"][1]
 
 
-def test_the_box_is_wider_than_the_ladder_the_sweep_measured():
-    """The sweep's top rung was n_layer=21 / n_embd=960 and was still
-    improving. A box that cannot exceed it leaves the measured gain
-    unreachable."""
-    assert ARCH_SAFE_RANGES["n_layer"][1] > 21
-    assert ARCH_SAFE_RANGES["n_embd"][1] > 960
+def test_the_box_reaches_past_where_size_stops_paying():
+    """The ladder's top rung is n_layer=21 / n_embd=960 = 232M non-embedding
+    params, and at TOKEN_BUDGET=4.19M its final step (-0.0036) has fallen into
+    the noise -- so size stops paying somewhere around 138-232M. The box has to
+    reach past that, or the search cannot see the flattening for itself; it
+    does not need to reach much further, because room the search cannot profit
+    from still costs wall clock on every oversized model it tries."""
+    box_params_m = 12 * MAX_N_LAYER * MAX_N_EMBD ** 2 / 1e6
+    assert box_params_m > 232, "the box cannot even reach the ladder's top rung"
+    assert box_params_m < 4 * 232, "far more room than the measurement justifies"
 
 
 def test_the_box_stays_inside_what_train_py_will_run():
@@ -90,36 +94,48 @@ def test_the_box_stays_inside_what_train_py_will_run():
 
 
 def test_the_worst_case_model_still_fits_the_wall_clock():
-    """Sized against measurement, not taste. From the size sweep's own
-    time-vs-size fit (~259s + 1.72s per M non-embedding params), the largest
-    model the box now allows must leave real margin under train.py's 1800s
-    MAX_TRAIN_SECONDS -- a run that trips the cap is excluded as incomplete,
-    so it costs a GPU slot and returns nothing.
+    """Sized against measurement, not taste. A run that trips the cap is
+    excluded as incomplete, so it costs a GPU slot and returns nothing.
+
+    The fit is `81.0s + 0.565s per M non-embedding param`, least squares on the
+    top three rungs of the 4.19M ladder (68.8M/118.8s, 138.2M/161.1s,
+    232.2M/211.5s) -- the top, because that is the end the worst case lives at
+    and the curve is visibly sub-linear below it. BOTH NUMBERS ARE
+    BUDGET-SPECIFIC: training time scales with TOKEN_BUDGET, so re-derive them
+    from a fresh size_sweep whenever the budget moves. MAX_TRAIN_SECONDS is
+    read live for the same reason.
     """
+    from prepare import MAX_TRAIN_SECONDS
+
     params_m = 12 * MAX_N_LAYER * MAX_N_EMBD ** 2 / 1e6
-    projected_seconds = 259 + 1.72 * params_m
-    assert projected_seconds < 0.8 * 1800
+    projected_seconds = 81.0 + 0.565 * params_m
+    assert projected_seconds < 0.6 * MAX_TRAIN_SECONDS
 
 
-#: The old hardcoded ceilings, kept here as the thing being regressed against.
-OLD_MAX_N_LAYER, OLD_MAX_N_EMBD = 24, 1024
+def test_every_path_follows_the_ceiling_wherever_it_is_set(agent, monkeypatch):
+    """THE REGRESSION THE EIGHT LITERALS WOULD HAVE CAUSED, tested without
+    naming a value -- because the value moves. It was raised to 28/1280 and put
+    back to 24/1024 within a day, once the size ladder was re-run at a smaller
+    token budget: how big a model is worth building depends on how much you
+    train it, so this ceiling tracks the budget rather than the search.
 
+    What must hold at every setting is that the ceiling has ONE definition.
+    Raise it here and the non-surrogate paths have to follow; under the old
+    hardcoded literals they could not, however strong the evidence.
+    """
+    ceiling_now = a1mod.MAX_N_EMBD
+    monkeypatch.setattr(a1mod, "MAX_N_EMBD", ceiling_now + 256)
+    monkeypatch.setattr(a1mod, "MAX_N_LAYER", a1mod.MAX_N_LAYER + 4)
 
-def test_the_evidence_path_can_now_grow_past_the_old_ceiling(agent):
-    """THE REGRESSION THE EIGHT LITERALS WOULD HAVE CAUSED. Start at the old
-    ceiling and ask, through evidence, for a bigger model. Under the hardcoded
-    24/1024 this could not move at all, however strong the evidence -- so the
-    box raise would have applied to the surrogate path only."""
-    agent.current_hyperparams = hp(n_layer=OLD_MAX_N_LAYER, n_embd=OLD_MAX_N_EMBD,
-                                   n_head=8)
+    agent.current_hyperparams = hp(n_layer=MAX_N_LAYER, n_embd=ceiling_now, n_head=8)
     out = agent._evidence_adjustment(
         latest_summary=None,
         evidence=[{"report_id": "r", "hyperparameter_importance":
                    {"n_layer": 1.0, "n_embd": 1.0}}],
         stuck_signal=False, iteration=3)
 
-    assert out["n_layer"] > OLD_MAX_N_LAYER
-    assert out["n_embd"] > OLD_MAX_N_EMBD
+    assert out["n_layer"] > MAX_N_LAYER
+    assert out["n_embd"] > ceiling_now
 
 
 def test_no_path_ever_leaves_the_box(agent):
@@ -140,12 +156,14 @@ def test_no_path_ever_leaves_the_box(agent):
 
 
 def test_a_random_restart_can_still_reach_the_top_of_the_box(agent, monkeypatch):
-    """_radical_change picks n_embd from a fixed list. If that list stops at
-    the old ceiling, a restart can never land in the part of the space the
-    sweep says is best."""
+    """_radical_change picks n_embd from a fixed list. If that list stops below
+    the ceiling, a restart can never land in the top of the space -- so the
+    list has to track the ceiling too, not just the clamps."""
+    monkeypatch.setattr(a1mod, "MAX_N_EMBD", MAX_N_EMBD + 256)
     monkeypatch.setattr(a1mod.random, "choice", lambda seq: seq[-1])
+
     out = agent._radical_change(hp())
-    assert out["n_embd"] == MAX_N_EMBD > OLD_MAX_N_EMBD
+    assert out["n_embd"] == MAX_N_EMBD + 256
 
 
 # --- a region's architecture survives every path -----------------------------
