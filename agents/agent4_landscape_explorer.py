@@ -113,8 +113,13 @@ class Agent4LandscapeExplorer:
         # explained 0.296 of the variance and could not answer "are these the
         # same place", which is the question a multi-region search asks
         # constantly. See agents_config.yaml for how 0.05 was re-derived.
-        self.region_radius = float(cfg.get("region_radius", 0.05))
-        self.merge_radius = float(cfg.get("merge_radius", 0.025))
+        # Both MEASURED at TOKEN_BUDGET = 4.19M (scripts/region_geometry.py):
+        # B(r) reaches 5x A-within by radius 0.02, where at 12.5M that radius
+        # was saturated on arrival and 0.05 was the smallest useful fence. The
+        # surface steepens as training gets shorter, so re-derive on any budget
+        # change. merge_radius stays half of region_radius.
+        self.region_radius = float(cfg.get("region_radius", 0.02))
+        self.merge_radius = float(cfg.get("merge_radius", 0.01))
         self.grid_resolution = int(cfg.get("grid_resolution", 24))
 
         # How many regions to keep alive. The allocator opens a new one

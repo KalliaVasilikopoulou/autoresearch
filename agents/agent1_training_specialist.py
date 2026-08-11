@@ -242,7 +242,11 @@ class Agent1TrainingSpecialist:
         # in 11-D. Step 4 of the redesign re-derives it from measured
         # within-region spread; until then this is a placeholder chosen to be
         # roughly the previous behaviour rather than a calibrated value.
-        self.fence_radius = float(self.agent1_config.get("region_fence_radius", 0.05))
+        # MEASURED, not provisional: scripts/region_geometry.py sets it from
+        # B(r) against A-within. 0.02 at TOKEN_BUDGET = 4.19M; it was 0.05 at
+        # 12.5M, where 0.02 was saturated on arrival. Re-derive it whenever the
+        # budget moves -- the surface gets steeper as training gets shorter.
+        self.fence_radius = float(self.agent1_config.get("region_fence_radius", 0.02))
 
         self.use_surrogate = bool(self.agent1_config.get("use_surrogate", True))
         self.surrogate_cold_start_n = int(self.agent1_config.get("surrogate_min_observations", 15))

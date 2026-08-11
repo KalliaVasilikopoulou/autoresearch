@@ -32,12 +32,29 @@
 #   The frontier pair FLIPPED 3-2 at a gap of 0.003563, which would need 32
 #   seeds each to resolve. Treat the top of the ladder as a plateau.
 #
-# NOTHING BELOW THIS BLOCK HAS BEEN RE-DERIVED. The consumers that read
-# _load_sigma (prune_by_noise_floor, _detect_stagnation) pick the new value up
-# automatically; any HARDCODED number below is still a 12.5M figure and should
-# be treated as stale until re-measured. region_geometry.json is stale too, so
-# measured_a_within() returns None and the saturation rule is currently
-# disabled by design -- re-run scripts/region_geometry.py to restore it.
+# 2026-08-12: THE GEOMETRY IS RE-MEASURED TOO (42 runs, 4.19M,
+# reports/region_geometry.md), so the saturation rule is live again:
+#
+#   A-within = 0.002070 (12.5M: 0.001342). This is what _load_sigma and
+#   measured_a_within now return -- it is the WITHIN-REGION quantity, measured
+#   with the architecture frozen, and so smaller than seed_variance's 0.003729,
+#   which spans three different architectures.
+#
+#   Freeze bar (2 * A-within): 0.002684 -> 0.004139.
+#
+#   region_radius 0.05 -> 0.02, merge_radius 0.025 -> 0.01. B(r) is ~8x larger
+#   at every radius than at 12.5M: at 0.02 the real signal is 5.0x A-within,
+#   where at 12.5M it was 0.07x, i.e. saturated on arrival. See the setting
+#   itself for the table.
+#
+#   A-between is NOT anchor-dominated this time (anchor std 0.000851 against
+#   0.000895 / 0.002022), so the depth-vs-width comparison is finally readable:
+#   +1 layer moves val_bpb by +0.000973 at separation 1.0 -- unmeasurable --
+#   while narrowing n_embd 960 -> 768 costs +0.015052 at separation 22.3.
+#   Depth is free to vary at this scale; width is not.
+#
+# Any number below that is not named in this block or the one above is still a
+# 12.5M figure and should be treated as stale until re-measured.
 #
 # 2026-08-07: scripts/seed_variance.py (15 runs, 3 configs x 5 seeds) measured
 # the scale that was MISSING from everything below, and it changes which
@@ -400,7 +417,24 @@ agent4:
   # 0.05 and 0.08 is a real structure boundary: below it a region is one
   # basin, above it you are averaging several together. 0.05 also leaves ~10
   # historical neighbours in a 582-run campaign.
-  region_radius: 0.05
+  # 2026-08-12: TIGHTENED 0.05 -> 0.02, re-measured at TOKEN_BUDGET = 4.19M
+  # (scripts/region_geometry.py, 42 runs, reports/region_geometry.md). The
+  # right radius is the smallest one that still leaves something to find, and
+  # that moved because the response surface did: B(r), the spread among
+  # DIFFERENT configurations inside the fence, is roughly 8x larger at every
+  # radius than it was at 12.5M.
+  #
+  #   radius   B(12.5M)   B(4.19M)   real signal / A-within (4.19M)
+  #   0.02     0.001345   0.010579   5.01
+  #   0.05     0.010800   0.045045   21.74
+  #   0.10     0.007683   0.078920   38.12
+  #
+  # At 12.5M, r=0.02 was SATURATED ON ARRIVAL (0.07x A-within) and 0.05 was the
+  # smallest radius with anything in it. At 4.19M, 0.02 already carries 5x the
+  # noise floor. With 187 optimizer steps a bad learning rate cannot be
+  # recovered from, so configurations a short distance apart now differ a great
+  # deal -- and a fence that big would enclose several basins rather than one.
+  region_radius: 0.02
 
   # Regions whose ANCHORS come within this distance are merged
   # (RegionRegistry.merge_overlapping). Each region's local search walks its
@@ -409,7 +443,12 @@ agent4:
   # planner states, one basin. Half of region_radius, so a merge means their
   # neighbourhoods overlap across most of their mass rather than merely
   # touching at the edge.
-  merge_radius: 0.025
+  #
+  # 2026-08-12: 0.025 -> 0.01, following region_radius down. It has to: at
+  # 0.025 against a region_radius of 0.02 the merge distance would be LARGER
+  # than the regions themselves, so two regions that barely touched would be
+  # merged. Half of region_radius is the rule, not the number.
+  merge_radius: 0.01
 
 
   # Resolution of the predicted-surface grid shared with the landscape chart.
