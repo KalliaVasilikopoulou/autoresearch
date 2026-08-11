@@ -46,16 +46,51 @@ MAX_SEQ_LEN = 2048       # context length
 # 12.5M is the historical median tokens-per-run, chosen so the median run
 # still takes ~5 minutes (p90 ~10 min, worst ~19 min at the slowest observed
 # throughput).
-TOKEN_BUDGET = 12_500_000
+#
+# 2026-08-11: CUT 12.5M -> 4.19M. The DGX now allows one GPU per user, so
+# throughput fell 4x and the campaign's own objective -- sample efficiency --
+# became the binding constraint. Sized by measurement, not by the note above:
+# the anchor config at 12.5M/21.0M measured startup 3.3s + training 656.0s +
+# eval 297.0s = 970.9s, i.e. 16 minutes, not the 5 that note claims. That
+# estimate had only ever counted training and ignored eval entirely.
+#
+# Training scales with this and eval with EVAL_TOKENS, so 4.19M/2.62M was
+# solved for directly and then confirmed: 211.4s + 37.2s = 266.0s, 4.4 minutes.
+#
+# THE TASK IS NOW A DIFFERENT ONE and every number measured against the old
+# budget has to be re-derived -- sigma_seed, A-within, A-between, the fence
+# radius, and the size sweep's "bigger is monotonically better" (which was
+# measured at 555 optimizer steps; this budget gives 187 at the same batch
+# size, and undertrained large models are exactly where that finding is most
+# likely to reverse). val_bpb moved 1.2486 -> 1.7063 on the anchor config.
+TOKEN_BUDGET = 4_194_304  # 8 * 524288
 
 # Safety valve only -- NOT the objective. A run that hits this stopped early
 # and did not see its full token budget, so its val_bpb is not comparable to
 # a complete run; train.py reports budget_shortfall_pct so it can be excluded
 # rather than silently compared.
-MAX_TRAIN_SECONDS = 1800
+#
+# 2026-08-11: 1800 -> 900, following the token budget down. Typical training is
+# now 211s and the largest model the search box allows is ~2.4x that, so ~500s;
+# 900 leaves real headroom while capping a pathological config at 15 minutes
+# instead of 30. Left deliberately looser than a strict 3x scaling of the old
+# value (which would give 603s and clip the big end of the box).
+MAX_TRAIN_SECONDS = 900
 
 TIME_BUDGET = MAX_TRAIN_SECONDS  # backwards-compatible alias for the safety cap
-EVAL_TOKENS = 40 * 524288  # number of tokens for val eval
+# 2026-08-11: CUT 21.0M -> 2.62M (40 -> 5 chunks). It was 1.68x the ENTIRE
+# training budget and 31% of every run's wall clock, spent measuring rather
+# than training.
+#
+# Cutting it adds NO run-to-run noise: the validation shard is pinned and the
+# loop is deterministic, so every run is scored on the identical smaller
+# sample and stays exactly as comparable to every other. What it costs is how
+# well that fixed sample stands in for true held-out performance -- i.e. the
+# risk of the search selecting for quirks of this particular subset. That is
+# the one thing the pinned HOLDOUT shard exists to detect
+# (evaluate_bpb_holdout, scripts/holdout_eval.py), so watch the holdout gap
+# rather than assuming this is free.
+EVAL_TOKENS = 5 * 524288  # number of tokens for val eval
 
 # ---------------------------------------------------------------------------
 # Configuration
