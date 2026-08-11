@@ -445,9 +445,18 @@ orchestrator:
   parallel: true
 
   # Upper cap on concurrent GPUs/SSH sessions per wave, even if more are
-  # discovered "available" -- conservative default so an unattended run
-  # doesn't try to claim an entire shared server other people also use.
-  max_parallel_runs: 4
+  # discovered "available".
+  #
+  # ONE. The DGX allows each user one GPU at a time (HPC notice, 2026-08-11,
+  # after two earlier emails). A four-GPU wave from this project was killed on
+  # that date: of four dispatched runs exactly one survived, which is what
+  # enforcement looks like from this side.
+  #
+  # This value is only the polite half. The binding limit is
+  # remote_runner.MAX_CONCURRENT_GPUS, which caps discover_available_gpus
+  # itself -- config alone would not constrain the scripts/ experiments, since
+  # each of them dispatches its own waves without reading this file.
+  max_parallel_runs: 1
 
   # Polling interval (seconds) - how often to check for work
   poll_interval_seconds: 5

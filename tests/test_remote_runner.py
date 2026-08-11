@@ -128,6 +128,11 @@ def test_discover_available_gpus_filters_by_live_thresholds_and_sorts_by_free_me
     )
     client = FakeSSHClient(responses=[("nvidia-smi", [(csv_output, 0)])])
     _patch_paramiko(monkeypatch, lambda: client)
+    # The one-GPU policy cap would truncate this list before the sort could be
+    # observed. It is a separate property with its own test
+    # (test_gpu_discovery_never_offers_more_than_the_policy_allows), so it is
+    # lifted here to keep filtering and ordering testable on their own.
+    monkeypatch.setattr(remote_runner, "MAX_CONCURRENT_GPUS", 8)
 
     gpus = remote_runner.discover_available_gpus()
 

@@ -45,6 +45,29 @@ except ImportError:
 CONNECT_ATTEMPTS = 3
 CONNECT_BACKOFF_S = 5
 
+# How much of a failed run's stderr to show, taken from the END. See the use
+# site: a traceback is the last thing written, a warning is the first, and
+# prepare.py's torch.load FutureWarning alone is over 500 characters.
+ERR_TAIL_CHARS = 2000
+
+# ONE GPU AT A TIME. This is the shared cluster's stated policy, not a tuning
+# knob, and the administrators had already sent two emails about it before a
+# four-GPU wave from this project was killed on 2026-08-11.
+#
+# It is enforced in discover_available_gpus rather than in agents_config.yaml
+# because config only governs the orchestrator, while scripts/region_geometry,
+# scripts/seed_variance and scripts/size_sweep each dispatch their own waves
+# straight off this function.
+#
+# It also explains an earlier misdiagnosis worth not repeating: the geometry
+# experiment lost 13 of 39 cells and that was recorded as a dropped SSH
+# session. The signature is identical -- exit code -1, no traceback, several
+# runs dying at once while one survives -- because a process killed from
+# outside never gets to write anything. Concurrency was the cause both times.
+MAX_CONCURRENT_GPUS = 1
+GPU_POLICY_REASON = ("the DGX allows each user one GPU at a time "
+                     "(HPC notice, 2026-08-11)")
+
 # THE SERVER RATE-LIMITS SSH CONNECTIONS. Measured 2026-08-05 against
 # dgx.ceid.upatras.gr: a first TCP connect completes in 1.0s and returns a
 # valid SSH banner; the next two time out at 15s; connections are accepted
@@ -217,6 +240,14 @@ def discover_available_gpus(cfg: Optional[Dict[str, Any]] = None, client=None) -
     available.sort(key=lambda g: -g["free_mb"])
     print(f"[RemoteRunner] GPU discovery: {len(gpus)} total, {len(available)} available "
           f"(util<{util_threshold:.0f}%, free>{min_free_mb:.0f}MB): {[g['index'] for g in available]}")
+
+    # THE POLICY CAP IS APPLIED HERE, at the one place every dispatcher asks
+    # what it may use -- the orchestrator's wave planner and each of the
+    # scripts/ experiments. Capping in agents_config.yaml instead would leave
+    # the scripts free to take four GPUs each, and they have.
+    if len(available) > MAX_CONCURRENT_GPUS:
+        print(f"[RemoteRunner] Capping to {MAX_CONCURRENT_GPUS} GPU(s): {GPU_POLICY_REASON}")
+        available = available[:MAX_CONCURRENT_GPUS]
     return available
 
 
@@ -708,7 +739,15 @@ def run_training_remote(
         if exit_code != 0:
             _print(f"Remote process exited with code {exit_code}")
             if err_output:
-                _print(f"stderr: {err_output[:500]}")
+                # THE TAIL, NOT THE HEAD. A Python traceback is the last thing
+                # written to stderr, while the first thing is routinely a
+                # warning -- prepare.py's torch.load FutureWarning alone is
+                # over 500 characters. Truncating from the front therefore
+                # showed that warning and nothing else on every failure, which
+                # is exactly as useful as printing nothing. A whole campaign's
+                # worth of failures was undiagnosable because of it.
+                _print(f"stderr ({len(err_output)} chars, last {ERR_TAIL_CHARS}): "
+                       f"{err_output[-ERR_TAIL_CHARS:]}")
             return {
                 "val_bpb": float("inf"),
                 "error": err_output or f"exit code {exit_code}",

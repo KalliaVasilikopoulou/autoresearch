@@ -283,3 +283,49 @@ def test_the_numbering_reads_results_tsv_not_the_session_metadata(tmp_path):
     orch.results_path = results
     orch.state_mgr = type("S", (), {"get_all_results": staticmethod(lambda: [])})()
     assert orch._next_run_index() == 32
+
+
+# --- the shared cluster's one-GPU policy -------------------------------------
+
+
+def test_gpu_discovery_never_offers_more_than_the_policy_allows(monkeypatch):
+    """The DGX allows one GPU per user. Enforced in discover_available_gpus
+    because that is the single place every dispatcher asks what it may use --
+    the orchestrator's wave planner AND each of the scripts/ experiments,
+    which do not read agents_config.yaml at all."""
+    from agents import remote_runner
+
+    class _FakeStdout:
+        @staticmethod
+        def read():
+            # seven idle GPUs, all comfortably free
+            return b"\n".join(f"{i}, 0, 40960, 0".encode() for i in range(7))
+
+    class _FakeClient:
+        @staticmethod
+        def exec_command(*a, **k):
+            return None, _FakeStdout(), None
+
+        @staticmethod
+        def close():
+            pass
+
+    monkeypatch.setattr(remote_runner, "_PARAMIKO_AVAILABLE", True)
+    monkeypatch.setattr(remote_runner, "_load_cfg",
+                        lambda: {"host": "h", "user": "u", "repo": "/r", "password": "p"})
+
+    available = remote_runner.discover_available_gpus(client=_FakeClient())
+    assert len(available) <= remote_runner.MAX_CONCURRENT_GPUS
+    assert remote_runner.MAX_CONCURRENT_GPUS == 1
+
+
+def test_the_configured_wave_size_does_not_exceed_the_policy():
+    """agents_config.yaml is the polite half of the same limit; it must not
+    disagree with the binding one."""
+    import yaml
+
+    from agents import remote_runner
+
+    cfg = yaml.safe_load(open("agents_config.yaml", encoding="utf-8"))
+    configured = int(cfg["orchestrator"]["max_parallel_runs"])
+    assert configured <= remote_runner.MAX_CONCURRENT_GPUS
