@@ -377,7 +377,11 @@ def test_code_defaults_match_the_shipped_config():
     defaults = Agent4LandscapeExplorer(config_path="does_not_exist.yaml")
     for key, attr in [
         ("region_radius", "region_radius"), ("merge_radius", "merge_radius"),
-        ("sigma_region", "sigma_region"), ("retire_margin_sigma", "retire_margin_sigma"),
+        # sigma_region is deliberately absent: it is no longer a default at all
+        # but B(r), read live from the geometry report at the fence radius,
+        # because it moves with both the radius and the token budget. Its
+        # fallback is checked separately below.
+        ("retire_margin_sigma", "retire_margin_sigma"),
         ("improvement_sigma", "improvement_sigma"),
         ("min_runs_before_judgement", "min_runs_before_judgement"),
         ("stuck_runs_pause", "stuck_runs_pause"), ("stuck_runs_retire", "stuck_runs_retire"),
@@ -586,3 +590,59 @@ def test_a_floor_from_another_budget_is_refused(agent4, tmp_path):
     (state / "size_sweep.json").write_text(json.dumps(stale), encoding="utf-8")
 
     assert agent4.minimum_region_size() is None
+
+
+def test_sigma_region_is_measured_not_configured(tmp_path):
+    """It is B(r) at the FENCE radius, read from the geometry report, because
+    it moves with both the radius and the token budget. The shipped constant
+    was 0.0028, measured at 12.5M inside a radius-0.05 fence; at 4.19M inside
+    radius 0.02 it is 0.010579. Under the small value a region was retired for
+    falling 0.0084 behind the field when 0.0318 is the real bar."""
+    import json
+
+    from prepare import TOKEN_BUDGET
+
+    agent4 = Agent4LandscapeExplorer(
+        config_path=str(_config(tmp_path, sigma_region=0.0028, region_radius=0.02)),
+        root_dir=str(tmp_path), state_dir=str(tmp_path / "state"),
+        reports_dir=str(tmp_path / "reports"))
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "region_geometry.json").write_text(json.dumps({
+        "token_budget": int(TOKEN_BUDGET),
+        "b_by_radius": {"0.02": {"b_observed": 0.010579},
+                        "0.10": {"b_observed": 0.078920}},
+    }), encoding="utf-8")
+
+    assert agent4.sigma_region == pytest.approx(0.010579)
+    # ...and B at the FENCE, not the largest measured, or a 0.02 fence would be
+    # judged against a 0.10 neighbourhood.
+    assert agent4.sigma_region != pytest.approx(0.078920)
+
+
+def test_sigma_region_falls_back_to_the_configured_value(tmp_path):
+    """No measurement at this budget, so the shipped constant stands in -- and
+    the shipped constant must be the one the code would have used."""
+    import yaml
+
+    shipped = yaml.safe_load(open("agents_config.yaml", encoding="utf-8"))["agent4"]
+    agent4 = Agent4LandscapeExplorer(config_path="does_not_exist.yaml")
+
+    assert agent4._configured_sigma_region == pytest.approx(shipped["sigma_region"])
+
+
+def test_a_stale_geometry_report_does_not_set_the_region_yardstick(tmp_path):
+    import json
+
+    from prepare import TOKEN_BUDGET
+
+    agent4 = Agent4LandscapeExplorer(
+        config_path=str(_config(tmp_path, sigma_region=0.0028, region_radius=0.02)),
+        root_dir=str(tmp_path), state_dir=str(tmp_path / "state"),
+        reports_dir=str(tmp_path / "reports"))
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "region_geometry.json").write_text(json.dumps({
+        "token_budget": int(TOKEN_BUDGET) * 3,
+        "b_by_radius": {"0.02": {"b_observed": 0.001345}},
+    }), encoding="utf-8")
+
+    assert agent4.sigma_region == pytest.approx(0.0028)

@@ -387,7 +387,17 @@ agent4:
   # -- it stops counting seed noise as real hyperparameter variation -- but it
   # makes the campaign more aggressive and was measured on 3 configs, so it is
   # left alone pending a wider measurement.
-  sigma_region: 0.0028
+  # 2026-08-12: 0.0028 -> 0.010579, re-measured as B(r) at the fence radius
+  # (scripts/region_geometry.py at TOKEN_BUDGET=4.19M, radius 0.02). The old
+  # value was measured at 12.5M inside a radius-0.05 fence and is 3.8x too
+  # small here -- under it a region was retired for falling 0.0084 behind the
+  # field when the real bar is 0.0318, i.e. thrown away for differences well
+  # inside its own normal spread.
+  #
+  # This is now a FALLBACK ONLY. Agent 4 reads B(r) live from
+  # state/region_geometry.json at whatever the fence radius is, because this
+  # number moves with both the radius and the token budget.
+  sigma_region: 0.010579
 
   # A region is retired as no_optimum when its elite score sits this many
   # sigma_region behind the best LIVE region's. Relative, never absolute: an

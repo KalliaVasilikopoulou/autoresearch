@@ -410,6 +410,17 @@ def analyze(measurements: Dict[int, Dict[int, float]], seeds: List[int]) -> Dict
     }
 
 
+def _live_sigma_region() -> Optional[float]:
+    """B(r) at the fence radius, from the geometry report, or None. Same source
+    Agent 4 reads, so this report cannot quote a number the search is not
+    using."""
+    try:
+        from agents.agent4_landscape_explorer import Agent4LandscapeExplorer
+        return Agent4LandscapeExplorer().sigma_region
+    except Exception:                                # noqa: BLE001
+        return None
+
+
 def _load_noise_floor_sigma() -> Optional[float]:
     path = Path("state/noise_floor.json")
     if not path.exists():
@@ -452,7 +463,13 @@ def render(report: Dict[str, Any], configs: List[Dict[str, Any]]) -> str:
     if floor and sigma_seed:
         lines += ["", "Against the currently-configured yardsticks:"]
         lines.append(f"  state/noise_floor.json sigma = {floor:.6f}  -> sigma_seed is {sigma_seed / floor:.1f}x larger")
-        lines.append(f"  agents_config sigma_region   = 0.002800  -> sigma_seed is {sigma_seed / 0.0028:.1f}x that")
+        # Read live, never hardcoded: sigma_region is B(r) at the fence radius
+        # and moves with both the radius and the token budget (0.0028 at 12.5M
+        # inside radius 0.05, 0.010579 at 4.19M inside 0.02).
+        sigma_region = _live_sigma_region()
+        if sigma_region:
+            lines.append(f"  sigma_region (B at the fence) = {sigma_region:.6f}  -> sigma_seed is "
+                         f"{sigma_seed / sigma_region:.1f}x that")
         lines.append("  Every sigma-scaled threshold in agents_config.yaml was calibrated on the")
         lines.append("  noise_floor sigma, which held the seed FIXED and so measured no seed effect at all.")
 

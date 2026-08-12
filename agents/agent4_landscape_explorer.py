@@ -168,7 +168,7 @@ class Agent4LandscapeExplorer:
         #: fingerprint history.
         self.xai_weight = float(cfg.get("xai_weight", 0.25))
         self._last_xai_direction: Optional[Dict[str, Any]] = None
-        self.sigma_region = float(cfg.get("sigma_region", 0.0028))
+        self._configured_sigma_region = float(cfg.get("sigma_region", 0.010579))
         self.retire_margin_sigma = float(cfg.get("retire_margin_sigma", 3.0))
         self.improvement_sigma = float(cfg.get("improvement_sigma", 1.0))
 
@@ -334,6 +334,45 @@ class Agent4LandscapeExplorer:
                 "live_regions": len(registry.active()),
             })
         return opened
+
+    @property
+    def sigma_region(self) -> float:
+        """The spread of val_bpb among DIFFERENT configurations inside one
+        region -- i.e. B at the fence radius. MEASURED where possible.
+
+        This is the yardstick for both region-level judgements: what counts as
+        a region improving (improvement_margin) and how far behind the field a
+        region must fall before it is retired. Every such decision compares one
+        configuration against another, so the right scale is how much
+        configurations differ inside a fence -- not the noise floor, which
+        measures repeatability of a single configuration.
+
+        READ FROM region_geometry.json AT THE FENCE RADIUS, because it moves
+        with both the radius and the token budget and a stale value is wrong in
+        both directions at once. The shipped constant was 0.0028, measured at
+        12.5M inside a radius-0.05 fence; at 4.19M inside radius 0.02 it is
+        0.010579, 3.8x larger. Under the small value a region was retired for
+        falling 0.0084 behind the field when 0.0318 is the real bar -- so
+        regions were being thrown away for differences well inside their own
+        normal spread -- while improvement_margin counted noise as progress.
+        """
+        from prepare import TOKEN_BUDGET
+        from state.results_analysis import report_at_budget
+
+        geometry = report_at_budget(
+            self.registry_path.parent / "region_geometry.json", TOKEN_BUDGET)
+        if geometry:
+            by_radius = {}
+            for key, entry in (geometry.get("b_by_radius") or {}).items():
+                try:
+                    if isinstance(entry.get("b_observed"), (int, float)):
+                        by_radius[float(key)] = float(entry["b_observed"])
+                except (TypeError, ValueError):
+                    continue
+            if by_radius:
+                nearest = min(by_radius, key=lambda r: abs(r - self.region_radius))
+                return by_radius[nearest]
+        return self._configured_sigma_region
 
     def minimum_region_size(self) -> Optional[float]:
         """The smallest model worth opening a region around, in non-embedding
