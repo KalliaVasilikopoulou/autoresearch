@@ -89,6 +89,39 @@ class FakeSSHClient:
 
     def exec_command(self, cmd, timeout=None):
         self.commands.append(cmd)
+
+        # TRAINING IS DETACHED NOW: run_training_remote launches with
+        # nohup/setsid, gets a PID, and polls a log file, so that a dropped
+        # connection costs an observation rather than a run. A test still
+        # declares what the run PRINTS -- via the "python -u train.py" matcher
+        # -- and this translates that into the three calls the poller actually
+        # makes, so the tests keep expressing intent instead of protocol.
+        if "nohup setsid" in cmd:
+            self._training_delivered = False
+            return None, FakeStream("4242\n"), FakeStream("")
+        if "tail -n +" in cmd and not any("tail -n +" in m for m, _ in self._queues):
+            # fail_tails lets a test drop the connection mid-watch. Under
+            # detached runs that is survivable, so it is now a property worth
+            # asserting rather than a failure to salvage from.
+            drops = getattr(self, "drops", None)
+            if drops and drops.get("left", 0) > 0:
+                drops["left"] -= 1
+                raise socket.timeout("timed out")
+            if getattr(self, "_training_delivered", False):
+                return None, FakeStream(""), FakeStream("")
+            for matcher, queue in self._queues:
+                if "train.py" in matcher and queue:
+                    entry = queue[0] if len(queue) == 1 else queue.pop(0)
+                    out, status = entry[0], entry[1]
+                    self._training_delivered = True
+                    return None, FakeStream(
+                        out + f"{remote_runner.EXIT_SENTINEL}{status}\n"), FakeStream("")
+            return None, FakeStream(""), FakeStream("")
+        # Only when the test has not declared its own -- kill -0 is also how
+        # kill_stale_training_processes checks whether SIGTERM worked.
+        if "kill -0" in cmd and not any("kill -0" in m for m, _ in self._queues):
+            return None, FakeStream("yes\n"), FakeStream("")
+
         for matcher, queue in self._queues:
             if matcher in cmd:
                 if not queue:
@@ -106,6 +139,43 @@ class FakeSSHClient:
 
     def close(self):
         self.closed = True
+
+
+# --- detached runs ----------------------------------------------------------
+#
+# run_training_remote no longer holds the training process on its own SSH
+# channel. It launches with nohup/setsid, gets a PID back, and polls a log file
+# -- so a dropped connection costs an OBSERVATION rather than a run. These
+# helpers speak that protocol: a launch returns a pid, `tail -n +N` returns the
+# log from line N, and `kill -0` reports liveness.
+
+
+def _detached(log_text, exit_code=0, pid="4242", tail_entries=None):
+    """Fake responses for one detached run that completes normally."""
+    sentinel = f"{remote_runner.EXIT_SENTINEL}{exit_code}\n"
+    return [
+        ("nohup setsid", [(pid + "\n", 0)]),
+        ("tail -n +", tail_entries or [(log_text + sentinel, 0)]),
+        ("kill -0", [("yes\n", 0)]),
+    ]
+
+
+def _detached_then_gone(log_text, pid="4242"):
+    """A run whose PID disappears without writing an exit status -- what being
+    killed from outside looks like, which is how the one-GPU policy is
+    enforced."""
+    return [
+        ("nohup setsid", [(pid + "\n", 0)]),
+        ("tail -n +", [(log_text, 0), ("", 0)]),
+        ("kill -0", [("", 0)]),
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _no_poll_delay(monkeypatch):
+    """The detached watcher sleeps between polls. Real seconds in a unit test
+    buy nothing -- the fake answers instantly."""
+    monkeypatch.setattr(remote_runner, "POLL_INTERVAL_S", 0.0)
 
 
 def _patch_paramiko(monkeypatch, client_factory):
@@ -341,11 +411,17 @@ def test_run_training_remote_salvages_val_bpb_when_connection_lost_after_trainin
         "status:           remote_ok\n"
     )  # 5 lines -- all fully received before the simulated timeout below
 
+    # Shared across reconnections, since each one builds a fresh client: the
+    # first two polls drop, the third succeeds.
+    drops = {"left": 2}
+
     def client_factory():
-        return FakeSSHClient(responses=[
+        client = FakeSSHClient(responses=[
             (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
-            ("python -u train.py", [(captured_output, 0, 5, socket.timeout("timed out"))]),
+            ("python -u train.py", [(captured_output, 0)]),
         ])
+        client.drops = drops
+        return client
 
     _patch_paramiko(monkeypatch, client_factory)
     hp_file = tmp_path / "hp.yaml"
@@ -353,17 +429,15 @@ def test_run_training_remote_salvages_val_bpb_when_connection_lost_after_trainin
 
     metrics = remote_runner.run_training_remote(str(hp_file), timeout=60, gpu_index=1, skip_sync=True)
 
-    assert metrics["status"] == "remote_partial_timeout"
+    # A FULL result, not a salvaged partial. That is the point of detaching:
+    # the run is not tied to the connection, so losing the connection costs an
+    # observation and the watcher simply resumes from the last line it read.
+    assert metrics["status"] == "remote_ok"
     assert metrics["val_bpb"] == pytest.approx(0.987654)
     assert metrics["device"] == 1
-    # Post-training analysis fields never arrived -- honestly absent, not
-    # fabricated, same convention as a run where that analysis never ran.
-    assert "head_ablation_impacts" not in metrics
-    # Diagnostic breadcrumb (dev/checks.txt follow-up: distinguishing "died
-    # near connect" from "died mid/late in a real run" without guessing) --
-    # all 5 lines of captured_output were delivered before the timeout.
-    assert metrics["connection_lost_line_count"] == 5
-    assert metrics["connection_lost_after_seconds"] >= 0
+    # No salvage fields at all: nothing was lost, so there is nothing to
+    # report about a loss.
+    assert "connection_lost_line_count" not in metrics
 
 
 def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_captured(monkeypatch, tmp_path):
@@ -378,7 +452,7 @@ def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_cap
     def client_factory():
         return FakeSSHClient(responses=[
             (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
-            ("python -u train.py", [(partial_output, 0, 2, socket.timeout("timed out"))]),
+            *_detached_then_gone(partial_output),
         ])
 
     _patch_paramiko(monkeypatch, client_factory)
@@ -390,23 +464,23 @@ def test_run_training_remote_treats_timeout_as_error_when_nothing_usable_was_cap
     assert metrics["status"] == "remote_error"
     assert metrics["val_bpb"] == float("inf")
     assert metrics["device"] == 1
-    # Diagnostic breadcrumb: both lines delivered before the timeout, the
-    # last (and most recent) progress line is the 5.0% one, and elapsed time
-    # is captured -- this is what lets a later diagnosis tell "died at 0
-    # lines near connect" apart from "died after real progress was made".
-    assert metrics["connection_lost_line_count"] == 2
-    assert metrics["connection_lost_after_seconds"] >= 0
-    assert "5.0%" in metrics["connection_lost_last_progress"]
+    # Everything printed before it died is still captured, because the log
+    # outlives the process -- and the error names the real cause rather than
+    # blaming the configuration.
+    assert "5.0%" in metrics["error"] or "killed" in metrics["error"].lower()
 
 
 def test_run_training_remote_salvage_routes_through_display_when_provided(monkeypatch, tmp_path):
     captured_output = "---\nval_bpb:          1.1\nstatus:           remote_ok\n"
+    drops = {"left": 1}
 
     def client_factory():
-        return FakeSSHClient(responses=[
+        client = FakeSSHClient(responses=[
             (f"mkdir {FAKE_CFG['repo']}/.autoresearch_gpu_locks/gpu_1 2>&1", [("LOCK_OK\n", 0)]),
-            ("python -u train.py", [(captured_output, 0, 3, socket.timeout("timed out"))]),
+            ("python -u train.py", [(captured_output, 0)]),
         ])
+        client.drops = drops
+        return client
 
     _patch_paramiko(monkeypatch, client_factory)
     hp_file = tmp_path / "hp.yaml"
@@ -417,9 +491,11 @@ def test_run_training_remote_salvage_routes_through_display_when_provided(monkey
         str(hp_file), timeout=60, gpu_index=1, run_label="GPU1", skip_sync=True, display=display,
     )
 
-    assert metrics["status"] == "remote_partial_timeout"
-    assert any("Lost connection" in text for text in display.printed_lines)
-    assert any("Recovered a usable val_bpb" in text for text in display.printed_lines)
+    # A dropped poll is now survivable, so the display reports RECONNECTING
+    # rather than a salvaged partial -- and the run completes normally.
+    assert metrics["status"] == "remote_ok"
+    assert metrics["val_bpb"] == pytest.approx(1.1)
+    assert any("reconnecting" in text for text in display.printed_lines)
 
 
 def test_run_training_remote_reports_error_status_on_nonzero_exit(monkeypatch, tmp_path):

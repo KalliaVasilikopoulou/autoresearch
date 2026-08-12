@@ -20,7 +20,7 @@ import os
 import socket
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents import train_output
 from agents.live_progress import MultiGpuProgressDisplay
@@ -305,6 +305,138 @@ def _release_gpu_lock(client, gpu_index: int, remote_repo: str) -> None:
         client.exec_command(f'rm -rf {lock_dir}')[1].read()
     except Exception:
         pass
+
+
+#: Written to the log by the wrapper after train.py returns, so completion and
+#: exit status are recoverable from the FILE. A detached run's exit code cannot
+#: be read from the channel that started it -- that channel is long gone.
+EXIT_SENTINEL = "AUTORESEARCH_EXIT:"
+
+#: How long to wait between polls of a detached run's log.
+POLL_INTERVAL_S = 5.0
+
+#: Consecutive failed reconnections before a detached run is given up on. The
+#: run itself survives a dropped connection now, so this only bounds how long
+#: we keep trying to watch it.
+MAX_POLL_RECONNECTS = 20
+
+
+def launch_detached(client, remote_cmd: str, log_path: str) -> Optional[str]:
+    """Start `remote_cmd` so it OUTLIVES this SSH session, and return its PID.
+
+    `setsid` puts it in a new session with no controlling terminal and `nohup`
+    detaches it from SIGHUP, so dropping the connection no longer kills the
+    run. That mattered less when four ran at once and a lost one was cheap; at
+    one GPU per user a dropped connection costs a whole 4.4-minute run, and the
+    campaign has already lost 26 runs to exactly this.
+
+    stdin comes from /dev/null and both streams go to `log_path`, because a
+    detached process holding the session's pipes open would keep the channel
+    from ever closing. The wrapper appends the exit status afterwards: a
+    detached run's code cannot be read back from the channel that started it.
+    """
+    wrapped = (
+        f"mkdir -p $(dirname {log_path}) && "
+        f"nohup setsid bash -c '{remote_cmd} > {log_path} 2>&1; "
+        f'echo "{EXIT_SENTINEL}$?" >> {log_path}\' '
+        f"< /dev/null > /dev/null 2>&1 & echo $!"
+    )
+    _, stdout, _ = client.exec_command(f'bash -lc "{wrapped}"', timeout=60)
+    pid = stdout.read().decode("utf-8", errors="replace").strip().splitlines()
+    return pid[-1].strip() if pid and pid[-1].strip().isdigit() else None
+
+
+def _read_log_tail(client, log_path: str, from_line: int) -> List[str]:
+    """Lines `from_line` onward (1-indexed), or [] if the file is not there
+    yet -- a launch that has not created it is normal for the first poll."""
+    _, stdout, _ = client.exec_command(
+        f"tail -n +{from_line} {log_path} 2>/dev/null", timeout=60)
+    text = stdout.read().decode("utf-8", errors="replace")
+    return text.splitlines()
+
+
+def _process_alive(client, pid: str) -> bool:
+    """`kill -0` signals nothing; it only asks whether the PID can be signalled.
+
+    Needed because the sentinel is written by the wrapper, and a run killed with
+    SIGKILL -- which is how the one-GPU policy is enforced -- never gets to
+    write it. Without this check such a run would be polled until the
+    reconnect budget ran out.
+    """
+    _, stdout, _ = client.exec_command(f"kill -0 {pid} 2>/dev/null && echo yes", timeout=60)
+    return stdout.read().decode("utf-8", errors="replace").strip() == "yes"
+
+
+def follow_detached(client, cfg: Dict[str, Any], log_path: str, pid: str,
+                    timeout: int, on_line, reconnect=None) -> Tuple[List[str], Optional[int], str]:
+    """Watch a detached run to completion. Returns (lines, exit_code, outcome).
+
+    `outcome` is one of "finished", "vanished", "timeout" or "unwatchable".
+    Only the last means the RUN is in doubt -- the others all saw it end.
+
+    A DROPPED CONNECTION IS NO LONGER FATAL, which is the whole point. The run
+    is detached, so a failed poll is only a failed observation: this reconnects
+    and resumes from the last line it read, and the log on the remote is the
+    authority rather than a live pipe. Reading from `from_line` onward is what
+    makes that safe -- no line is shown twice and none is skipped.
+
+    "vanished" means the PID is gone with no exit sentinel, which is what an
+    externally killed run looks like. That is not a hypothetical here: it is
+    how the DGX's one-GPU-per-user policy is enforced.
+    """
+    lines: List[str] = []
+    next_line = 1
+    deadline = time.time() + timeout
+    reconnects = 0
+    reconnect = reconnect or (lambda: open_client(cfg))
+
+    while True:
+        try:
+            new_lines = _read_log_tail(client, log_path, next_line)
+            alive = _process_alive(client, pid) if not new_lines else True
+            reconnects = 0
+        except Exception as e:                       # noqa: BLE001 - any SSH fault
+            reconnects += 1
+            if reconnects > MAX_POLL_RECONNECTS:
+                return lines, None, "unwatchable"
+            on_line(f"[watcher] lost the connection ({e}); reconnecting "
+                    f"({reconnects}/{MAX_POLL_RECONNECTS}) -- the run itself is "
+                    f"detached and keeps going")
+            time.sleep(POLL_INTERVAL_S)
+            try:
+                client = reconnect()
+            except Exception:                        # noqa: BLE001
+                pass
+            continue
+
+        for line in new_lines:
+            if line.startswith(EXIT_SENTINEL):
+                try:
+                    return lines, int(line[len(EXIT_SENTINEL):].strip()), "finished"
+                except ValueError:
+                    return lines, None, "finished"
+            lines.append(line)
+            on_line(line)
+        next_line += len(new_lines)
+
+        if not new_lines:
+            # Re-read once before believing it: the process can exit between
+            # the tail and the liveness check, leaving its last lines -- and
+            # the sentinel -- unread.
+            if not alive:
+                final = _read_log_tail(client, log_path, next_line)
+                for line in final:
+                    if line.startswith(EXIT_SENTINEL):
+                        try:
+                            return lines, int(line[len(EXIT_SENTINEL):].strip()), "finished"
+                        except ValueError:
+                            return lines, None, "finished"
+                    lines.append(line)
+                    on_line(line)
+                return lines, None, "vanished"
+            if time.time() > deadline:
+                return lines, None, "timeout"
+            time.sleep(POLL_INTERVAL_S)
 
 
 def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout: int = 30,
@@ -638,75 +770,84 @@ def run_training_remote(
         sftp.close()
 
         # --- Run training on the selected GPU ---
-        remote_cmd = (
-            f'bash -lc "{activate} {env} && cd {remote_repo} && '
+        inner_cmd = (
+            f'{activate} {env} && cd {remote_repo} && '
             f'CUDA_VISIBLE_DEVICES={gpu_index} AUTORESEARCH_HP_PATH={remote_hyperparams} '
             # AUTORESEARCH_MANAGED=1 marks this process as one this project
             # launched -- kill_stale_training_processes() requires it (along
             # with owner/cmdline/cwd matches) before ever signalling a PID,
             # so a leftover process from a previous run can be identified
             # unambiguously and other users'/projects' processes never can.
-            f'AUTORESEARCH_MANAGED=1 python -u train.py"'
+            f'AUTORESEARCH_MANAGED=1 python -u train.py'
         )
+        remote_cmd = inner_cmd
         _print(f"Executing on GPU {gpu_index}: {remote_cmd}")
         exec_start = time.time()
-        _stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
+
+        # DETACHED, so a dropped connection costs an observation rather than a
+        # run. Under the one-GPU-per-user limit each run is 4.4 minutes of the
+        # only slot there is, and this project has already lost 26 runs to
+        # session-bound training.
+        log_path = f"{remote_repo}/logs/{hp_remote_name}.log"
+        pid = launch_detached(client, inner_cmd, log_path)
+        if not pid:
+            _print("Could not start a detached run (no PID returned)")
+            return {"val_bpb": float("inf"), "status": "remote_error",
+                    "error": "detached launch returned no pid", "device": gpu_index}
+        _print(f"Detached as PID {pid}, log {log_path}")
 
         output_lines = []
         last_progress_bar = None
-        last_progress_line = None  # tracked independent of the display/no-display print path below
+        last_progress_line = None
         lost_connection = False
         connection_lost_elapsed = None
-        try:
-            for line in iter(stdout.readline, ""):
-                line = line.rstrip("\n")
-                output_lines.append(line)
-                is_progress = line.startswith('[') and ']' in line and '%' in line
+
+        def _emit(line: str) -> None:
+            """One line of the run's log, routed exactly as the live stream
+            used to be so the multi-GPU display and the sequential progress bar
+            both behave unchanged."""
+            nonlocal last_progress_bar, last_progress_line
+            is_progress = line.startswith('[') and ']' in line and '%' in line
+            if is_progress:
+                last_progress_line = line
+            if display is not None:
                 if is_progress:
-                    last_progress_line = line
-                if display is not None:
-                    # Concurrent multi-GPU wave: this GPU's own pinned line
-                    # (see agents/live_progress.py) instead of a `\r`-based
-                    # update that would fight other threads for the same
-                    # cursor position.
-                    if is_progress:
-                        display.update_progress(label, line)
-                    elif line.strip():
-                        display.print_line(f"[{label}] {line}")
-                else:
-                    # Sequential single-GPU path: unchanged in-place `\r` update.
-                    if is_progress:
-                        last_progress_bar = line
-                        print(f"\r  [{label}] {line}", end="", flush=True)
-                    elif line.strip():
-                        if last_progress_bar:
-                            print()  # newline to finish the progress bar line
-                            last_progress_bar = None
-                        print(f"  [{label}] {line}", flush=True)
-        except (socket.timeout, OSError) as e:
-            # train.py has its own internal wall-clock training budget (see
-            # train.py: the loop breaks on total_training_time >= TIME_BUDGET)
-            # and prints a real val_bpb right after -- well before the
-            # (optional, much slower) head-ablation study, holdout eval, and
-            # token-fingerprint analysis that follow it, none of which print
-            # anything while they run. A read timeout here overwhelmingly
-            # means we stopped listening during one of *those* silent
-            # stretches, not that training itself failed -- so salvage
-            # whatever was already captured instead of discarding a real
-            # result along with the connection.
+                    display.update_progress(label, line)
+                elif line.strip():
+                    display.print_line(f"[{label}] {line}")
+            else:
+                if is_progress:
+                    last_progress_bar = line
+                    print(f"\r  [{label}] {line}", end="", flush=True)
+                elif line.strip():
+                    if last_progress_bar:
+                        print()
+                        last_progress_bar = None
+                    print(f"  [{label}] {line}", flush=True)
+
+        output_lines, exit_code, outcome = follow_detached(
+            client, cfg, log_path, pid, timeout=timeout, on_line=_emit)
+
+        if outcome == "unwatchable":
+            # The RUN may well be fine -- it is detached. What failed is our
+            # ability to watch it, so say that rather than blaming the config.
             lost_connection = True
             connection_lost_elapsed = round(time.time() - exec_start, 1)
-            # Diagnostic breadcrumb (dev/checks.txt follow-up: remote_error
-            # rate climbed after the sync-lock/keepalive fix, so this is a
-            # DIFFERENT failure than the git-sync race those fixed --
-            # capturing elapsed time + how much output we'd already seen
-            # distinguishes "died at/near connect (0 lines, ~0s -- points to
-            # a session/handshake limit)" from "died mid-training after real
-            # progress (points to a mid-run network drop)" without guessing.
-            _print(f"Lost connection while reading output ({e}) after {connection_lost_elapsed}s "
-                   f"and {len(output_lines)} line(s) of output (last progress: "
-                   f"{last_progress_line!r}) -- checking whether a usable result was already "
-                   f"captured before giving up")
+            _print(f"Gave up watching after {MAX_POLL_RECONNECTS} failed reconnections "
+                   f"({connection_lost_elapsed}s, {len(output_lines)} line(s) read). The run "
+                   f"is detached and may still be going -- its log is {log_path}")
+        elif outcome == "timeout":
+            lost_connection = True
+            connection_lost_elapsed = round(time.time() - exec_start, 1)
+            _print(f"Still running after the {timeout}s watch budget "
+                   f"({len(output_lines)} line(s) read); log is {log_path}")
+        elif outcome == "vanished":
+            # No exit sentinel and the PID is gone: killed from outside. That
+            # is not hypothetical here -- it is how the one-GPU-per-user policy
+            # is enforced, and it is why nothing useful ever reached stderr.
+            _print(f"Process {pid} disappeared without writing an exit status -- "
+                   f"killed from outside. {GPU_POLICY_REASON}")
+            exit_code = exit_code if exit_code is not None else -1
 
         if display is None and last_progress_bar:
             print()  # final newline after last progress bar
@@ -733,10 +874,11 @@ def run_training_remote(
                 "connection_lost_last_progress": last_progress_line,
             }
 
-        err_output = stderr.read().decode("utf-8", errors="replace").strip()
-        exit_code = stdout.channel.recv_exit_status()
+        # Both streams were merged into the log by the detached wrapper, so
+        # the tail of what we read IS the stderr that used to be separate.
+        err_output = "\n".join(output_lines[-40:]).strip()
 
-        if exit_code != 0:
+        if exit_code:
             _print(f"Remote process exited with code {exit_code}")
             if err_output:
                 # THE TAIL, NOT THE HEAD. A Python traceback is the last thing
