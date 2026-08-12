@@ -1351,7 +1351,14 @@ class Agent1TrainingSpecialist:
                 print(f"[Agent 1] Remote training complete. Metrics: {metrics}")
                 return metrics
         except Exception as e:
-            print(f"[Agent 1] Remote training failed ({e}) — falling back to local")
+            # The TYPE as well as the message. A bare {e} prints "()" for any
+            # exception carrying no message -- paramiko's socket.timeout is
+            # exactly that -- so the one line explaining why a campaign stopped
+            # training said nothing at all. That is how a malformed launch
+            # command went unnoticed while every run quietly became a
+            # fabricated result.
+            print(f"[Agent 1] Remote training failed ({type(e).__name__}: {e or 'no message'}) "
+                  f"— falling back to local")
 
         # --- Priority 2: local uv/train.py subprocess ---
         try:

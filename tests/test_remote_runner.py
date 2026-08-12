@@ -51,11 +51,40 @@ class FakeStream:
 
 
 class FakeSFTP:
-    def __init__(self):
+    def __init__(self, commands=None):
         self.puts = []
+        self.written = {}
+        self.commands = commands
 
     def put(self, local, remote):
         self.puts.append((local, remote))
+
+    def mkdir(self, path):
+        pass
+
+    def file(self, path, mode="r"):
+        """launch_detached writes the detached run's payload to a SCRIPT rather
+        than building nested shell quoting -- the version that did nest broke on
+        its own inner quotes and hung."""
+        sftp = self
+
+        class _Handle:
+            def write(self, data):
+                sftp.written[path] = data
+                # Also recorded as a "command": it IS what gets run on the
+                # remote, so assertions about the training invocation (which
+                # GPU, which hyperparams file) still find it after the payload
+                # moved out of exec_command and into a script.
+                if sftp.commands is not None:
+                    sftp.commands.append(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Handle()
 
     def close(self):
         pass
@@ -75,7 +104,7 @@ class FakeSSHClient:
     def __init__(self, responses=None, shared_commands=None):
         self._queues = [(matcher, list(queue)) for matcher, queue in (responses or [])]
         self.commands = shared_commands if shared_commands is not None else []
-        self.sftp = FakeSFTP()
+        self.sftp = FakeSFTP(commands=self.commands)
         self.closed = False
 
     def set_missing_host_key_policy(self, policy):

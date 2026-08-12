@@ -127,7 +127,12 @@ agent3:
             "val_bpb": val_bpb_sequence[iteration],
             "training_time": 0.0,
             "checkpoint_path": None,
-            "status": "dry_run",
+            # A REAL status, because this test is about the new-best half of the
+            # token-XAI cadence and a synthetic score can no longer set a
+            # record. That guard exists for a reason: a broken remote once made
+            # every run fall back to a fabricated val_bpb, and the campaign
+            # recorded 1.251122 -- a number no model produced -- as its best.
+            "status": "remote_ok",
         }
 
     with patch.object(orchestrator.agent1, "train_model", side_effect=fake_train_model):

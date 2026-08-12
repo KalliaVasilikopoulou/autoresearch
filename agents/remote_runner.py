@@ -335,13 +335,39 @@ def launch_detached(client, remote_cmd: str, log_path: str) -> Optional[str]:
     from ever closing. The wrapper appends the exit status afterwards: a
     detached run's code cannot be read back from the channel that started it.
     """
-    wrapped = (
-        f"mkdir -p $(dirname {log_path}) && "
-        f"nohup setsid bash -c '{remote_cmd} > {log_path} 2>&1; "
-        f'echo "{EXIT_SENTINEL}$?" >> {log_path}\' '
-        f"< /dev/null > /dev/null 2>&1 & echo $!"
+    # THE PAYLOAD GOES IN A FILE, not into nested shell quoting. The first
+    # version built `bash -lc "... bash -c '... echo "SENTINEL$?" ...'"`, whose
+    # inner double quotes terminate the outer ones -- the command was malformed,
+    # so the launch never printed a PID and the read blocked until it timed out.
+    # Agent 1 then fell back to a SIMULATED result, which is a fabricated
+    # val_bpb, and the campaign recorded it as a new best.
+    #
+    # A script file has no nesting to get wrong, and it is inspectable on the
+    # remote afterwards, which the one-shot command never was.
+    script_path = f"{log_path}.sh"
+    script = (
+        "#!/bin/bash\n"
+        f"mkdir -p $(dirname {log_path})\n"
+        f"{remote_cmd} > {log_path} 2>&1\n"
+        f"echo {EXIT_SENTINEL}$? >> {log_path}\n"
     )
-    _, stdout, _ = client.exec_command(f'bash -lc "{wrapped}"', timeout=60)
+    sftp = client.open_sftp()
+    try:
+        sftp.mkdir(str(Path(log_path).parent).replace("\\", "/"))
+    except OSError:
+        pass                                   # already there
+    try:
+        with sftp.file(script_path, "w") as handle:
+            handle.write(script)
+    finally:
+        sftp.close()
+
+    # `bash -l` so the script still runs as a login shell: remote_cmd begins
+    # with `source .../activate`, which needs the same environment the old
+    # `bash -lc` gave it.
+    _, stdout, _ = client.exec_command(
+        f"nohup setsid bash -l {script_path} < /dev/null > /dev/null 2>&1 & echo $!",
+        timeout=60)
     pid = stdout.read().decode("utf-8", errors="replace").strip().splitlines()
     return pid[-1].strip() if pid and pid[-1].strip().isdigit() else None
 

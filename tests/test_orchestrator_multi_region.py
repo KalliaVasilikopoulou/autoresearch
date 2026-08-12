@@ -10,6 +10,8 @@ Mirrors tests/test_orchestrator_parallel_wave.py -- remote_runner is
 monkeypatched throughout, so no real SSH, no real GPU, no real training.
 """
 
+import pathlib
+
 import pytest
 
 from agents import remote_runner
@@ -588,3 +590,24 @@ def test_a_lifecycle_pause_is_still_only_revisited_as_a_last_resort(tmp_path):
     _live, plan = orch._plan_wave(n_gpus=1, at_run=10)
     assert plan.assignments == [live.region_id]
     assert orch.registry.get(stalled.region_id).flag == PAUSED
+
+
+def test_a_simulated_result_never_becomes_the_campaign_best(tmp_path):
+    """THE ONE THAT COST A CAMPAIGN. _simulate_training_result returns a
+    hand-tuned formula of the iteration index, not a measurement. A malformed
+    remote launch made every run fall back to it, and 1.251122 -- a number no
+    model produced -- was recorded as the campaign best on the first iteration.
+
+    _recover_campaign_best already refused synthetic rows on restart; the
+    in-process update did not. Everything downstream follows from the record:
+    the holdout trigger, every "is this an improvement" check, the final
+    report."""
+    from state.results_analysis import SYNTHETIC_STATUSES
+
+    assert "simulated" in SYNTHETIC_STATUSES and "dry_run" in SYNTHETIC_STATUSES
+
+    source = pathlib.Path("agents/orchestrator.py").read_text(encoding="utf-8")
+    guard = "and result_payload.status not in SYNTHETIC_STATUSES"
+    assert guard in source, (
+        "the campaign-best update must refuse synthetic statuses; without it a "
+        "fabricated val_bpb becomes the record on the first iteration")

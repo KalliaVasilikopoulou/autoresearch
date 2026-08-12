@@ -706,7 +706,17 @@ class Orchestrator:
         # local reference, see search_region). So the campaign record has to
         # be maintained here, or a record set inside a region would leave the
         # global f_best stale for the rest of the campaign.
+        # A FABRICATED SCORE MUST NEVER BECOME THE RECORD. _simulate_training_result
+        # returns a hand-tuned formula of the iteration index, not a measurement,
+        # and _recover_campaign_best already refuses those on restart -- but the
+        # in-process update did not, so a campaign whose remote was broken set
+        # its best from an invented number on the first iteration. That happened:
+        # a malformed launch command made every run fall back to simulation, and
+        # 1.251122 was recorded as the campaign best. Everything downstream
+        # follows from the record -- the holdout trigger, "is this an
+        # improvement", the final report.
         if (isinstance(result_payload.val_bpb, (int, float))
+                and result_payload.status not in SYNTHETIC_STATUSES
                 and result_payload.val_bpb < self.agent1.best_val_bpb):
             print(f"[Orchestrator] New campaign best: {result_payload.val_bpb:.6f} "
                   f"(was {self.agent1.best_val_bpb:.6f}, region {region_id or '-'})")
