@@ -348,7 +348,13 @@ def launch_detached(client, remote_cmd: str, log_path: str) -> Optional[str]:
     script = (
         "#!/bin/bash\n"
         f"mkdir -p $(dirname {log_path})\n"
-        f"{remote_cmd} > {log_path} 2>&1\n"
+        # Redirect the WHOLE script, not just the last command in the && chain:
+        # `a && b > f` redirects only b, so conda activation and cd were writing
+        # nowhere and -- worse -- the log was not truncated until python itself
+        # started, seconds later. See the synchronous truncation below for why
+        # that mattered.
+        f"exec > {log_path} 2>&1\n"
+        f"{remote_cmd}\n"
         f"echo {EXIT_SENTINEL}$? >> {log_path}\n"
     )
     sftp = client.open_sftp()
@@ -365,7 +371,16 @@ def launch_detached(client, remote_cmd: str, log_path: str) -> Optional[str]:
     # `bash -l` so the script still runs as a login shell: remote_cmd begins
     # with `source .../activate`, which needs the same environment the old
     # `bash -lc` gave it.
+    # TRUNCATE THE LOG SYNCHRONOUSLY, IN THE FOREGROUND, BEFORE FORKING.
+    # The watcher starts tailing this path within milliseconds of the launch,
+    # while the detached script does not reach its own redirect until conda
+    # activation finishes seconds later. In that window the file still holds
+    # the PREVIOUS run's output -- complete, with its exit sentinel -- so the
+    # watcher would read it, see the sentinel, and instantly report the last
+    # run's val_bpb as this run's. Sequential campaigns reuse one log name, so
+    # every run after the first was a coin flip on that race.
     _, stdout, _ = client.exec_command(
+        f"mkdir -p $(dirname {log_path}); : > {log_path}; "
         f"nohup setsid bash -l {script_path} < /dev/null > /dev/null 2>&1 & echo $!",
         timeout=60)
     pid = stdout.read().decode("utf-8", errors="replace").strip().splitlines()

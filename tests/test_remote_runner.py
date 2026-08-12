@@ -744,3 +744,39 @@ def test_kill_stale_training_processes_skips_pid_that_already_exited(monkeypatch
     ])
     _patch_paramiko(monkeypatch, lambda: client)
     assert remote_runner.kill_stale_training_processes() == []
+
+
+def test_the_log_is_truncated_before_the_run_is_forked(monkeypatch, tmp_path):
+    """THE RACE THAT WOULD HAVE MISATTRIBUTED RESULTS. The watcher starts
+    tailing within milliseconds, while the detached script does not reach its
+    own redirect until conda activation finishes seconds later. In that window
+    the file still holds the PREVIOUS run's output -- complete, with its exit
+    sentinel -- so the watcher reads it, sees the sentinel, and reports the
+    last run's val_bpb as this one's. A sequential campaign reuses one log
+    name, so every run after the first was a coin flip on it.
+
+    The truncation therefore has to happen in the FOREGROUND, before the fork,
+    in the same command that launches."""
+    client = FakeSSHClient()
+    _patch_paramiko(monkeypatch, lambda: client)
+
+    remote_runner.launch_detached(client, "python -u train.py", "/tmp/logs/run.log")
+
+    launch = next(c for c in client.commands if "nohup setsid" in c)
+    assert ": > /tmp/logs/run.log" in launch, "log not truncated at launch"
+    assert launch.index(": > /tmp/logs/run.log") < launch.index("nohup setsid"), (
+        "truncation must precede the fork, or the watcher can still read the "
+        "previous run's log")
+
+
+def test_the_whole_detached_script_is_redirected_not_just_its_last_command():
+    """`a && b > f` redirects only b. With the redirect on the command chain,
+    conda activation and cd wrote nowhere -- and the log was not truncated
+    until python itself started, which is what opened the race above."""
+    client = FakeSSHClient()
+    remote_runner.launch_detached(client, "source activate && cd /r && python -u train.py",
+                                  "/tmp/logs/run.log")
+
+    script = next(iter(client.sftp.written.values()))
+    assert "exec > /tmp/logs/run.log 2>&1" in script
+    assert "python -u train.py > /tmp/logs/run.log" not in script
