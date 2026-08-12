@@ -103,9 +103,18 @@ TUNABLE_COLUMNS = tuple(c for c in HYPERPARAM_COLUMNS if c not in ARCHITECTURE_C
 _NUMERIC_FIELDS = set(HYPERPARAM_COLUMNS) | {
     "val_bpb", "training_time", "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps",
     "holdout_val_bpb",
-    # Numeric or tokens_seen() silently ignores it: _coerce_row keeps anything
-    # not listed here as a STRING, and the isinstance check then falls through
-    # to the (wrong) derivation without a word.
+    # ANYTHING NOT LISTED HERE IS KEPT AS A STRING by _coerce_row, and every
+    # consumer guards with isinstance(..., (int, float)) -- so an omission does
+    # not raise, it makes the check quietly answer "no" for every row.
+    #
+    # budget_shortfall_pct is the one that mattered. It is the DIRECT evidence
+    # that a run was cut short, and surrogate.without_compute_starved leads with
+    # it precisely because it needs no model -- but it arrived as '0.0', so no
+    # row ever counted as complete, every row was handed to the inferred
+    # step-deficit model instead, and that model excluded 10 of 16 complete runs
+    # as "compute-starved". The surrogate could never reach its min_n and the
+    # search cold-started forever while every run succeeded.
+    "budget_shortfall_pct", "depth",
     "total_tokens_M", "startup_seconds", "eval_seconds",
     # Coerced to a number so analysis can group by it, without being a feature.
     "seed",

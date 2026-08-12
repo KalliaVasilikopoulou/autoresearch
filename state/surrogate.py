@@ -162,13 +162,47 @@ def without_compute_starved(
 
     rows_after_direct = [r for r in rows if not _truncated(r)]
 
-    deficits = step_deficits(rows_after_direct, feature_columns=feature_columns, min_n=min_n)
+    def _proven_complete(row: Dict[str, Any]) -> bool:
+        """The run itself reported consuming its whole token budget.
+
+        NO INFERRED MODEL MAY OVERRULE THAT. budget_shortfall_pct is computed by
+        train.py from tokens actually seen against TOKEN_BUDGET, so 0.0 is a
+        measurement that the run was complete -- there is nothing for a
+        step-deficit estimate to add.
+
+        This is the case the comment above already anticipated: under a token
+        budget num_steps is a deterministic function of batch_size, so the
+        inferred deficit "has nothing left to detect". It was never actually
+        switched off, and it does not fail quietly -- fitting num_steps against
+        configurations whose batch sizes span 2048-32768 makes most of them look
+        like outliers. Measured on a real campaign: 10 of 16 complete runs
+        excluded, leaving 6 against a min_n of 15, so the surrogate could never
+        fit and the search cold-started forever while every run succeeded.
+        """
+        s = row.get("budget_shortfall_pct")
+        return isinstance(s, (int, float)) and math.isfinite(s) and s == 0.0
+
+    # The inferred model still judges rows that CANNOT say -- the wall-clock
+    # budget history, where it is the only signal there is.
+    judged = [r for r in rows_after_direct if not _proven_complete(r)]
+    proven = [r for r in rows_after_direct if _proven_complete(r)]
+    if not judged:
+        if verbose and len(rows_after_direct) != len(rows):
+            print(f"[surrogate] Excluded {len(rows) - len(rows_after_direct)}/{len(rows)} run(s) "
+                  f"that hit the wall-clock safety cap before finishing their token budget")
+        return rows_after_direct
+
+    deficits = step_deficits(judged, feature_columns=feature_columns, min_n=min_n)
     if deficits is None:
         if verbose and len(rows_after_direct) != len(rows):
             print(f"[surrogate] Excluded {len(rows) - len(rows_after_direct)}/{len(rows)} run(s) "
                   f"that hit the wall-clock safety cap before finishing their token budget")
         return rows_after_direct
-    kept = [r for r, d in zip(rows_after_direct, deficits) if d is None or d < threshold]
+    # `deficits` lines up with `judged`, not with rows_after_direct -- the
+    # proven-complete rows were never handed to the model and are kept as they
+    # are. Zipping against the wrong list would drop them by position.
+    survived = [r for r, d in zip(judged, deficits) if d is None or d < threshold]
+    kept = [r for r in rows_after_direct if r in proven or r in survived]
     if verbose and len(kept) != len(rows):
         print(f"[surrogate] Excluded {len(rows) - len(kept)}/{len(rows)} compute-starved run(s) "
               f"(>{threshold:.0%} fewer training steps than their config predicts -- "

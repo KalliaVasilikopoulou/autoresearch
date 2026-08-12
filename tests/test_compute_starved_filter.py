@@ -13,6 +13,7 @@ SYNTHETIC_STATUSES already excludes.
 
 import pytest
 
+from state.results_analysis import HYPERPARAM_COLUMNS
 from state.surrogate import (
     SURROGATE_DEPS_AVAILABLE,
     STEP_DEFICIT_THRESHOLD,
@@ -181,3 +182,62 @@ def test_non_numeric_shortfall_does_not_crash_or_drop():
     """results.tsv stores blanks for columns a run never reported."""
     rows = [_row(i, val_bpb=1.3, budget_shortfall_pct="") for i in range(3)]
     assert without_compute_starved(rows) == rows
+
+
+# --- a run that reported completing must not be second-guessed --------------
+
+
+def test_a_run_that_reported_a_full_budget_is_never_called_compute_starved():
+    """THE ONE THAT STOPPED A CAMPAIGN'S SEARCH. budget_shortfall_pct is
+    computed by train.py from tokens actually seen against TOKEN_BUDGET, so 0.0
+    is a MEASUREMENT that the run was complete. The inferred step-deficit model
+    has nothing to add to that -- and it does not merely add nothing, it
+    actively removes: fitting num_steps against configurations whose batch
+    sizes span 2048-32768 makes most of them look like outliers.
+
+    Measured on a real campaign: 10 of 16 complete runs excluded, leaving 6
+    against a min_n of 15, so the surrogate could never fit and the search
+    cold-started forever while every single run succeeded."""
+    from state import surrogate
+
+    # Wide batch_size spread is exactly what makes the inferred model misfire.
+    rows = []
+    for i in range(16):
+        row = _row(i, val_bpb=1.4 + 0.01 * i, budget_shortfall_pct=0.0)
+        row["batch_size"] = 2048 * (1 + i)
+        row["num_steps"] = 4194304 // row["batch_size"]
+        rows.append(row)
+
+    kept = without_compute_starved(rows, feature_columns=HYPERPARAM_COLUMNS,
+                                             min_n=15)
+    assert len(kept) == len(rows), (
+        "every run reported a full token budget; none may be inferred away")
+
+
+def test_a_truncated_run_is_still_excluded():
+    """The direct signal keeps working -- this is not a blanket amnesty."""
+    from state import surrogate
+
+    rows = [_row(i, val_bpb=1.4, budget_shortfall_pct=0.0) for i in range(15)]
+    rows.append(_row(99, val_bpb=1.1, budget_shortfall_pct=37.5))
+
+    kept = without_compute_starved(rows, feature_columns=HYPERPARAM_COLUMNS,
+                                             min_n=15)
+    assert all(r.get("budget_shortfall_pct") != 37.5 for r in kept)
+
+
+def test_budget_shortfall_survives_the_trip_through_results_tsv(tmp_path):
+    """It has to arrive as a NUMBER. _coerce_row keeps anything outside
+    _NUMERIC_FIELDS as a string, and every consumer guards with
+    isinstance(..., (int, float)) -- so the omission did not raise, it made the
+    check answer "no" for every row, silently."""
+    from state.results_analysis import load_results
+    from state.results_logger import log_result
+
+    path = tmp_path / "results.tsv"
+    log_result("run_0000", {"n_layer": 8},
+               {"val_bpb": 1.3, "status": "remote_ok", "budget_shortfall_pct": 0.0},
+               results_path=str(path))
+
+    row = load_results(str(path))[0]
+    assert isinstance(row["budget_shortfall_pct"], float)
