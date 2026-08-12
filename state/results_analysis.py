@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from state.results_logger import COLUMNS as CURRENT_COLUMNS
-from state.results_logger import PRE_SEED_COLUMNS, PRE_TIME_BREAKDOWN_COLUMNS
+from state.results_logger import (
+    PRE_SEED_COLUMNS, PRE_TIME_BREAKDOWN_COLUMNS, PRE_TOTAL_TOKENS_COLUMNS,
+)
 
 # Frozen historical layout used before the 4-LR-group refactor. Its
 # `learning_rate` column is known to contain corrupted values for real runs
@@ -101,6 +103,10 @@ TUNABLE_COLUMNS = tuple(c for c in HYPERPARAM_COLUMNS if c not in ARCHITECTURE_C
 _NUMERIC_FIELDS = set(HYPERPARAM_COLUMNS) | {
     "val_bpb", "training_time", "peak_vram_mb", "mfu_percent", "num_params_M", "num_steps",
     "holdout_val_bpb",
+    # Numeric or tokens_seen() silently ignores it: _coerce_row keeps anything
+    # not listed here as a STRING, and the isinstance check then falls through
+    # to the (wrong) derivation without a word.
+    "total_tokens_M", "startup_seconds", "eval_seconds",
     # Coerced to a number so analysis can group by it, without being a feature.
     "seed",
 }
@@ -132,18 +138,27 @@ def tokens_seen(row: Dict[str, Any]) -> Optional[float]:
     """How many training tokens this run actually consumed, or None if the row
     cannot say.
 
-    DERIVED from num_steps and batch_size rather than read from a column,
-    because `total_tokens_M` is parsed out of train.py's summary and then
-    thrown away -- it has never been a results.tsv column. Deriving it works
-    RETROACTIVELY on every run ever recorded, which a new column could not:
-    the whole point is to tell runs from different token budgets apart, and
-    the runs that need telling apart are the ones already on disk.
+    PREFERS WHAT TRAIN.PY REPORTED. total_tokens_M is the number the training
+    loop itself counted, so it needs no model of how a requested batch_size
+    becomes an effective one.
 
-    The identity is `num_steps * (batch_size // 2048) * 2048`, verified exact
-    on 31/31 historical runs: train.py computes grad_accum_steps by integer
-    division, so a requested batch_size is truncated to a multiple of
-    DEVICE_BATCH_SIZE * MAX_SEQ_LEN before any token is seen.
+    The derivation below is the fallback for rows written before that column
+    existed, and it is only approximately right -- which is why it is no longer
+    the primary. `num_steps * (batch_size // 2048) * 2048` assumes the only
+    transformation is grad_accum's integer division, and a real run disproved
+    it: run_0040 requested batch_size 6025 across 2048 steps and train.py
+    reported 4.2M tokens, i.e. an effective batch of 2048 where this predicts
+    4096. Both of that campaign's genuine runs were rejected as "wrong budget"
+    and the surrogate would have seen nothing at all.
+
+    Approximate is still useful for the historical rows: they span 6.25M-12.5M
+    against a 4.19M budget, so the question they are asked -- same budget or
+    not -- is not close.
     """
+    reported = row.get("total_tokens_M")
+    if isinstance(reported, (int, float)) and reported > 0:
+        return float(reported) * 1e6
+
     steps, batch = row.get("num_steps"), row.get("batch_size")
     if not isinstance(steps, (int, float)) or not isinstance(batch, (int, float)):
         return None
@@ -317,6 +332,9 @@ def load_results(paths: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Di
                         continue
                 if len(fields) == len(CURRENT_COLUMNS):
                     row = _coerce_row(CURRENT_COLUMNS, fields, "current")
+                elif len(fields) == len(PRE_TOTAL_TOKENS_COLUMNS):
+                    row = _coerce_row(PRE_TOTAL_TOKENS_COLUMNS, fields,
+                                      "pre_total_tokens")
                 elif len(fields) == len(PRE_TIME_BREAKDOWN_COLUMNS):
                     row = _coerce_row(PRE_TIME_BREAKDOWN_COLUMNS, fields,
                                       "pre_time_breakdown")

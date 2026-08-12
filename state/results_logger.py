@@ -74,6 +74,11 @@ COLUMNS = [
     # than merely printed.
     "startup_seconds",
     "eval_seconds",
+    # What the training loop itself counted, so telling two token budgets apart
+    # needs no model of how a requested batch_size becomes an effective one.
+    # It was parsed all along and thrown away; the derivation that stood in for
+    # it turned out to be wrong on real runs (see results_analysis.tokens_seen).
+    "total_tokens_M",
 ]
 
 # Frozen superseded layouts, newest first. A file written under one of these is
@@ -105,7 +110,13 @@ PRE_TIME_BREAKDOWN_COLUMNS = (
     "region_id", "window_s_fraction", "seed",
 )
 
-SUPERSEDED_SCHEMAS = (PRE_TIME_BREAKDOWN_COLUMNS, PRE_SEED_COLUMNS)
+PRE_TOTAL_TOKENS_COLUMNS = PRE_TIME_BREAKDOWN_COLUMNS + (
+    "startup_seconds", "eval_seconds",
+)
+
+SUPERSEDED_SCHEMAS = (
+    PRE_TOTAL_TOKENS_COLUMNS, PRE_TIME_BREAKDOWN_COLUMNS, PRE_SEED_COLUMNS,
+)
 
 # Karpathy's published baseline for DEPTH=8 on the same dataset/budget.
 # Update this if you find a more precise figure.
@@ -232,6 +243,7 @@ def log_result(
         # Measured by train.py, never derivable from anything else here.
         "startup_seconds": metrics.get("startup_seconds", ""),
         "eval_seconds": metrics.get("eval_seconds", ""),
+        "total_tokens_M": metrics.get("total_tokens_M", ""),
     }
 
     with open(path, "a", newline="") as f:

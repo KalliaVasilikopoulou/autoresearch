@@ -192,7 +192,8 @@ def test_rows_written_before_the_seed_column_still_load(tmp_path):
     from state.results_analysis import PRE_SEED_COLUMNS
 
     assert PRE_SEED_COLUMNS == tuple(
-        c for c in COLUMNS if c not in ("seed", "startup_seconds", "eval_seconds"))
+        c for c in COLUMNS
+        if c not in ("seed", "startup_seconds", "eval_seconds", "total_tokens_M"))
 
     path = tmp_path / "archived.tsv"
     values = {"timestamp": "2026-08-06T18:57:44", "run_id": "run_0029", "n_layer": "19",
