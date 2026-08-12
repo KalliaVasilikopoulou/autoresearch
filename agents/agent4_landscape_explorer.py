@@ -319,6 +319,8 @@ class Agent4LandscapeExplorer:
             candidate = self._apply_xai_direction(candidate, sm, evidence)
             if self._too_close_to_known(candidate, registry, opened):
                 continue
+            if self._too_small_to_recover(candidate):
+                continue
             region = registry.open_region(candidate, at_run=at_run, origin=criterion)
             opened.append(region)
             print(f"[Agent 4] Opened region {region.region_id} by '{criterion}' "
@@ -332,6 +334,87 @@ class Agent4LandscapeExplorer:
                 "live_regions": len(registry.active()),
             })
         return opened
+
+    def minimum_region_size(self) -> Optional[float]:
+        """The smallest model worth opening a region around, in non-embedding
+        parameters -- or None when it has not been measured.
+
+        DERIVED FROM TWO MEASUREMENTS, not chosen. The size ladder
+        (state/size_sweep.json) gives each size's penalty against the best; the
+        geometry experiment gives B(r), the spread among different
+        configurations inside a fence, which is how far tuning INSIDE a region
+        can move val_bpb. A region whose size penalty exceeds B(r) cannot be
+        tuned back to competitive however well its eight tunables are searched
+        -- opening one spends the whole region's budget on a question already
+        answered.
+
+        Measured at TOKEN_BUDGET=4.19M: B(0.02) = 0.0106, and the penalties run
+        0.0000 (232M) / 0.0036 (138M) / 0.0099 (68.8M) / 0.0191 (30.4M) /
+        0.0388 (8.6M). So 68.8M is the smallest size tuning can still rescue
+        and 30.4M is not.
+
+        This is deliberately NOT "prefer the frontier". Above the floor, size
+        differences are small next to what tuning achieves, so a smaller region
+        is a perfectly reasonable bet and exploration should stay free to take
+        it. The rule only excludes sizes that are hopeless, which is a claim
+        the measurements actually support.
+
+        None when either report is missing or was measured at a different token
+        budget -- both moved a great deal when the budget did, and a floor from
+        the wrong budget would refuse regions that are fine here.
+        """
+        from prepare import TOKEN_BUDGET
+        from state.results_analysis import report_at_budget
+
+        state_dir = self.registry_path.parent
+        sweep = report_at_budget(state_dir / "size_sweep.json", TOKEN_BUDGET)
+        geometry = report_at_budget(state_dir / "region_geometry.json", TOKEN_BUDGET)
+        if not sweep or not geometry:
+            return None
+
+        rungs = [r for r in (sweep.get("rungs") or [])
+                 if isinstance(r.get("params"), (int, float))
+                 and isinstance(r.get("val_bpb"), (int, float))]
+        # B AT THE FENCE RADIUS, not the largest B measured. The geometry
+        # experiment characterises several radii, but a region's search is
+        # confined to `region_radius`, so that is the only one describing what
+        # tuning can actually reach. Taking the maximum instead reads B(0.10)
+        # = 0.0789 against a 0.02 fence and puts the floor 8x too low, which
+        # waves through exactly the regions this is meant to refuse.
+        by_radius = {}
+        for key, entry in (geometry.get("b_by_radius") or {}).items():
+            try:
+                if isinstance(entry.get("b_observed"), (int, float)):
+                    by_radius[float(key)] = float(entry["b_observed"])
+            except (TypeError, ValueError):
+                continue
+        if len(rungs) < 2 or not by_radius:
+            return None
+        nearest = min(by_radius, key=lambda r: abs(r - self.region_radius))
+        recoverable = by_radius[nearest]
+
+        best = min(r["val_bpb"] for r in rungs)
+        affordable = [r["params"] for r in rungs
+                      if r["val_bpb"] - best <= recoverable]
+        return float(min(affordable)) if affordable else None
+
+    def _too_small_to_recover(self, candidate: Dict[str, Any]) -> bool:
+        """True when this candidate's size is one no amount of within-region
+        tuning could rescue. False whenever the floor is unmeasured, so a fresh
+        checkout never silently refuses to explore."""
+        floor = self.minimum_region_size()
+        if floor is None:
+            return False
+        try:
+            params = 12 * int(candidate["n_layer"]) * int(candidate["n_embd"]) ** 2
+        except (KeyError, TypeError, ValueError):
+            return False
+        if params >= floor:
+            return False
+        print(f"[Agent 4] Skipped a candidate at {params / 1e6:.1f}M non-embedding "
+              f"params: below the {floor / 1e6:.1f}M floor, where the size penalty "
+              f"exceeds what tuning inside a region can recover")
+        return True
 
     def _apply_xai_direction(self, candidate: Dict[str, Any], sm: Any,
                              evidence: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:

@@ -493,3 +493,96 @@ def test_the_shipped_config_has_no_settings_the_code_ignores():
     orch_src = open("agents/orchestrator.py", encoding="utf-8").read()
     unread = [k for k in shipped["orchestrator"] if f'"{k}"' not in orch_src]
     assert unread == [], f"orchestrator config keys nothing reads: {unread}"
+
+
+# --- a region too small to tune its way back is not worth opening -----------
+
+
+def _stamp(state_dir, sweep_rungs, b_by_radius):
+    """Write the two measurement reports the floor is derived from, stamped
+    with the budget in force -- an unstamped or foreign-budget report is
+    refused, and the floor then does not exist."""
+    import json
+
+    from prepare import TOKEN_BUDGET
+
+    (state_dir / "size_sweep.json").write_text(json.dumps({
+        "token_budget": int(TOKEN_BUDGET),
+        "rungs": [{"params": p, "val_bpb": v} for p, v in sweep_rungs],
+    }), encoding="utf-8")
+    (state_dir / "region_geometry.json").write_text(json.dumps({
+        "token_budget": int(TOKEN_BUDGET),
+        "b_by_radius": {k: {"b_observed": v} for k, v in b_by_radius.items()},
+    }), encoding="utf-8")
+
+
+#: The real 4.19M ladder and geometry.
+RUNGS = [(1.23e6, 1.796245), (8.60e6, 1.744126), (30.41e6, 1.724416),
+         (68.81e6, 1.715182), (138.24e6, 1.708894), (232.24e6, 1.705331)]
+B_BY_RADIUS = {"0.02": 0.010579, "0.05": 0.045045, "0.10": 0.078920}
+
+
+def test_the_floor_is_the_smallest_size_tuning_can_still_rescue(agent4, tmp_path):
+    """Derived from two measurements rather than chosen: the ladder gives each
+    size's penalty, B(r) gives how far tuning inside a fence can move val_bpb.
+    A penalty larger than B(r) is one the region can never search its way out
+    of. At 4.19M that lands on 68.8M -- 0.0099 penalty against B(0.02)=0.0106
+    -- while 30.4M, at 0.0191, is beyond rescue."""
+    (tmp_path / "state").mkdir(exist_ok=True)
+    _stamp(tmp_path / "state", RUNGS, B_BY_RADIUS)
+    agent4.region_radius = 0.02
+
+    assert agent4.minimum_region_size() == pytest.approx(68.81e6)
+
+
+def test_the_floor_reads_b_at_the_fence_radius_not_the_largest_measured(agent4, tmp_path):
+    """The geometry experiment characterises several radii, but a region's
+    search is confined to region_radius. Taking the largest B instead reads
+    B(0.10)=0.0789 against a 0.02 fence and puts the floor 8x too low, waving
+    through the very regions this refuses."""
+    (tmp_path / "state").mkdir(exist_ok=True)
+    _stamp(tmp_path / "state", RUNGS, B_BY_RADIUS)
+
+    agent4.region_radius = 0.02
+    tight = agent4.minimum_region_size()
+    agent4.region_radius = 0.10
+    loose = agent4.minimum_region_size()
+
+    assert tight > loose, "a tighter fence recovers less, so it must refuse more"
+    assert tight == pytest.approx(68.81e6)
+
+
+def test_a_hopeless_candidate_is_skipped_and_a_viable_one_is_not(agent4, tmp_path):
+    (tmp_path / "state").mkdir(exist_ok=True)
+    _stamp(tmp_path / "state", RUNGS, B_BY_RADIUS)
+    agent4.region_radius = 0.02
+
+    assert agent4._too_small_to_recover({"n_layer": 4, "n_embd": 320})     # 4.9M
+    assert not agent4._too_small_to_recover({"n_layer": 15, "n_embd": 828})  # 123M
+
+
+def test_without_the_measurements_nothing_is_refused(agent4, tmp_path):
+    """A fresh checkout must never silently stop exploring. Same contract as
+    every other rule here: no measurement, no verdict."""
+    (tmp_path / "state").mkdir(exist_ok=True)
+
+    assert agent4.minimum_region_size() is None
+    assert not agent4._too_small_to_recover({"n_layer": 1, "n_embd": 128})
+
+
+def test_a_floor_from_another_budget_is_refused(agent4, tmp_path):
+    """How much a given size costs is a property of how much training it gets:
+    at 12.5M the same ladder was still falling at 232M, at 4.19M it flattens by
+    30M. A floor from the wrong budget would refuse regions that are fine."""
+    import json
+
+    from prepare import TOKEN_BUDGET
+
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    _stamp(state, RUNGS, B_BY_RADIUS)
+    stale = json.loads((state / "size_sweep.json").read_text())
+    stale["token_budget"] = int(TOKEN_BUDGET) * 3
+    (state / "size_sweep.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    assert agent4.minimum_region_size() is None

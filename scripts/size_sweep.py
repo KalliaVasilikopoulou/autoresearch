@@ -894,6 +894,10 @@ def main():
         run_all(rungs, args.results_path, args.timeout)
 
     report = analyze(args.results_path, history_path=args.history)
+    # STAMP THE BUDGET, like every other measurement report. Agent 4 derives its
+    # minimum region size from the penalties in here, and how much a given size
+    # costs is entirely a property of how much training it gets.
+    report["token_budget"] = current_token_budget()
     REPORT_JSON.parent.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     text = render(report)

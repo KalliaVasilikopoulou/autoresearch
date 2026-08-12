@@ -112,6 +112,7 @@
   "step_threshold": 0.006430955916502597,
   "steps_below_noise": 2,
   "still_falling_at_the_top": false,
+  "token_budget": 4194304,
   "unimodal": true,
   "verdict": "ONE HILL -- at most one change of direction, so Agent 4 can walk downhill on size instead of exploring it. (2 of 5 steps were below the noise, so those stretches are flat rather than sloped.)"
 }
