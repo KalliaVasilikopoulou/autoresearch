@@ -312,13 +312,25 @@ def test_agent3_and_agent4_read_the_same_registry(tmp_path):
     assert RegionRegistry(str(orch.agent3.registry_path)).flags_snapshot()
 
 
+def _at_current_budget():
+    """num_steps/batch_size reproducing the budget in force. Rows that cannot
+    say how much training they saw are filtered out before any model is fitted
+    -- a surrogate spanning two budgets fits a 0.45 bpb step no hyperparameter
+    caused -- so a fixture without them is testing the filter, not the code."""
+    from prepare import TOKEN_BUDGET
+
+    batch_size = 22528                      # already a multiple of 2048
+    return {"num_steps": TOKEN_BUDGET // batch_size, "batch_size": batch_size}
+
+
 def _write_results(tmp_path, n=40):
     from state.results_logger import log_result
     for i in range(n):
-        hp = _hyperparams(i)
+        hp = dict(_hyperparams(i), **_at_current_budget())
         log_result(f"run_{i:04d}", hp,
                    {"val_bpb": 1.2 + 0.03 * (i % 11), "training_time": 1.0,
-                    "status": "remote_ok"},
+                    "status": "remote_ok",
+                    "num_steps": _at_current_budget()["num_steps"]},
                    results_path=str(tmp_path / "results.tsv"))
 
 
@@ -520,11 +532,14 @@ def test_simulated_runs_never_become_the_campaign_record(tmp_path):
     run that follows."""
     from state.results_logger import log_result
 
-    log_result("run_0000", _hyperparams(0),
-               {"val_bpb": 0.1, "training_time": 1.0, "status": "simulated"},
+    budget = _at_current_budget()
+    log_result("run_0000", dict(_hyperparams(0), **budget),
+               {"val_bpb": 0.1, "training_time": 1.0, "status": "simulated",
+                "num_steps": budget["num_steps"]},
                results_path=str(tmp_path / "results.tsv"))
-    log_result("run_0001", _hyperparams(1),
-               {"val_bpb": 1.30, "training_time": 1.0, "status": "remote_ok"},
+    log_result("run_0001", dict(_hyperparams(1), **budget),
+               {"val_bpb": 1.30, "training_time": 1.0, "status": "remote_ok",
+                "num_steps": budget["num_steps"]},
                results_path=str(tmp_path / "results.tsv"))
 
     orch = _make_orchestrator(tmp_path)

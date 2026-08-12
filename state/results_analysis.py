@@ -165,6 +165,25 @@ def same_token_budget(row: Dict[str, Any], budget: float, rel_tol: float = 0.02)
     return seen is not None and math.isclose(seen, budget, rel_tol=rel_tol)
 
 
+def at_current_budget(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`rows` restricted to runs trained under the token budget in force.
+
+    ANY MODEL FITTED ACROSS BUDGETS IS FITTED ON TWO DIFFERENT TASKS. The same
+    configuration scored 1.2486 at 12.5M tokens and 1.7063 at 4.19M, so mixing
+    them puts a 0.45 bpb step into the data that no hyperparameter caused. A
+    surrogate would spend its capacity explaining that step, and every
+    comparison drawn from it -- which configuration is better, where the
+    frontier is, which parameters matter -- would be about the budget instead.
+
+    Filtering here rather than discarding the old runs keeps them available to
+    anything that asks a budget-aware question, and keeps the file as the
+    campaign's real history.
+    """
+    from prepare import TOKEN_BUDGET
+
+    return [r for r in rows if same_token_budget(r, TOKEN_BUDGET)]
+
+
 def report_at_budget(path: Union[str, Path], budget: float) -> Optional[Dict[str, Any]]:
     """A measurement report's contents, or None if it was not measured under
     `budget` tokens of training.

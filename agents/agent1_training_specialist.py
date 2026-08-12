@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 from agents import claude_cli
 from agents import train_output
-from state.results_analysis import ARCHITECTURE_COLUMNS
+from state.results_analysis import ARCHITECTURE_COLUMNS, at_current_budget
 
 
 # The 4 learning-rate groups train.py's optimizer actually exposes (matches
@@ -765,7 +765,16 @@ class Agent1TrainingSpecialist:
         except ImportError:
             return None
         from state.results_analysis import load_results
-        rows = load_results(str(self.results_path))
+        # ONE BUDGET ONLY. A surrogate fitted across budgets is fitted on two
+        # different tasks: the same configuration read 1.2486 at 12.5M tokens
+        # and 1.7063 at 4.19M, so mixing them puts a 0.45 bpb step into the
+        # data that no hyperparameter caused, and the model would spend its
+        # capacity explaining the budget instead of the search space.
+        #
+        # Filtered HERE, where the rows come off disk, rather than inside
+        # propose_next: a function handed an explicit list of rows should
+        # search them, not silently discard most of them.
+        rows = at_current_budget(load_results(str(self.results_path)))
         result = search_planner.propose_next(
             rows=rows,
             current_best_hyperparams=self.current_hyperparams,

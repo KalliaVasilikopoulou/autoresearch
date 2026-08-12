@@ -24,7 +24,9 @@ from agents.agent3_report_analyst import Agent3ReportAnalyst, _read_text_toleran
 from agents.agent4_landscape_explorer import Agent4LandscapeExplorer
 from agents.protocols import AnalysisEvidence, SummaryEvidence, TrainingResult
 from state.regions import CAPACITY_PAUSED, RegionRegistry
-from state.results_analysis import SYNTHETIC_STATUSES, load_results
+from state.results_analysis import (
+    SYNTHETIC_STATUSES, at_current_budget, load_results,
+)
 from state.state_manager import StateManager
 from state.results_logger import log_result
 
@@ -216,7 +218,11 @@ class Orchestrator:
         rows (dry_run/simulated), whose val_bpb is a hand-tuned formula rather
         than a measurement and must never become the record."""
         try:
-            rows = load_results(str(self.results_path))
+            # Only runs at the budget in force: a "best" carried over from a
+            # longer budget is unbeatable here for a reason that has nothing to
+            # do with the search (1.2486 at 12.5M against 1.7063 at 4.19M), so
+            # every improvement check would fail forever.
+            rows = at_current_budget(load_results(str(self.results_path)))
         except Exception as e:  # pragma: no cover - never block startup on this
             print(f"[Orchestrator] Could not read {self.results_path} for the campaign best: {e}")
             return
@@ -500,7 +506,10 @@ class Orchestrator:
 
         wanted_new = plan.assignments.count(None)
         if wanted_new:
-            rows = load_results(str(self.results_path))
+            # Same rule as the surrogate: a landscape built across budgets maps
+            # a 0.45 bpb cliff that no hyperparameter caused, and would send
+            # every region toward the side of it that simply trained longer.
+            rows = at_current_budget(load_results(str(self.results_path)))
             opened = self.agent4.propose_regions(
                 rows, self.registry, wanted_new, at_run, self.agent1.best_val_bpb,
                 # Agent 2's interpretability findings reach the search here, and
