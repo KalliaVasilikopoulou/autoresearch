@@ -649,8 +649,8 @@ def test_kill_stale_training_processes_kills_only_the_matching_process(monkeypat
         return FakeSSHClient(
             responses=[
                 ("nvidia-smi --query-compute-apps", [("111\n222\n", 0)]),
-                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
-                ("ps -o ruser=,args= -p 222", [("some-other-user some_other_process.py", 0)]),
+                ("ps -o ruser:32=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("ps -o ruser:32=,args= -p 222", [("some-other-user some_other_process.py", 0)]),
                 ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
                 ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("1", 0)]),
                 ("kill -0 111", [("DEAD\n", 0)]),
@@ -677,7 +677,7 @@ def test_kill_stale_training_processes_skips_process_missing_the_marker(monkeypa
         return FakeSSHClient(
             responses=[
                 ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
-                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("ps -o ruser:32=,args= -p 111", [("fake-user python -u train.py", 0)]),
                 ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
                 ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("0", 0)]),
             ],
@@ -699,7 +699,7 @@ def test_kill_stale_training_processes_skips_process_with_different_cwd(monkeypa
         return FakeSSHClient(
             responses=[
                 ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
-                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("ps -o ruser:32=,args= -p 111", [("fake-user python -u train.py", 0)]),
                 ("readlink -f /proc/111/cwd", [("/home/fake-user/some_other_project", 0)]),
             ],
             shared_commands=shared_commands,
@@ -718,7 +718,7 @@ def test_kill_stale_training_processes_escalates_to_sigkill_when_still_alive(mon
         return FakeSSHClient(
             responses=[
                 ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
-                ("ps -o ruser=,args= -p 111", [("fake-user python -u train.py", 0)]),
+                ("ps -o ruser:32=,args= -p 111", [("fake-user python -u train.py", 0)]),
                 ("readlink -f /proc/111/cwd", [(FAKE_CFG["repo"], 0)]),
                 ('grep -zc "AUTORESEARCH_MANAGED=1" /proc/111/environ', [("1", 0)]),
                 ("kill -0 111", [("ALIVE\n", 0)]),
@@ -740,7 +740,7 @@ def test_kill_stale_training_processes_skips_pid_that_already_exited(monkeypatch
     natural exit) returns an empty line -- must be skipped, not crash."""
     client = FakeSSHClient(responses=[
         ("nvidia-smi --query-compute-apps", [("111\n", 0)]),
-        ("ps -o ruser=,args= -p 111", [("", 0)]),
+        ("ps -o ruser:32=,args= -p 111", [("", 0)]),
     ])
     _patch_paramiko(monkeypatch, lambda: client)
     assert remote_runner.kill_stale_training_processes() == []
@@ -780,3 +780,36 @@ def test_the_whole_detached_script_is_redirected_not_just_its_last_command():
     script = next(iter(client.sftp.written.values()))
     assert "exec > /tmp/logs/run.log 2>&1" in script
     assert "python -u train.py > /tmp/logs/run.log" not in script
+
+
+def test_the_owner_check_survives_a_username_longer_than_eight_characters(monkeypatch):
+    """THE BUG THAT MADE THIS FUNCTION A NO-OP. `ps -o ruser=` pads that column
+    to 8 characters and truncates the rest with a '+', so the real account
+    "up1066590" came back as "up10665+" and never equalled cfg["user"]. Every
+    process failed the owner check, so the orphan cleaner has never killed
+    anything on this account.
+
+    It stayed invisible while runs died with their SSH session. Detaching them
+    surfaced it at once: stopping a campaign left two training processes alive
+    on two GPUs, which is itself a breach of the one-GPU policy.
+    """
+    seen = []
+
+    class _Recorder(FakeSSHClient):
+        def exec_command(self, cmd, timeout=None):
+            seen.append(cmd)
+            return super().exec_command(cmd, timeout=timeout)
+
+    client = _Recorder(responses=[("nvidia-smi", [("4242\n", 0)])])
+    monkeypatch.setattr(remote_runner, "_PARAMIKO_AVAILABLE", True)
+    monkeypatch.setattr(remote_runner, "_load_cfg",
+                        lambda: dict(FAKE_CFG, user="up1066590"))
+
+    remote_runner.kill_stale_training_processes(client=client)
+
+    ps_call = next(c for c in seen if c.startswith("ps -o ruser"))
+    assert "ruser:" in ps_call, (
+        "ps must be given an explicit column width, or any username longer "
+        "than 8 characters is truncated and the owner check can never match")
+    width = int(ps_call.split("ruser:")[1].split("=")[0])
+    assert width >= len("up1066590")

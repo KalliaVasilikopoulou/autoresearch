@@ -529,7 +529,17 @@ def kill_stale_training_processes(cfg: Optional[Dict[str, Any]] = None, timeout:
 
         killed: List[Dict[str, Any]] = []
         for pid in gpu_pids:
-            _, stdout, _ = client.exec_command(f'ps -o ruser=,args= -p {pid} 2>/dev/null', timeout=timeout)
+            # `ruser:32`, NOT a bare `ruser`. ps pads that column to 8
+            # characters and truncates anything longer with a '+', so a
+            # 9-character account name came back as "up10665+" and never
+            # matched cfg["user"] = "up1066590". The owner check therefore
+            # failed for every process, and this function -- the one that
+            # cleans up orphaned training runs -- has never killed anything on
+            # this account. Detached runs made that visible: stopping a
+            # campaign no longer stops its training, so two orphans sat on two
+            # GPUs at once, which is itself a policy breach.
+            _, stdout, _ = client.exec_command(
+                f'ps -o ruser:32=,args= -p {pid} 2>/dev/null', timeout=timeout)
             ps_line = stdout.read().decode("utf-8", errors="replace").strip()
             if not ps_line:
                 continue  # PID already gone, or not visible to us (not ours)
