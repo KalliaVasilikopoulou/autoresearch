@@ -303,3 +303,45 @@ def test_without_enough_local_evidence_the_campaign_figure_is_used(tmp_path):
     registry.assign_run(region.region_id, "run_0000", 1.30)
 
     assert agent4._a_within(region) == pytest.approx(0.004)
+
+
+def test_a_lone_region_can_still_migrate(tmp_path):
+    """THE GUARD THAT MADE MIGRATION UNREACHABLE. It refused to migrate the only
+    live region, to "never leave the campaign with nowhere to search" -- but
+    migration opens its successor, so there is always somewhere to search
+    afterwards. The check ran before the replacement it was worried about.
+
+    Under the one-GPU policy the allocator can never hold more than one region
+    (spare = n_gpus - len(regions) = 0), so the only live region is ALWAYS the
+    sole one. A real campaign recorded 6 escapes in 6 proposals at coherence
+    0.75, pointing 0.203 away from an anchor with a 0.02 fence, and migration
+    could not fire on any of it."""
+    agent4 = _agent4(tmp_path)
+    registry = RegionRegistry(str(tmp_path / "state" / "regions.json"))
+    region = registry.open_region(_cfg(), at_run=0)
+    assert len(registry.active()) == 1
+
+    pressure = {"n_escapes": 6, "coherence": 0.75, "distance": 0.203,
+                "target": _cfg(matrix_lr=0.09), "mean_direction": {"matrix_lr": 0.5}}
+    successor = agent4.migrate(region, registry, pressure, at_run=10)
+
+    assert successor is not None, "a lone region must still be able to migrate"
+    assert successor.region_id != region.region_id
+    assert region.successor_id == successor.region_id
+    # And the campaign is not left empty -- which is what the old guard wanted.
+    assert len(registry.active()) >= 1
+
+
+def test_migration_leaves_the_anchor_where_it_was(tmp_path):
+    """Anchor immutability is what region identity, merge detection and the
+    don't-reopen-a-ruled-out-area check all rest on."""
+    agent4 = _agent4(tmp_path)
+    registry = RegionRegistry(str(tmp_path / "state" / "regions.json"))
+    region = registry.open_region(_cfg(), at_run=0)
+    before = dict(region.anchor)
+
+    agent4.migrate(region, registry, {
+        "n_escapes": 4, "coherence": 0.8, "distance": 0.15,
+        "target": _cfg(matrix_lr=0.09), "mean_direction": {"matrix_lr": 0.5}}, at_run=10)
+
+    assert region.anchor == before

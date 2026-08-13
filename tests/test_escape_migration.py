@@ -152,14 +152,31 @@ def test_a_successor_keeps_the_same_architecture(tmp_path):
         assert successor.anchor[col] == r.anchor[col]
 
 
-def test_the_last_live_region_never_migrates(tmp_path):
-    """Closing it would leave the campaign with nowhere to search."""
+def test_the_last_live_region_migrates_and_leaves_its_successor_behind(tmp_path):
+    """WAS `..._never_migrates`, on the reasoning that closing the only live
+    region would leave the campaign with nowhere to search. That reasoning was
+    wrong: migration OPENS ITS SUCCESSOR before closing the original, so there
+    is always somewhere to search afterwards. The guard ran before the
+    replacement it was worried about and could not see it.
+
+    It mattered because it made migration unreachable in the case that needs it
+    most. Under the one-GPU policy the allocator can never hold more than one
+    region (spare = n_gpus - len(regions) = 0), so the only live region is
+    always the sole one -- and a real campaign recorded 6 escapes in 6
+    proposals at coherence 0.75, pointing 0.203 away from an anchor with a 0.02
+    fence, with migration unable to act on any of it.
+    """
     a4 = _agent4(tmp_path)
     reg, (r,) = _registry(tmp_path, n=1)
     _write_escapes(tmp_path, r, [{"matrix_lr": 0.35}] * 4)
 
-    assert a4.migrate(r, reg, a4.escape_pressure(r), at_run=9) is None
-    assert r.flag != MIGRATED
+    successor = a4.migrate(r, reg, a4.escape_pressure(r), at_run=9)
+
+    assert successor is not None
+    assert r.flag == MIGRATED
+    assert r.successor_id == successor.region_id
+    # The property the old guard actually wanted, stated directly.
+    assert reg.active(), "the campaign must still have somewhere to search"
 
 
 def test_maintain_migrates_after_judging_not_before(tmp_path):

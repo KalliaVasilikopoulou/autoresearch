@@ -815,8 +815,20 @@ class Agent4LandscapeExplorer:
         history under the runs already attributed to it. A successor plus a
         pointer keeps the trail of a search walking downhill readable.
         """
-        if not [r for r in registry.active() if r.region_id != region.region_id]:
-            return None  # never leave the campaign with nowhere to search
+        # No "is another region live" guard here, deliberately. One used to
+        # sit at this line, refusing to migrate a region that was the only live
+        # one so as to "never leave the campaign with nowhere to search" -- but
+        # migration OPENS ITS SUCCESSOR two lines below, so there is always
+        # somewhere to search afterwards. The check ran before the replacement
+        # it was worried about, and so could not see it.
+        #
+        # It made migration unreachable in exactly the case that needs it most.
+        # Under the one-GPU policy the allocator can hold only one region
+        # (spare = n_gpus - len(regions) = 0, so nothing new is ever proposed),
+        # so the only live region is always the sole one, and a search that
+        # kept trying to leave was recorded doing so and then ignored --
+        # measured at 6 escapes in 6 proposals, coherence 0.75, pointing 0.203
+        # away from an anchor with a 0.02 fence.
         successor = registry.open_region(pressure["target"], at_run=at_run,
                                          origin=f"migrated_from_{region.region_id}")
         region.successor_id = successor.region_id
