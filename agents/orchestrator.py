@@ -498,8 +498,22 @@ class Orchestrator:
         # other order left four partially-explored regions idle while the
         # allocator opened brand-new ones the moment GPUs came back, which is
         # exactly the state the 32-run campaign ended in.
+        # CAPACITY pauses only, at this point. Those regions lost their slot to
+        # a busy server rather than to a judgement, so they carry runs already
+        # spent and nothing was learned against them -- they deserve the GPU
+        # ahead of a speculative new region.
+        #
+        # An EXPLOITATION pause is the opposite: a verdict that the region has
+        # stopped paying. Resuming one of those before trying to open somewhere
+        # new is a livelock, and not a hypothetical one -- with a single GPU the
+        # only live region is always the sole one, so a 60-run campaign spent
+        # every iteration pausing an exhausted region for stagnation and
+        # resuming it on the same iteration because nothing else was live. It
+        # found no improvement in any of them. Those are retried below, after
+        # proposing has had its chance.
         for _ in range(plan.assignments.count(None)):
-            resumed = self.agent4.resume_best_paused(self.registry, at_run)
+            resumed = self.agent4.resume_best_paused(self.registry, at_run,
+                                                     capacity_only=True)
             if resumed is None:
                 break
             plan.assignments[plan.assignments.index(None)] = resumed.region_id
@@ -538,6 +552,19 @@ class Orchestrator:
             print(f"[Orchestrator] Campaign cold start: opened bootstrap region "
                   f"{bootstrap.region_id} -- Agent 1's Sobol cold start runs here until "
                   f"there is enough history for Agent 4 to propose real ones")
+
+        # LAST RESORT: an exploitation-paused region, now that proposing has
+        # had its chance. Those were held back above because resuming a region
+        # judged to have stopped paying, before trying to open somewhere new,
+        # is what locked a 60-run campaign into one exhausted region. But if
+        # Agent 4 could not propose anywhere -- not enough history, or every
+        # candidate ruled out -- then continuing where there is at least a
+        # measured score beats idling the GPU.
+        for _ in range(plan.assignments.count(None)):
+            resumed = self.agent4.resume_best_paused(self.registry, at_run)
+            if resumed is None:
+                break
+            plan.assignments[plan.assignments.index(None)] = resumed.region_id
 
         live = self.registry.active()
         if None in plan.assignments:

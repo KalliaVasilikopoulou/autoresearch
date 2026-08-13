@@ -611,3 +611,43 @@ def test_a_simulated_result_never_becomes_the_campaign_best(tmp_path):
     assert guard in source, (
         "the campaign-best update must refuse synthetic statuses; without it a "
         "fabricated val_bpb becomes the record on the first iteration")
+
+
+def test_an_exhausted_region_is_not_resumed_before_proposing_a_new_one(tmp_path):
+    """THE LIVELOCK A 60-RUN CAMPAIGN SPENT ITSELF ON. A region judged to have
+    stopped paying was paused for stagnation and resumed on the same iteration
+    -- because with one GPU it was the only live region and resume ran before
+    proposing. Sixty runs, zero improvement, the same pause/resume line every
+    time.
+
+    Capacity pauses keep their priority: those regions lost a slot to a busy
+    server rather than to a judgement, and they carry runs already spent."""
+    from state.regions import CAPACITY_PAUSED, PAUSED
+
+    orch = _make_orchestrator(tmp_path)
+    exhausted = orch.registry.open_region(_hyperparams(0), at_run=0)
+    # A measured score, or it is not resumable at all and the test proves
+    # nothing about the ORDER.
+    orch.registry.assign_run(exhausted.region_id, "run_0000", 1.30)
+    exhausted.set_flag(PAUSED, at_run=1)
+
+    # capacity_only must not offer it...
+    assert orch.agent4.resume_best_paused(orch.registry, at_run=2,
+                                          capacity_only=True) is None
+    # ...but the unrestricted last-resort call still can.
+    assert orch.agent4.resume_best_paused(orch.registry, at_run=2) is not None
+
+
+def test_a_capacity_paused_region_is_still_resumed_first(tmp_path):
+    """It lost its GPU to a busy server, not to a verdict -- nothing was
+    learned against it, and it has runs already invested."""
+    from state.regions import CAPACITY_PAUSED
+
+    orch = _make_orchestrator(tmp_path)
+    r = orch.registry.open_region(_hyperparams(1), at_run=0)
+    orch.registry.assign_run(r.region_id, "run_0000", 1.30)
+    r.set_flag(CAPACITY_PAUSED, at_run=1)
+
+    resumed = orch.agent4.resume_best_paused(orch.registry, at_run=2,
+                                             capacity_only=True)
+    assert resumed is not None and resumed.region_id == r.region_id

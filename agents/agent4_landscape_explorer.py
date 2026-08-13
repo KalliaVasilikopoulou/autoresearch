@@ -880,19 +880,29 @@ class Agent4LandscapeExplorer:
         registry.save()
         return {"merges": merges, "verdicts": verdicts, "migrations": migrations}
 
-    def resume_best_paused(self, registry: RegionRegistry, at_run: int) -> Optional[Region]:
+    def resume_best_paused(self, registry: RegionRegistry, at_run: int,
+                           capacity_only: bool = False) -> Optional[Region]:
         """Bring back the most promising paused region.
 
         Called when the allocator has a GPU and nowhere better to put it --
         which is exactly the "if no better region exists, unflag and continue
         there" case. Pausing is only worth distinguishing from retirement if
         something can actually undo it.
+
+        `capacity_only` restricts this to regions that lost their slot to a busy
+        server rather than to a judgement. THE DISTINCTION IS WHAT BREAKS A
+        LIVELOCK: an exploitation pause means "this region has stopped paying",
+        and resuming it before trying to open somewhere new means the campaign
+        can never leave. Measured: 60 consecutive runs where a lone exhausted
+        region was paused for stagnation and resumed on the same iteration
+        because nothing else was live, producing no improvement at all.
         """
         # Capacity pauses first, and unconditionally: nothing was learned
         # about those regions, they simply lost a GPU, and they carry runs
         # already spent. Only when none are waiting does an exploitation pause
         # -- an actual judgement that a region stopped paying -- get revisited.
-        for flags in ((CAPACITY_PAUSED,), (PAUSED,)):
+        for flags in (((CAPACITY_PAUSED,),) if capacity_only
+                      else ((CAPACITY_PAUSED,), (PAUSED,))):
             paused = [r for r in registry.regions
                       if r.flag in flags and r.merged_into is None
                       and r.elite_score() is not None]
