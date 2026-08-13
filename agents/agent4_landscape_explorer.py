@@ -751,6 +751,21 @@ class Agent4LandscapeExplorer:
         Returns None when there is not enough history, or when the pressure is
         incoherent, or when the place it points to is inside the fence anyway.
         """
+        # A REGION MUST HAVE BEEN SEARCHED BEFORE ITS ANCHOR CAN BE CALLED
+        # WRONG. Same bar as every other verdict here -- judge() will not touch
+        # a region below min_runs_before_judgement either, and for the same
+        # reason: one run is not evidence.
+        #
+        # Without it, migration chained. Measured: r0002 migrated after ONE
+        # recorded run, its successor r0003 after one more, and r0004 was
+        # already being judged with zero. Escape pressure in a brand-new region
+        # mostly reflects the global surrogate pointing at the campaign's best
+        # area -- which every new region will do, whatever its anchor -- so the
+        # search walked from region to region in 0.07-0.10 steps and exploited
+        # none of them. That is the opposite of what a region is for.
+        if region.n_measured < self.min_runs_before_judgement:
+            return None
+
         plan_dir = Path(region.report_dir(self._search_plan_root))
         if not plan_dir.exists():
             return None

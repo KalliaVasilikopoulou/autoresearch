@@ -216,3 +216,34 @@ def test_the_successor_pointer_survives_a_reload(tmp_path):
 
     reloaded = RegionRegistry(str(tmp_path / "state" / "regions.json"))
     assert reloaded.get(r.region_id).successor_id == successor.region_id
+
+
+def test_a_barely_searched_region_is_not_declared_mis_anchored(tmp_path):
+    """MIGRATION CHAINED WITHOUT THIS. A region with one recorded run migrated,
+    its successor migrated after one more, and the next was being judged with
+    zero -- the search walked from region to region in 0.07-0.10 steps and
+    exploited none of them.
+
+    Escape pressure in a brand-new region mostly reflects the global surrogate
+    pointing at the campaign's best area, which EVERY new region will do
+    whatever its anchor. It says something about THIS anchor only once the
+    region has been searched -- the same bar judge() applies before any other
+    verdict."""
+    a4 = _agent4(tmp_path)
+    reg, _existing = _registry(tmp_path, n=1)
+    fresh = reg.open_region({**BASE, "matrix_lr": 0.12}, at_run=5)
+    reg.assign_run(fresh.region_id, "run_0099", 1.40)          # one run only
+    _write_escapes(tmp_path, fresh, [{"matrix_lr": 0.35}] * 6)  # ample, coherent
+
+    assert fresh.n_measured < a4.min_runs_before_judgement
+    assert a4.escape_pressure(fresh) is None
+
+
+def test_a_well_searched_region_still_migrates(tmp_path):
+    """The guard is a minimum, not a veto."""
+    a4 = _agent4(tmp_path)
+    reg, (r,) = _registry(tmp_path, n=1)      # _registry gives it 6 runs
+    _write_escapes(tmp_path, r, [{"matrix_lr": 0.35}] * 6)
+
+    assert r.n_measured >= a4.min_runs_before_judgement
+    assert a4.escape_pressure(r) is not None
