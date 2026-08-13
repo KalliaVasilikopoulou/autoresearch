@@ -610,6 +610,18 @@ def propose_via_ei(
             "unfenced_best_idx": unfenced_best,
             "ei_inside": float(eis[best_idx]),
             "ei_outside": float(eis[unfenced_best]),
+            # THE PREDICTED MEANS, not just the acquisition values. EI rewards
+            # uncertainty as well as promise, so a candidate far from any data
+            # scores highly for being UNKNOWN. That is right for choosing where
+            # to sample next, and wrong for deciding whether a region's anchor
+            # is in the wrong place -- the two questions differ, and answering
+            # the second with EI produced a runaway: each migration landed
+            # further from the campaign's data, where uncertainty and therefore
+            # EI were higher still, so the next escape pointed further out
+            # again. Measured step sizes 0.074 -> 0.104 -> 0.174 -> 0.206
+            # against a 0.02 fence, growing rather than converging.
+            "mean_inside": float(mus[best_idx]),
+            "mean_outside": float(mus[unfenced_best]),
             "distance": float(math.sqrt(sum(
                 (normalized_value(p, float(want[p]), bounds)
                  - normalized_value(p, float(fence_center.get(p, 0.0)), bounds)) ** 2

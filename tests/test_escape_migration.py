@@ -37,7 +37,8 @@ def _agent4(tmp_path, **cfg):
                                    root_dir=str(tmp_path))
 
 
-def _write_escapes(tmp_path, region, directions, escaped=True):
+def _write_escapes(tmp_path, region, directions, escaped=True,
+                   mean_inside=1.30, mean_gain=0.05):
     """One plan JSON per proposal, shaped exactly as search_planner writes it."""
     d = Path(tmp_path / "reports" / "agent1_search_plan" / region.region_id)
     d.mkdir(parents=True, exist_ok=True)
@@ -46,7 +47,13 @@ def _write_escapes(tmp_path, region, directions, escaped=True):
             "iteration": i,
             "escape": {"escaped": escaped, "direction": direction,
                        "distance": 0.09, "radius": 0.05,
-                       "ei_inside": 1e-4, "ei_outside": 5e-4},
+                       "ei_inside": 1e-4, "ei_outside": 5e-4,
+                       # Predicted means, not just acquisition values: the
+                       # target must be predicted BETTER (lower val_bpb), not
+                       # merely less explored. Default gap is comfortably past
+                       # sigma_region so these fixtures still migrate.
+                       "mean_inside": mean_inside,
+                       "mean_outside": mean_inside - mean_gain},
         }))
 
 
@@ -247,3 +254,48 @@ def test_a_well_searched_region_still_migrates(tmp_path):
 
     assert r.n_measured >= a4.min_runs_before_judgement
     assert a4.escape_pressure(r) is not None
+
+
+def test_pressure_toward_somewhere_merely_UNEXPLORED_is_ignored(tmp_path):
+    """THE RUNAWAY. EI mixes promise with uncertainty, so a candidate far from
+    any data scores highly simply for being unknown. Judged on EI alone,
+    migration walked outward forever: each move landed further from the
+    campaign's data, where uncertainty and EI were higher still, so the next
+    escape pointed further out again. Measured steps grew 0.074 -> 0.104 ->
+    0.174 -> 0.206 against a 0.02 fence, and four regions running were
+    abandoned at the first legal opportunity without ever being exploited.
+
+    Comparing predicted MEANS asks the question actually at issue: is somewhere
+    else better, or just less known?"""
+    a4 = _agent4(tmp_path)
+    reg, (r, _other) = _registry(tmp_path)
+    # Strongly coherent, plenty of them, and the outside is predicted no better.
+    _write_escapes(tmp_path, r, [{"matrix_lr": 0.35}] * 6, mean_gain=0.0)
+
+    assert a4.escape_pressure(r) is None
+
+
+def test_pressure_toward_somewhere_predicted_better_still_migrates(tmp_path):
+    a4 = _agent4(tmp_path)
+    reg, (r, _other) = _registry(tmp_path)
+    _write_escapes(tmp_path, r, [{"matrix_lr": 0.35}] * 6, mean_gain=0.05)
+
+    assert a4.escape_pressure(r) is not None
+
+
+def test_escape_records_without_predicted_means_are_skipped(tmp_path):
+    """Written before the means were recorded. Absent is not "good enough" --
+    the same rule the budget stamps follow."""
+    import json
+    from pathlib import Path
+
+    a4 = _agent4(tmp_path)
+    reg, (r, _other) = _registry(tmp_path)
+    d = Path(tmp_path / "reports" / "agent1_search_plan" / r.region_id)
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(6):
+        (d / f"plan_{i:04d}.json").write_text(json.dumps({
+            "escape": {"escaped": True, "direction": {"matrix_lr": 0.35},
+                       "distance": 0.09, "radius": 0.05}}))
+
+    assert a4.escape_pressure(r) is None

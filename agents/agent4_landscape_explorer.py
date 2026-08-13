@@ -780,6 +780,31 @@ class Agent4LandscapeExplorer:
         if len(escapes) < self.escape_runs_to_migrate:
             return None
 
+        # AND THE PLACE IT WANTS TO GO MUST BE PREDICTED BETTER, not merely
+        # less explored. EI mixes promise with uncertainty, so a candidate far
+        # from any data scores highly for being UNKNOWN -- correct for choosing
+        # the next sample, wrong for judging an anchor. Judged on EI alone,
+        # migration ran away: each move landed further from the campaign's
+        # data, where uncertainty and EI were higher still, so the next escape
+        # pointed further out again. Steps grew 0.074 -> 0.104 -> 0.174 ->
+        # 0.206 against a 0.02 fence, and four regions in a row were abandoned
+        # at the first legal opportunity without ever being exploited.
+        #
+        # Comparing PREDICTED MEANS asks the question actually at issue: is
+        # somewhere else genuinely better, or just less known? Older escape
+        # records carry no means and are skipped rather than assumed good.
+        improvements = [float(e["mean_inside"]) - float(e["mean_outside"])
+                        for e in escapes
+                        if isinstance(e.get("mean_inside"), (int, float))
+                        and isinstance(e.get("mean_outside"), (int, float))]
+        if len(improvements) < self.escape_runs_to_migrate:
+            return None
+        if statistics.mean(improvements) < self.sigma_region:
+            # Lower val_bpb is better, so a positive gap means the outside
+            # candidate is predicted better. One sigma_region is the smallest
+            # difference between two configurations this campaign can read.
+            return None
+
         params = sorted({p for e in escapes for p in e["direction"]})
         mean_vec = {p: sum(float(e["direction"].get(p, 0.0)) for e in escapes) / len(escapes)
                     for p in params}
