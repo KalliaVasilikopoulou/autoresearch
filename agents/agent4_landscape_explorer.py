@@ -618,6 +618,7 @@ class Agent4LandscapeExplorer:
         # smaller than we can measure, so no further spending can rank them.
         # It also explains WHY, which a run counter never does.
         a_within = self._a_within(region)
+        saturated = None
         if a_within is not None:
             saturated = region.is_saturated(a_within,
                                             min_runs=self.min_runs_before_judgement)
@@ -663,6 +664,31 @@ class Agent4LandscapeExplorer:
                   f"place to search")
 
         if stuck_for >= self.stuck_runs_pause:
+            # THE MEASUREMENT OUTRANKS THE COUNTER. `saturated is False` is a
+            # positive finding -- the differences between configurations here
+            # are still LARGER than the noise, so more runs can still rank
+            # them. That directly contradicts what a stagnation pause asserts
+            # ("this region stopped paying"), and it is the better-evidenced
+            # of the two, so the counter does not get to overrule it.
+            #
+            # Measured instance: r0008 was paused at exactly stuck_runs_pause=5
+            # with a real signal of 1.43x its own noise, while r0001 -- actually
+            # saturated at 0.98x -- ran 82 runs because the bootstrap cold-start
+            # exemption covered it. The campaign abandoned the region that still
+            # had something to find and kept the one that did not. r0008 was by
+            # then the best region in the campaign (see RegionRegistry.champion).
+            #
+            # Bounded, not disabled: stuck_runs_retire still applies above, so
+            # this buys a stuck-but-readable region 15 runs instead of 5 rather
+            # than an open-ended stay. And a region worse than the field is
+            # still retired by the check above, which is about being bad, not
+            # about being stuck.
+            if saturated is False and stuck_for < self.stuck_runs_retire:
+                print(f"[Agent 4] Region {region.region_id} has not improved in "
+                      f"{stuck_for} runs, but its real signal is still above its "
+                      f"noise floor -- keeping it rather than pausing, since the "
+                      f"differences in there are still measurable")
+                return KEEP
             # Deliberately NOT a retirement. "We haven't improved here lately"
             # and "there is nothing here" are different claims and only the
             # first is supported. The allocator pauses it and looks for

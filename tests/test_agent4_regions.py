@@ -205,6 +205,62 @@ def test_a_region_stuck_for_a_while_is_paused_not_retired(agent4, registry):
     assert r.flag == PAUSED
 
 
+def _readable_signal(agent4, monkeypatch, a_within=0.010):
+    """Pin the region-local noise so the saturation test has a real answer.
+    The fixture has no measurement report on disk, so _a_within would return
+    None and every saturation branch would be skipped."""
+    monkeypatch.setattr(agent4, "_a_within", lambda region: a_within)
+
+
+def test_a_stuck_region_is_kept_while_its_differences_are_still_measurable(
+        agent4, registry, monkeypatch):
+    """The measurement outranks the counter. `saturated is False` says the
+    spread between configurations here is LARGER than the noise, so more runs
+    can still rank them -- which directly contradicts what the stagnation
+    pause asserts.
+
+    Measured instance: r0008 was paused at exactly stuck_runs_pause=5 with a
+    real signal 1.43x its own noise, while r0001 -- saturated at 0.98x -- ran
+    82 runs under the bootstrap cold-start exemption."""
+    _readable_signal(agent4, monkeypatch)
+    r = registry.open_region(_hyperparams(0), at_run=0)
+    # best is the first; the next five do not improve on it, but they are
+    # spread far wider than the 0.010 noise floor
+    _fill(registry, r, [1.40, 1.46, 1.44, 1.47, 1.43, 1.45])
+
+    assert r.runs_since_improvement(agent4.improvement_margin) >= agent4.stuck_runs_pause
+    assert r.is_saturated(0.010) is False
+    assert agent4.judge(r, registry, at_run=10) == KEEP
+    assert r.flag == ACTIVE
+
+
+def test_a_stuck_region_is_still_paused_once_its_signal_is_gone(
+        agent4, registry, monkeypatch):
+    """The protection is conditional on the finding, not on being stuck."""
+    _readable_signal(agent4, monkeypatch)
+    r = registry.open_region(_hyperparams(0), at_run=0)
+    _fill(registry, r, [1.30] + [1.3005] * 5)  # spread far below the noise floor
+
+    assert r.is_saturated(0.010) is True
+    assert agent4.judge(r, registry, at_run=10) == PAUSED
+
+
+def test_readable_signal_buys_runs_but_does_not_buy_forever(
+        agent4, registry, monkeypatch):
+    """Bounded at stuck_runs_retire: 15 runs of no improvement instead of 5,
+    not an open-ended stay. Without a bound a lone unsaturated region would
+    hold the only GPU indefinitely, since pausing is what frees the slot for
+    Agent 4 to open somewhere new."""
+    _readable_signal(agent4, monkeypatch)
+    r = registry.open_region(_hyperparams(0), at_run=0)
+    values = [1.40] + [1.43 + 0.01 * (i % 4) for i in range(agent4.stuck_runs_retire)]
+    _fill(registry, r, values)
+
+    assert r.runs_since_improvement(agent4.improvement_margin) >= agent4.stuck_runs_retire
+    assert r.is_saturated(0.010) is False  # still readable, and still stopped
+    assert agent4.judge(r, registry, at_run=10) == PAUSED
+
+
 def test_a_region_stuck_for_a_long_time_is_retired_as_a_local_optimum(agent4, registry):
     r = registry.open_region(_hyperparams(0), at_run=0)
     _fill(registry, r, [1.30] + [1.3005] * 16)
