@@ -178,6 +178,72 @@ def test_one_bad_outlier_does_not_decide_the_ranking():
     assert good.elite_score() < 1.30
 
 
+def _seeded_region(reg, region_id, values, flag=ACTIVE):
+    """A region already carrying `values`, registered so champion() sees it."""
+    r = Region(region_id=region_id, anchor=dict(BASE), center=dict(BASE), flag=flag)
+    for v in values:
+        r.record(f"{region_id}_x", v)
+    reg.regions.append(r)
+    return r
+
+
+def test_champion_prefers_the_better_region_over_the_luckier_draw(tmp_path):
+    """The measured failure, in miniature: r0001 held the campaign record
+    1.429945 on 82 runs while r0008 was better by every robust measure on 9.
+    best-of-n grows with n, so the record tracked how often a region was
+    sampled rather than how good it was."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    # one very lucky draw among many mediocre ones
+    lucky = _seeded_region(reg, "r0001", [1.4299] + [1.50 + 0.005 * i for i in range(19)])
+    # tight and good throughout, but never sets the record
+    better = _seeded_region(reg, "r0008", (1.4325, 1.4332, 1.4342, 1.4355, 1.4395,
+                                           1.4427, 1.4480, 1.4723, 1.4797))
+
+    assert lucky.best_val_bpb < better.best_val_bpb      # the record says "lucky"
+    assert reg.champion() is better                      # the comparison does not
+
+
+def test_champion_ignores_a_region_too_small_to_judge(tmp_path):
+    """A one-run region's elite_score IS that run -- letting it win would
+    reinstate exactly the single-lucky-draw ranking champion() removes."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    established = _seeded_region(reg, "r0001",
+                                 (1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46, 1.47))
+    newborn = _seeded_region(reg, "r0002", (1.10,))  # better than anything, on one run
+
+    assert reg.champion() is established
+    assert reg.champion(min_runs=1) is newborn
+
+
+def test_champion_counts_paused_and_terminal_regions(tmp_path):
+    """A region exploited to saturation is still a result -- and is the
+    likeliest place for the best one to sit, since that is what being
+    exploited to saturation means."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    r = _seeded_region(reg, "r0001", (1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46, 1.47),
+                       flag=PAUSED)
+    assert not r.schedulable
+    assert reg.active() == []
+    assert reg.champion() is r
+
+
+def test_champion_skips_merged_regions(tmp_path):
+    """A merged region's runs now belong to its absorber; counting both would
+    rank one place twice."""
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    kept = _seeded_region(reg, "r0001", (1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46, 1.47))
+    gone = _seeded_region(reg, "r0002", (1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16, 1.17))
+    gone.merged_into = kept.region_id
+    assert reg.champion() is kept
+
+
+def test_champion_is_none_before_any_region_can_be_judged(tmp_path):
+    reg = RegionRegistry(str(tmp_path / "regions.json"))
+    assert reg.champion() is None
+    _seeded_region(reg, "r0001", (1.40,))
+    assert reg.champion() is None
+
+
 # -- registry lifecycle -----------------------------------------------------
 
 

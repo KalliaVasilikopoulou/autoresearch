@@ -580,6 +580,40 @@ class RegionRegistry:
         live = [r for r in self.regions if r.schedulable]
         return sorted(live, key=lambda r: (r.elite_score() is None, r.elite_score() or 0.0))
 
+    def champion(self, min_runs: int = MIN_RUNS_FOR_ELITE_SCORE) -> Optional[Region]:
+        """The best region in the campaign, by elite_score. None until some
+        region has enough runs to be judged.
+
+        WHY THIS EXISTS. "Campaign best" was min() over every run ever
+        recorded, and best-of-n improves with n whether or not the place is
+        any good -- so the statistic rewards whichever region happened to be
+        sampled most. Measured instance: `r0001` held the campaign record
+        1.429945 on 82 runs while `r0008` was better by every robust measure
+        on 9 (median 1.4395 vs 1.5468; only 4 of r0001's 82 runs beat r0008's
+        WORST). Resampled from each region's own spread, r0008 given 82 runs
+        beats that record with probability 1.000, and r0001 cut to 9 runs
+        holds it only 18% of the time. The record was a draw count, not a
+        finding.
+
+        Unlike active(), this looks at EVERY region including paused and
+        terminal ones: a region that has been exploited to saturation is still
+        a result, and is in fact the likeliest place for the best one to sit.
+        Merged regions are excluded because their runs now belong to whichever
+        region absorbed them, and counting both would rank one place twice.
+
+        `min_runs` is a real bar, not a formality: below MIN_RUNS_FOR_ELITE_SCORE
+        elite_score degrades to a plain median, and a region with one run would
+        otherwise win the campaign on that single lucky draw -- the exact
+        failure this method exists to remove.
+        """
+        judged = [r for r in self.regions
+                  if r.merged_into is None
+                  and r.n_measured >= min_runs
+                  and r.elite_score() is not None]
+        if not judged:
+            return None
+        return min(judged, key=lambda r: r.elite_score())
+
     def nearest(self, hyperparams: Dict[str, Any],
                 include_terminal: bool = False) -> Tuple[Optional[Region], float]:
         """The closest region to a configuration, and how far away it is.

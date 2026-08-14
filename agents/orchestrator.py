@@ -115,6 +115,9 @@ class Orchestrator:
         # from one wave to the next so a region-scoped decision sees its own
         # last result rather than the campaign's.
         self._last_val_bpb_by_region: Dict[str, float] = {}
+        #: Which region currently leads by elite_score, so a change of hands can
+        #: be announced once instead of re-printed every iteration.
+        self._champion_id: Optional[str] = None
 
         # Recover the campaign record from results.tsv. best_val_bpb starts at
         # inf and is only advanced by results this process sees, so a restart
@@ -234,8 +237,45 @@ class Orchestrator:
         if not finite:
             return
         self.agent1.best_val_bpb = min(finite)
-        print(f"[Orchestrator] Resuming: campaign best {self.agent1.best_val_bpb:.6f} "
+        print(f"[Orchestrator] Resuming: best single run {self.agent1.best_val_bpb:.6f} "
               f"recovered from {len(finite)} previous run(s)")
+        self._print_champion("[Orchestrator] Resuming")
+
+    def _print_champion(self, prefix: str) -> None:
+        """Report which region is actually winning, alongside the record run.
+
+        The record and the champion answer different questions and can point at
+        different places: the record is the luckiest single draw (and there are
+        more draws where the search has spent more runs), the champion is the
+        best region by elite_score, which is a quantile and so does not inflate
+        with sample count. Printing only the record is what let `r0001` be
+        announced as the campaign leader while `r0008` was better.
+        """
+        try:
+            champ = self.registry.champion()
+        except Exception:  # pragma: no cover - reporting must not break a run
+            return
+        if champ is None:
+            return
+        print(f"{prefix}: best REGION {champ.region_id} "
+              f"elite {champ.elite_score():.6f} over {champ.n_measured} run(s) "
+              f"(median-of-top-quartile -- this is the comparison; the single "
+              f"best run is a record, not a ranking)")
+        self._champion_id = champ.region_id
+
+    def _announce_champion_change(self) -> None:
+        """Print when the leading region changes hands, and only then."""
+        try:
+            champ = self.registry.champion()
+        except Exception:  # pragma: no cover - reporting must not break a run
+            return
+        if champ is None or champ.region_id == getattr(self, "_champion_id", None):
+            return
+        previous = getattr(self, "_champion_id", None)
+        print(f"[Orchestrator] NEW BEST REGION: {champ.region_id} "
+              f"elite {champ.elite_score():.6f} over {champ.n_measured} run(s)"
+              + (f" (was {previous})" if previous else ""))
+        self._champion_id = champ.region_id
 
     def _load_orchestrator_config(self, config_path: str) -> Dict[str, Any]:
         if yaml is None or not Path(config_path).exists():
@@ -422,7 +462,8 @@ class Orchestrator:
         print("[Orchestrator] MULTI-AGENT LOOP COMPLETE")
         print(f"Total iterations: {iteration}")
         print(f"Total run time: {_format_duration(total_elapsed)}")
-        print(f"Final best val_bpb: {self.agent1.best_val_bpb:.6f}")
+        print(f"Best single run (record): {self.agent1.best_val_bpb:.6f}")
+        self._print_champion("Campaign result")
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
         return summary
@@ -449,12 +490,32 @@ class Orchestrator:
         for this campaign means roughly never (the best has not moved in 300+
         runs). No threshold is set until a finite best exists, so a fresh
         campaign doesn't holdout-eval its opening runs against infinity.
+
+        THE BAR IS THE LOOSER OF TWO CLAIMS, both worth verifying: a run that
+        sets an all-time record, and a run that is elite-grade for the best
+        region we know (RegionRegistry.champion). Against the record alone the
+        trigger inherits best-of-n's sample-count bias -- `r0001` held 1.429945
+        on 82 runs, so `r0008`, the better region, never once cleared the bar
+        in 9 runs and the strongest result in the campaign went unverified.
+        The champion's elite_score is a quantile, so it does not drift downward
+        just because a region was sampled more.
         """
         if not self.holdout_on_new_best:
             return
-        best = self.agent1.best_val_bpb
-        if isinstance(best, (int, float)) and math.isfinite(best):
-            hyperparams["holdout_eval_if_below"] = float(best)
+        bars = [b for b in (self.agent1.best_val_bpb, self._champion_elite_score())
+                if isinstance(b, (int, float)) and math.isfinite(b)]
+        if bars:
+            hyperparams["holdout_eval_if_below"] = float(max(bars))
+
+    def _champion_elite_score(self) -> Optional[float]:
+        """The best region's elite_score, or None while no region has enough
+        runs to be judged. Never raises: this feeds reporting and the holdout
+        trigger, neither of which is worth failing a campaign over."""
+        try:
+            champ = self.registry.champion()
+        except Exception:  # pragma: no cover - reporting must not break a run
+            return None
+        return champ.elite_score() if champ is not None else None
 
     def _sequential_region(self, iteration: int):
         """The single region a one-run-at-a-time iteration belongs to, or
@@ -745,10 +806,18 @@ class Orchestrator:
         if (isinstance(result_payload.val_bpb, (int, float))
                 and result_payload.status not in SYNTHETIC_STATUSES
                 and result_payload.val_bpb < self.agent1.best_val_bpb):
-            print(f"[Orchestrator] New campaign best: {result_payload.val_bpb:.6f} "
-                  f"(was {self.agent1.best_val_bpb:.6f}, region {region_id or '-'})")
+            print(f"[Orchestrator] New record single run: {result_payload.val_bpb:.6f} "
+                  f"(was {self.agent1.best_val_bpb:.6f}, region {region_id or '-'}) "
+                  f"-- a record, not proof this region is best")
             self.agent1.best_val_bpb = result_payload.val_bpb
             self._new_best_just_set = True
+
+        # The event that actually matters for the campaign: a different region
+        # became the best one. Announced separately from the record because the
+        # two rarely coincide -- a champion changes when a whole neighbourhood
+        # is better, which is the finding; a record changes when one draw was
+        # lucky, which frequently is not.
+        self._announce_champion_change()
 
         issues = pipeline_validator.validate_training_result(train_result, hyperparams)
         if self._handle_issues(iteration, issues):
