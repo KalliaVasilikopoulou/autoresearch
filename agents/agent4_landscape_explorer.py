@@ -266,11 +266,49 @@ class Agent4LandscapeExplorer:
 
     @property
     def improvement_margin(self) -> float:
-        """What counts as a region getting genuinely better, in absolute
-        val_bpb. Passed to Region.runs_since_improvement, whose default of 0.0
-        would count pure noise as progress and never register a region as
-        stuck."""
+        """The CAMPAIGN-WIDE fallback for what counts as a region getting
+        genuinely better, in absolute val_bpb. Prefer
+        `improvement_margin_for(region)`, which scales this to the region
+        actually being judged; this property is what that falls back to when a
+        region cannot yet measure its own noise.
+
+        Passed to Region.runs_since_improvement, whose default of 0.0 would
+        count pure noise as progress and never register a region as stuck.
+        """
         return self.sigma_region * self.improvement_sigma
+
+    def improvement_margin_for(self, region: Optional[Region] = None) -> float:
+        """What counts as improvement INSIDE ONE REGION.
+
+        "Did this run get better?" means "is this step bigger than the random
+        wobble?", and the wobble is not the same everywhere -- measured on the
+        live registry: 0.0026 in r0010, 0.0052 in r0008, 0.0432 in r0001. A
+        single campaign-wide margin therefore asks a different question in
+        every region.
+
+        THE FAILURE THIS FIXES. `improvement_margin` is sigma_region = 0.010579,
+        which is B at the fence: the spread ACROSS configurations, not the noise
+        AT one. But a good region is a tight one, so the margin ends up wider
+        than the whole region. r0010's six runs spanned 0.0058 and its best step
+        was 0.0030 -- nothing it could ever produce would clear 0.0106, so no run
+        counted as progress, the counter never reset, and it paused at 6 runs
+        with the best score in the campaign. MIN_RUNS_FOR_ELITE_SCORE is 8, so it
+        was stopped before it could qualify to be ranked at all. The better and
+        tighter a region is, the faster this kills it.
+
+        Falls back to the campaign-wide margin when the region cannot support a
+        local estimate -- `_local_noise`, not `_a_within`, because _a_within
+        degrades to the campaign-wide A (0.002070), which is a different and
+        much smaller quantity than the sigma_region this replaces; silently
+        swapping one for the other everywhere would change the rule for regions
+        this is not able to measure. Same discipline as the saturation test:
+        where there is no measurement, behaviour is unchanged.
+        """
+        if region is not None:
+            local = self._local_noise(region)
+            if local is not None:
+                return local * self.improvement_sigma
+        return self.improvement_margin
 
     # -- job 1: propose regions ---------------------------------------------
 
@@ -632,7 +670,8 @@ class Agent4LandscapeExplorer:
                 })
 
         stuck_for = region.runs_since_improvement(
-            self.improvement_margin, skip_first=self._cold_start_runs(region))
+            self.improvement_margin_for(region),
+            skip_first=self._cold_start_runs(region))
 
         if stuck_for >= self.stuck_runs_retire and not alone:
             return self._retire(region, registry, LOCAL_OPTIMUM, at_run, {

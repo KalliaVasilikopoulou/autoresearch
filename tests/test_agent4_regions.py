@@ -261,6 +261,63 @@ def test_readable_signal_buys_runs_but_does_not_buy_forever(
     assert agent4.judge(r, registry, at_run=10) == PAUSED
 
 
+def _pin_local_noise(agent4, monkeypatch, value):
+    """The fixture has no results.tsv, so the real _local_noise cannot compute
+    distances between a region's runs and returns None. Pin it to a known
+    wobble so the verdict logic is what is under test."""
+    monkeypatch.setattr(agent4, "_local_noise", lambda region: value)
+
+
+def test_improvement_is_measured_against_the_region_own_wobble(
+        agent4, registry, monkeypatch):
+    """A good region is a TIGHT one, so a campaign-wide margin ends up wider
+    than the whole region and nothing in it can ever count as progress.
+
+    Measured instance: r0010's six runs spanned 0.0058 with a best step of
+    0.0030, against a campaign margin of 0.010579. No run counted, the counter
+    never reset, and it paused at 6 runs holding the best score in the
+    campaign -- two short of MIN_RUNS_FOR_ELITE_SCORE, so it was stopped before
+    it could qualify to be ranked."""
+    _pin_local_noise(agent4, monkeypatch, 0.0008)
+    r = registry.open_region(_hyperparams(0), at_run=0)
+    # Steps of ~0.0012, each bigger than this region's wobble (0.0008). The
+    # running best only advances on an improvement, so against the campaign
+    # margin (0.0028) the best stays at 1.4324 and nothing ever clears
+    # 1.4296 -- the descent is real but invisible at that scale.
+    _fill(registry, r, [1.4324, 1.4310, 1.4298, 1.4300, 1.4305, 1.4310])
+
+    campaign = agent4.improvement_margin
+    own = agent4.improvement_margin_for(r)
+    assert own < campaign
+
+    assert r.runs_since_improvement(campaign) >= agent4.stuck_runs_pause
+    assert r.runs_since_improvement(own) < agent4.stuck_runs_pause
+    assert agent4.judge(r, registry, at_run=10) == KEEP
+    assert r.flag == ACTIVE
+
+
+def test_the_margin_falls_back_to_the_campaign_wide_one(agent4, registry):
+    """Where a region cannot measure its own noise, behaviour is unchanged.
+    Same discipline as the saturation test: no measurement, no new rule."""
+    empty = registry.open_region(_hyperparams(0), at_run=0)
+    assert agent4._local_noise(empty) is None
+    assert agent4.improvement_margin_for(empty) == agent4.improvement_margin
+    assert agent4.improvement_margin_for(None) == agent4.improvement_margin
+
+
+def test_a_local_margin_does_not_keep_an_exhausted_region_alive(
+        agent4, registry, monkeypatch):
+    """The point is a FAIR bar, not a lower one. A region whose runs are flat
+    still registers as stuck against its own wobble -- otherwise this would
+    just be a slower way of never stopping."""
+    _pin_local_noise(agent4, monkeypatch, 0.0008)
+    r = registry.open_region(_hyperparams(0), at_run=0)
+    _fill(registry, r, [1.30] + [1.3005] * 6)
+
+    assert r.runs_since_improvement(agent4.improvement_margin_for(r)) >= agent4.stuck_runs_pause
+    assert agent4.judge(r, registry, at_run=10) == PAUSED
+
+
 def test_a_region_stuck_for_a_long_time_is_retired_as_a_local_optimum(agent4, registry):
     r = registry.open_region(_hyperparams(0), at_run=0)
     _fill(registry, r, [1.30] + [1.3005] * 16)
