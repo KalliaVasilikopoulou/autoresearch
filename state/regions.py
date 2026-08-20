@@ -97,6 +97,12 @@ SATURATED = "saturated"
 #: all along").
 MIGRATED = "migrated"
 MERGED = "merged"
+#: This region's score is inside the smallest difference a single-seed
+#: comparison can support, measured from the champion. NOT a claim that it is
+#: worse, and NOT terminal -- it says the two cannot be told apart at this
+#: budget, so further runs here buy coin flips. Set aside, and revived once
+#: nothing else is left to search. See Agent 4's tie rule.
+TIED_FOR_BEST = "tied_for_best"
 
 #: Flags that still consume GPU budget. PAUSED regions are kept for a later
 #: cycle but are not scheduled; the three terminal flags never are.

@@ -95,6 +95,29 @@ def _seed_sigma(seed_variance_path: str) -> Optional[float]:
     return stds[mid] if len(stds) % 2 else (stds[mid - 1] + stds[mid]) / 2
 
 
+def measured_resolvable_gap(state_dir: str) -> Optional[float]:
+    """The smallest val_bpb difference a SINGLE-seed comparison can actually
+    support, from scripts/seed_variance.py. 0.0093 at TOKEN_BUDGET=4.19M.
+
+    Below this, "A is better than B" is a coin flip however many DIFFERENT
+    configurations are run: extra runs buy coverage, not precision, and only
+    repeating the SAME configuration shrinks the wobble (and slowly -- 4x the
+    runs to halve it). Measured gaps between the campaign's top regions were
+    0.0027 and 0.0065 against this 0.0093, so the ranking printed between them
+    was partly noise.
+
+    None when nothing has been measured at the budget in force -- a rule that
+    stops work must never fire on a guessed or stale constant.
+    """
+    from prepare import TOKEN_BUDGET
+
+    report = report_at_budget(Path(state_dir) / SEED_VARIANCE_FILENAME, TOKEN_BUDGET)
+    if not report:
+        return None
+    gap = (report.get("resolvable_gap_at_k_seeds") or {}).get("1")
+    return float(gap) if isinstance(gap, (int, float)) and gap > 0 else None
+
+
 def measured_a_within(state_dir: str) -> Optional[float]:
     """The in-region noise, ONLY if it has actually been measured.
 

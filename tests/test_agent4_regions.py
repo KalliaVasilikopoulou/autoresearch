@@ -25,7 +25,9 @@ from agents.agent4_landscape_explorer import (
     Agent4LandscapeExplorer,
 )
 from state.landscape import LANDSCAPE_DEPS_AVAILABLE
-from state.regions import ACTIVE, LOCAL_OPTIMUM, NO_OPTIMUM, PAUSED, RegionRegistry
+from state.regions import (
+    ACTIVE, LOCAL_OPTIMUM, NO_OPTIMUM, PAUSED, TIED_FOR_BEST, RegionRegistry,
+)
 
 requires_deps = pytest.mark.skipif(
     not LANDSCAPE_DEPS_AVAILABLE, reason="scikit-learn not installed"
@@ -393,6 +395,123 @@ def test_the_resume_budget_survives_a_restart(tmp_path, agent4):
     agent4.reclaim_better_paused(reg, at_run=50)
 
     assert RegionRegistry(path).resumes_used("r0010") == 1
+
+
+def _champion(registry, values=(1.40,) * 8):
+    """A rankable region for the screen to measure against."""
+    return _paused_active(registry, "r0001", values)
+
+
+def _paused_active(registry, region_id, values):
+    from state.regions import Region
+    r = Region(region_id=region_id, anchor=dict(_hyperparams(0)),
+               center=dict(_hyperparams(0)), flag=ACTIVE)
+    for v in values:
+        r.record(f"{region_id}_x", v)
+    registry.regions.append(r)
+    return r
+
+
+def test_a_hopeless_opening_run_is_rejected_immediately(agent4, registry):
+    """20 of 74 runs went to regions whose FIRST run already said no: r0007
+    opened at 1.6027, r0012 at 1.6002, r0013 at 1.5632, r0016 at 1.4961, all
+    against a champion elite of ~1.4325."""
+    champ = _champion(registry)
+    newborn = _paused_active(registry, "r0009", [1.60])
+
+    bar = champ.elite_score() + agent4.reject_margin_sigma * agent4.sigma_region
+    assert newborn.val_bpbs[0] > bar
+    assert agent4.judge(newborn, registry, at_run=10) == NO_OPTIMUM
+    assert newborn.flag == NO_OPTIMUM
+
+
+def test_a_merely_mediocre_opening_run_survives(agent4, registry):
+    """THE INVERSION THAT MATTERS. r0008 opened 4th-best of ten (1.4580) and
+    finished 2nd-best (1.4325). "Discard the worst" would have thrown it away;
+    the margin is wide precisely so it does not."""
+    champ = _champion(registry)
+    bar = champ.elite_score() + agent4.reject_margin_sigma * agent4.sigma_region
+    survivor = _paused_active(registry, "r0009", [bar - 0.0005])
+
+    assert agent4.judge(survivor, registry, at_run=10) == KEEP
+    assert survivor.flag == ACTIVE
+
+
+def test_the_screen_needs_a_champion_to_measure_against(agent4, registry):
+    """No ranked region yet means no bar, and a rule that throws work away must
+    not fire on a guess."""
+    newborn = _paused_active(registry, "r0009", [1.90])
+    assert registry.champion() is None
+    assert agent4.judge(newborn, registry, at_run=10) == KEEP
+
+
+def test_the_screen_never_rejects_the_champion_itself(agent4, registry):
+    champ = _champion(registry)
+    assert agent4._reject_on_first_run(champ, registry, at_run=10) is None
+
+
+def test_a_region_inside_the_resolvable_gap_is_marked_tied(agent4, registry, monkeypatch):
+    """The top three regions sat 0.0027 and 0.0065 apart against a 0.0093
+    resolvable gap -- the order printed between them was partly a coin flip,
+    and settling r0017 vs r0010 would have cost ~12 repeats of EACH."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    _champion(registry, values=(1.40,) * 8)
+    rival = _paused_active(registry, "r0002", (1.4050,) * 8)  # 0.005 away
+
+    assert agent4.judge(rival, registry, at_run=20) == TIED_FOR_BEST
+    assert rival.flag == TIED_FOR_BEST
+    assert not rival.schedulable
+
+
+def test_a_separable_region_is_not_marked_tied(agent4, registry, monkeypatch):
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    _champion(registry, values=(1.40,) * 8)
+    far = _paused_active(registry, "r0002", (1.50,) * 8)  # 0.10 away
+
+    assert agent4.judge(far, registry, at_run=20) != TIED_FOR_BEST
+
+
+def test_nothing_is_tied_before_it_can_be_ranked(agent4, registry, monkeypatch):
+    """Below MIN_RUNS_FOR_ELITE_SCORE the score is one lucky draw, and 'we
+    cannot tell these apart' would then be a statement about sample size."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    _champion(registry, values=(1.40,) * 8)
+    young = _paused_active(registry, "r0002", (1.4050,) * 5)
+
+    assert agent4.judge(young, registry, at_run=20) != TIED_FOR_BEST
+
+
+def test_the_tie_rule_does_not_fire_on_an_unmeasured_gap(agent4, registry, monkeypatch):
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: None)
+    _champion(registry, values=(1.40,) * 8)
+    rival = _paused_active(registry, "r0002", (1.4050,) * 8)
+    assert agent4.judge(rival, registry, at_run=20) != TIED_FOR_BEST
+
+
+def test_a_tied_region_is_revived_when_nothing_else_is_left(agent4, registry, monkeypatch):
+    """Set aside, not discarded. Once there is nowhere else to look, breaking
+    the tie is the best remaining use of a run."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    a = _paused_active(registry, "r0002", (1.4050,) * 8)
+    b = _paused_active(registry, "r0003", (1.4020,) * 8)
+    for r in (a, b):
+        r.set_flag(TIED_FOR_BEST, at_run=20)
+
+    revived = agent4.revive_tied(registry, at_run=30)
+    assert revived is b            # the better of the two
+    assert revived.flag == ACTIVE
+    assert registry.resumes_used("r0003") == 1
+
+
+def test_reviving_a_tie_is_bounded(agent4, registry):
+    """Same budget as reclaim_better_paused, for the same reason: a region
+    re-tied immediately must cost iterations, not a livelock."""
+    r = _paused_active(registry, "r0002", (1.4050,) * 8)
+    for i in range(agent4.max_resumes):
+        r.set_flag(TIED_FOR_BEST, at_run=20 + i)
+        assert agent4.revive_tied(registry, at_run=30 + i) is r
+    r.set_flag(TIED_FOR_BEST, at_run=99)
+    assert agent4.revive_tied(registry, at_run=100) is None
 
 
 def test_a_region_stuck_for_a_long_time_is_retired_as_a_local_optimum(agent4, registry):

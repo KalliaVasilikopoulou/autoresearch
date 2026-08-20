@@ -636,6 +636,11 @@ class Orchestrator:
         for _ in range(plan.assignments.count(None)):
             resumed = self.agent4.resume_best_paused(self.registry, at_run)
             if resumed is None:
+                # Everything left is tied-for-best: nothing can be ranked
+                # against the champion at this budget. Breaking one of those
+                # ties is now the most useful thing a run can do.
+                resumed = self.agent4.revive_tied(self.registry, at_run)
+            if resumed is None:
                 break
             plan.assignments[plan.assignments.index(None)] = resumed.region_id
 

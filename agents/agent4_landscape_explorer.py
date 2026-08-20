@@ -69,7 +69,9 @@ from state.regions import (
     MIGRATED,
     NO_OPTIMUM,
     PAUSED,
+    MIN_RUNS_FOR_ELITE_SCORE,
     SATURATED,
+    TIED_FOR_BEST,
     Region,
     RegionRegistry,
     distance,
@@ -141,6 +143,15 @@ class Agent4LandscapeExplorer:
         #: pause. Bounded because unbounded resuming is what livelocked a
         #: 60-run campaign; see reclaim_better_paused.
         self.max_resumes = int(cfg.get("max_resumes", 2))
+        #: How far past the champion a region's FIRST run may land before it is
+        #: rejected outright, in multiples of sigma_region. Deliberately wide:
+        #: across 10 regions, first-run rank vs final-elite rank correlated at
+        #: Spearman 0.952 -- but with one inversion that matters, r0008 opening
+        #: 4th-best (1.4580) and finishing 2nd-best (1.4325). So "discard the
+        #: worst" throws away good regions and "discard the clearly terrible"
+        #: does not. At 5 sigma the screen kills r0007/r0012/r0013/r0016 --
+        #: 20 of 74 runs -- and loses nothing good.
+        self.reject_margin_sigma = float(cfg.get("reject_margin_sigma", 5.0))
         # A region still working through Agent 1's Sobol cold start is exempt
         # from the stuck rules -- see judge(). Read from agent1's block
         # because it is agent1's cold start; duplicating the number under
@@ -625,6 +636,19 @@ class Agent4LandscapeExplorer:
         statement than "this looks worse than its neighbours", and a region
         that qualifies for both deserves the stronger label.
         """
+        # THE ONE-RUN SCREEN, checked before the minimum-evidence gate because
+        # rejecting is the only verdict a single run can support. Deliberately
+        # asymmetric: one run can say "this is hopeless" long before it can say
+        # "this is good", so nothing here KEEPs or promotes a region.
+        #
+        # No `alone` guard, deliberately. Under one GPU the live region is
+        # always the sole one, so requiring company would disable the screen
+        # exactly where it pays. Rejecting the last region is safe: the
+        # allocator opens a new one in the same wave.
+        early = self._reject_on_first_run(region, registry, at_run)
+        if early is not None:
+            return early
+
         if region.n_measured < self.min_runs_before_judgement:
             return KEEP
 
@@ -643,6 +667,23 @@ class Agent4LandscapeExplorer:
         # its flag every wave while doing exactly what it was supposed to.
         if self._still_cold_starting(region):
             return KEEP
+
+        # TIED FOR BEST -- before every "is it finished" rule, because it is a
+        # statement about MEASURABILITY rather than exhaustion, and that is the
+        # stronger claim. A region whose elite sits within the smallest gap one
+        # seed can resolve cannot be ranked against the champion however long
+        # it runs: more runs of DIFFERENT configurations buy coverage, not
+        # precision. Measured -- the top three regions sat 0.0027 and 0.0065
+        # apart against a resolvable gap of 0.0093, so the order printed
+        # between them was partly a coin flip, and settling r0017 vs r0010
+        # would have cost about 12 repeats of EACH configuration.
+        #
+        # Not terminal: revive_tied brings these back once nothing else is left
+        # to search, which is when breaking the tie becomes the best use of a
+        # run.
+        tied = self._tied_for_best(region, registry, at_run)
+        if tied is not None:
+            return tied
 
         # Count "stuck" only over runs this region CHOSE, never over its
         # cold-start draws. Sobol points are space-filling, so the best of
@@ -786,6 +827,101 @@ class Agent4LandscapeExplorer:
         if not rivals:
             return None
         return mine - min(rivals)
+
+    def _resolvable_gap(self):
+        """The smallest val_bpb difference one seed can support, or None when
+        it has not been measured at the budget in force."""
+        from agents.search_planner import measured_resolvable_gap
+
+        return measured_resolvable_gap(str(self.registry_path.parent))
+
+    def _reject_on_first_run(self, region: Region, registry: RegionRegistry,
+                             at_run: int) -> Optional[str]:
+        """Kill a brand-new region whose opening run is hopeless. None means
+        this rule has nothing to say about it."""
+        if region.n_measured != 1 or self.reject_margin_sigma <= 0:
+            return None
+        # NEVER screen the bootstrap region. Its opening run is a Sobol draw --
+        # a space-filling sample, not a descent -- so it says nothing about
+        # whether the area is good, and it is the only region the campaign has.
+        # In practice no champion exists that early so this cannot fire, but a
+        # rule that throws work away should refuse explicitly rather than by
+        # accident.
+        if self._still_cold_starting(region):
+            return None
+        champion = registry.champion()
+        if champion is None or champion.elite_score() is None:
+            return None
+        if region.region_id == champion.region_id:
+            return None
+        first = region.val_bpbs[0]
+        bar = champion.elite_score() + self.reject_margin_sigma * self.sigma_region
+        if first <= bar:
+            return None
+        return self._retire(region, registry, NO_OPTIMUM, at_run, {
+            "first_run": first,
+            "bar": bar,
+            "champion_elite": champion.elite_score(),
+            "reject_margin_sigma": self.reject_margin_sigma,
+            "sigma_region": self.sigma_region,
+            "screened_on": 1,
+        })
+
+    def _tied_for_best(self, region: Region, registry: RegionRegistry,
+                       at_run: int) -> Optional[str]:
+        """Set a region aside when it cannot be told apart from the champion.
+
+        None when the gap has not been measured, when the region is not
+        rankable yet, or when it is genuinely separable.
+        """
+        gap = self._resolvable_gap()
+        if gap is None:
+            return None
+        if region.n_measured < MIN_RUNS_FOR_ELITE_SCORE:
+            return None
+        mine = region.elite_score()
+        champion = registry.champion()
+        if mine is None or champion is None or champion.elite_score() is None:
+            return None
+        difference = abs(mine - champion.elite_score())
+        if difference > gap:
+            return None
+        return self._retire(region, registry, TIED_FOR_BEST, at_run, {
+            "elite_score": mine,
+            "champion": champion.region_id,
+            "champion_elite": champion.elite_score(),
+            "resolvable_gap": gap,
+            "difference": difference,
+            "n_measured": region.n_measured,
+        })
+
+    def revive_tied(self, registry: RegionRegistry, at_run: int) -> Optional[Region]:
+        """Bring back a tied-for-best region once there is nothing else to
+        search -- at that point breaking the tie is the best remaining use of
+        the budget.
+
+        Bounded by the same per-region resume budget as reclaim_better_paused,
+        so a region marked tied again immediately costs a couple of iterations
+        rather than a livelock.
+        """
+        candidates = [r for r in registry.regions
+                      if r.flag == TIED_FOR_BEST and r.merged_into is None
+                      and r.elite_score() is not None
+                      and registry.resumes_used(r.region_id) < self.max_resumes]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda r: r.elite_score())
+        best.set_flag(ACTIVE, at_run)
+        registry.note_resume(best.region_id)
+        registry.save()
+        print(f"[Agent 4] Revived tied-for-best region {best.region_id} "
+              f"(elite {best.elite_score():.4f}) -- nothing else left to search, "
+              f"so breaking the tie is now the best use of a run")
+        self._record_decision(at_run, "revived_tied", {
+            "region_id": best.region_id, "elite_score": best.elite_score(),
+            "resumes_used": registry.resumes_used(best.region_id),
+        }, region_id=best.region_id)
+        return best
 
     def _retire(self, region: Region, registry: RegionRegistry, flag: str,
                 at_run: int, detail: Dict[str, Any]) -> str:
