@@ -1,0 +1,20 @@
+{
+  "token_budget": 4194304,
+  "sigma": 0.0032154779582512986,
+  "sigma_source": "seed_variance.json (sigma_seed, this budget)",
+  "real_step": 0.006430955916502597,
+  "n_points": 1,
+  "points": [
+    {
+      "label": "L15",
+      "n_layer": 15,
+      "n_embd": 828,
+      "n_head": 6,
+      "params": 123405120,
+      "param_drift": 0.0,
+      "aspect": 55.2,
+      "val_bpb": 1.424814
+    }
+  ],
+  "verdict": "NOT ENOUGH DATA -- need at least 3 rungs measured."
+}

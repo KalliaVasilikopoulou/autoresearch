@@ -86,6 +86,7 @@ import yaml
 
 from state import surrogate
 from state.results_analysis import (
+    at_current_budget,
     ARCHITECTURE_COLUMNS,
     HYPERPARAM_COLUMNS,
     TUNABLE_COLUMNS,
@@ -143,7 +144,16 @@ def pick_anchor(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     The frontier is the only place the answer is actionable: a hill measured in
     a bad part of the space describes a neighbourhood the search never visits.
+
+    ONLY runs at the budget in force. Without that filter this picked the
+    global best over every row ever written, which is run_0000 at 1.24854 --
+    a 12.5M-token run, unbeatable at 4.19M for a reason that has nothing to do
+    with architecture. It anchored the sweep on a 232M-parameter shape instead
+    of the actual 123M frontier, and at 232M the n_embd ceiling leaves almost
+    no room to vary shape at all. Same failure as everywhere else in this
+    codebase: a measurement is not portable across token budgets.
     """
+    rows = at_current_budget(rows)
     usable = [r for r in rows
               if r.get("status") in OK_STATUSES
               and isinstance(r.get("val_bpb"), (int, float)) and math.isfinite(r["val_bpb"])
