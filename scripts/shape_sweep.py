@@ -46,6 +46,7 @@ from scripts.size_sweep import (
     OK_STATUSES,
     REAL_STEP_SIGMA,
     SEED,
+    _hyperparams_for,
     _same_config,
     _search_space,
     architecture_noise,
@@ -57,6 +58,7 @@ from scripts.size_sweep import (
 )
 from state import surrogate
 from state.results_analysis import load_results
+from state.results_logger import log_result
 
 RUN_ID_PREFIX = "shape"
 DEFAULT_RESULTS_PATH = "state/shape_sweep.tsv"
@@ -132,11 +134,25 @@ def import_existing(rungs: List[Dict[str, Any]], results_path: str,
         hp = dict(rung["hyperparams"])
         hp["seed"] = SEED
         for row in history:
-            if row.get("status") in OK_STATUSES and _same_config(row, hp):
-                rung["imported_from"] = row.get("run_id")
-                rung["val_bpb"] = float(row["val_bpb"])
-                imported += 1
-                break
+            if row.get("status") not in OK_STATUSES or not _same_config(row, hp):
+                continue
+            val = row.get("val_bpb")
+            if not isinstance(val, (int, float)) or not math.isfinite(val):
+                continue
+            # WRITE THE ROW, do not just remember it. run_all skips a rung only
+            # when its run_id is already in the results FILE (already_done), so
+            # an import held in memory is decorative and the rung gets trained
+            # anyway -- which is exactly what happened the first time this ran.
+            metrics = {k: row.get(k) for k in
+                       ("val_bpb", "training_time", "peak_vram_mb", "mfu_percent",
+                        "num_params_M", "num_steps", "budget_shortfall_pct")}
+            metrics["status"] = "remote_ok"
+            print(f"[shape_sweep] {run_id}: reusing {row.get('run_id')} "
+                  f"(val_bpb={val:.6f}) -- identical config, seed and budget.")
+            log_result(run_id, _hyperparams_for(rung), metrics, results_path=results_path)
+            have.add(run_id)
+            imported += 1
+            break
     return imported
 
 
