@@ -318,6 +318,83 @@ def test_a_local_margin_does_not_keep_an_exhausted_region_alive(
     assert agent4.judge(r, registry, at_run=10) == PAUSED
 
 
+def _paused(registry, region_id, values):
+    from state.regions import Region, PAUSED as _P
+    r = Region(region_id=region_id, anchor=dict(_hyperparams(0)),
+               center=dict(_hyperparams(0)), flag=_P)
+    for v in values:
+        r.record(f"{region_id}_x", v)
+    registry.regions.append(r)
+    return r
+
+
+def test_a_paused_region_better_than_a_typical_new_one_is_reclaimed(agent4, registry):
+    """Campaign 11, measured: r0010 sat at elite 1.428681 -- the best ground in
+    the campaign -- paused and unrankable on 6 runs, while 30 runs opened four
+    NEW regions scoring 1.4479, 1.4815, 1.4811 and 1.5548. The search had the
+    answer and spent the budget re-finding it."""
+    _paused(registry, "r0010", [1.4287] * 8)          # the good one
+    _paused(registry, "r0015", [1.4815] * 8)          # typical
+    _paused(registry, "r0013", [1.5548] * 8)          # bad
+
+    typical = registry.typical_new_region_elite()
+    assert typical == pytest.approx(1.4815)           # median of the three
+
+    got = agent4.reclaim_better_paused(registry, at_run=50)
+    assert got is not None and got.region_id == "r0010"
+    assert got.flag == ACTIVE
+    assert registry.resumes_used("r0010") == 1
+
+
+def test_a_paused_region_no_better_than_average_is_left_alone(agent4, registry):
+    """Otherwise this just reinstates 'always go back', which is the behaviour
+    that livelocked 60 runs."""
+    _paused(registry, "r0013", [1.5548] * 8)
+    _paused(registry, "r0015", [1.4815] * 8)
+    _paused(registry, "r0014", [1.4479] * 8)
+    # the median IS one of them, so only something better than the median wins
+    assert agent4.reclaim_better_paused(registry, at_run=50).region_id == "r0014"
+    # r0014 is now active; of what is left, nothing beats the median
+    assert agent4.reclaim_better_paused(registry, at_run=51) is None
+
+
+def test_the_resume_budget_is_what_keeps_the_livelock_dead(agent4, registry):
+    """A region that pauses again immediately costs at most max_resumes extra
+    iterations, not sixty."""
+    from state.regions import PAUSED as _P
+    good = _paused(registry, "r0010", [1.4287] * 8)
+    _paused(registry, "r0015", [1.4815] * 8)
+    _paused(registry, "r0013", [1.5548] * 8)
+
+    for i in range(agent4.max_resumes):
+        got = agent4.reclaim_better_paused(registry, at_run=50 + i)
+        assert got is good, f"resume {i} should have been allowed"
+        good.set_flag(_P, at_run=50 + i)   # it pauses again immediately
+
+    assert registry.resumes_used("r0010") == agent4.max_resumes
+    assert agent4.reclaim_better_paused(registry, at_run=99) is None
+    assert good.flag == _P
+
+
+def test_nothing_is_reclaimed_before_any_region_can_be_judged(agent4, registry):
+    _paused(registry, "r0010", [1.20])   # below MIN_RUNS_FOR_ELITE_SCORE
+    assert registry.typical_new_region_elite() is None
+    assert agent4.reclaim_better_paused(registry, at_run=50) is None
+
+
+def test_the_resume_budget_survives_a_restart(tmp_path, agent4):
+    """Persisted, or a campaign that restarts mid-livelock silently starts the
+    count over -- the same reasoning as overlap_streaks."""
+    path = str(tmp_path / "state" / "regions.json")
+    reg = RegionRegistry(path)
+    _paused(reg, "r0010", [1.4287] * 8)
+    _paused(reg, "r0015", [1.4815] * 8)
+    _paused(reg, "r0013", [1.5548] * 8)
+    agent4.reclaim_better_paused(reg, at_run=50)
+
+    assert RegionRegistry(path).resumes_used("r0010") == 1
+
+
 def test_a_region_stuck_for_a_long_time_is_retired_as_a_local_optimum(agent4, registry):
     r = registry.open_region(_hyperparams(0), at_run=0)
     _fill(registry, r, [1.30] + [1.3005] * 16)

@@ -524,6 +524,12 @@ class RegionRegistry:
         #: a campaign restarting mid-streak should not silently start the count
         #: over and delay a merge that was already all but decided.
         self._overlap_streaks: Dict[str, int] = {}
+        #: region_id -> how many times an EXPLOITATION pause has been undone.
+        #: Persisted and bounded, because "resume the best paused region" is
+        #: what produced a 60-run livelock once already (see c0f210f): a lone
+        #: exhausted region paused and resumed on the same iteration, forever.
+        #: A budget makes coming back possible without making it repeatable.
+        self._resume_counts: Dict[str, int] = {}
         self.load()
 
     @property
@@ -551,6 +557,10 @@ class RegionRegistry:
         self._overlap_streaks = {
             str(k): int(v) for k, v in streaks.items() if isinstance(v, (int, float))
         } if isinstance(streaks, dict) else {}
+        resumes = raw.get("resume_counts", {})
+        self._resume_counts = {
+            str(k): int(v) for k, v in resumes.items() if isinstance(v, (int, float))
+        } if isinstance(resumes, dict) else {}
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -558,6 +568,7 @@ class RegionRegistry:
             "next_id": self._next_id,
             "regions": [r.to_dict() for r in self.regions],
             "overlap_streaks": dict(self._overlap_streaks),
+            "resume_counts": dict(self._resume_counts),
         }
         self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -613,6 +624,34 @@ class RegionRegistry:
         if not judged:
             return None
         return min(judged, key=lambda r: r.elite_score())
+
+    def resumes_used(self, region_id: str) -> int:
+        """How many times this region has been brought back from an
+        exploitation pause."""
+        return int(self._resume_counts.get(region_id, 0))
+
+    def note_resume(self, region_id: str) -> None:
+        self._resume_counts[region_id] = self.resumes_used(region_id) + 1
+
+    def typical_new_region_elite(self, min_runs: int = MIN_RUNS_FOR_ELITE_SCORE
+                                 ) -> Optional[float]:
+        """The MEDIAN elite_score across every region judged so far -- what a
+        freshly-opened region is worth, on this campaign's own evidence.
+
+        This is the number a paused region has to beat to be worth resuming
+        instead of opening somewhere new. Using measured history rather than a
+        constant is the point: "is going back better than starting over" is a
+        question about this landscape, and the answer moves as the campaign
+        learns. Deliberately the median and not the best -- the comparison is
+        against a TYPICAL new region, since that is what opening one actually
+        buys, not against the luckiest one ever opened.
+        """
+        scores = [r.elite_score() for r in self.regions
+                  if r.merged_into is None and r.n_measured >= min_runs
+                  and r.elite_score() is not None]
+        if not scores:
+            return None
+        return statistics.median(scores)
 
     def nearest(self, hyperparams: Dict[str, Any],
                 include_terminal: bool = False) -> Tuple[Optional[Region], float]:

@@ -137,6 +137,10 @@ class Agent4LandscapeExplorer:
         self.min_runs_before_judgement = int(cfg.get("min_runs_before_judgement", 5))
         self.stuck_runs_pause = int(cfg.get("stuck_runs_pause", 5))
         self.stuck_runs_retire = int(cfg.get("stuck_runs_retire", 15))
+        #: How many times one region may be brought back from an exploitation
+        #: pause. Bounded because unbounded resuming is what livelocked a
+        #: 60-run campaign; see reclaim_better_paused.
+        self.max_resumes = int(cfg.get("max_resumes", 2))
         # A region still working through Agent 1's Sobol cold start is exempt
         # from the stuck rules -- see judge(). Read from agent1's block
         # because it is agent1's cold start; duplicating the number under
@@ -984,6 +988,60 @@ class Agent4LandscapeExplorer:
 
         registry.save()
         return {"merges": merges, "verdicts": verdicts, "migrations": migrations}
+
+    def reclaim_better_paused(self, registry: RegionRegistry, at_run: int
+                              ) -> Optional[Region]:
+        """Go back to a paused region that is BETTER than what opening a new
+        one typically buys. Returns it, or None to open somewhere new.
+
+        THE MEASURED FAILURE. `resume_best_paused` only fires as a last resort,
+        AFTER propose_regions has already filled the slot -- deliberately, since
+        resuming first caused a 60-run livelock (c0f210f). But "never resume
+        first" is a different failure from the one that fixed. Campaign 11:
+        `r0010` sat at elite 1.428681, the best ground in the campaign, paused
+        and unrankable on 6 runs, while 30 runs opened four NEW regions that
+        scored 1.4479, 1.4815, 1.4811 and 1.5548. The first 20 runs never got
+        below 1.44. The search had the answer and spent the budget re-finding
+        it.
+
+        THE TEST is against measured history, not a constant: resume only if
+        the candidate beats the MEDIAN elite of every region judged so far --
+        what a typical new region is actually worth on this landscape. That
+        number moves as the campaign learns, which is the point.
+
+        THE BOUND is what keeps the livelock dead. A region carries a resume
+        budget (`max_resumes`); once spent, it stays paused however good it
+        looks. So a region that pauses again immediately costs at most that
+        many extra iterations, not sixty.
+        """
+        typical = registry.typical_new_region_elite()
+        if typical is None:
+            return None
+        candidates = [
+            r for r in registry.regions
+            if r.flag == PAUSED and r.merged_into is None
+            and r.elite_score() is not None
+            and r.elite_score() < typical
+            and registry.resumes_used(r.region_id) < self.max_resumes
+        ]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda r: r.elite_score())
+        best.set_flag(ACTIVE, at_run)
+        registry.note_resume(best.region_id)
+        registry.save()
+        print(f"[Agent 4] Reclaimed paused region {best.region_id} "
+              f"(elite {best.elite_score():.4f}) instead of opening a new one -- "
+              f"a typical new region scores {typical:.4f} "
+              f"(resume {registry.resumes_used(best.region_id)}/{self.max_resumes})")
+        self._record_decision(at_run, "reclaimed", {
+            "region_id": best.region_id, "elite_score": best.elite_score(),
+            "typical_new_region_elite": typical,
+            "n_runs": best.n_runs,
+            "resumes_used": registry.resumes_used(best.region_id),
+            "max_resumes": self.max_resumes,
+        }, region_id=best.region_id)
+        return best
 
     def resume_best_paused(self, registry: RegionRegistry, at_run: int,
                            capacity_only: bool = False) -> Optional[Region]:

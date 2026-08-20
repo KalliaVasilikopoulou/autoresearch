@@ -579,6 +579,18 @@ class Orchestrator:
                 break
             plan.assignments[plan.assignments.index(None)] = resumed.region_id
 
+        # BEFORE opening anywhere new: is a region we already paused better
+        # than what a new one typically buys? Campaign 11 spent 30 runs opening
+        # four new regions while r0010 sat paused holding the best ground in
+        # the campaign. Bounded by a per-region resume budget, so this cannot
+        # revive the pause/resume livelock that put the last-resort resume
+        # below propose_regions in the first place.
+        while None in plan.assignments:
+            reclaimed = self.agent4.reclaim_better_paused(self.registry, at_run)
+            if reclaimed is None:
+                break
+            plan.assignments[plan.assignments.index(None)] = reclaimed.region_id
+
         wanted_new = plan.assignments.count(None)
         if wanted_new:
             # Same rule as the surrogate: a landscape built across budgets maps
