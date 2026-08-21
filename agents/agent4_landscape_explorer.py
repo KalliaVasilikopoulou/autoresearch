@@ -991,6 +991,31 @@ class Agent4LandscapeExplorer:
             "n_measured": region.n_measured,
         })
 
+    def _indistinguishable_from_champion(self, region: Region,
+                                         registry: RegionRegistry) -> bool:
+        """Is this region inside the smallest gap a single run can resolve?
+
+        THE TIE IDEA, APPLIED WHERE RUNS ARE ACTUALLY SPENT. `_tied_for_best`
+        only runs on ACTIVE regions, but a region has to reach
+        MIN_RUNS_FOR_ELITE_SCORE to be rankable and most pause before they get
+        there -- measured, 5 of 20 regions ever reached 8 runs, and the flag
+        has never once been set on real data. Reclaiming is where the budget
+        goes on unrankable regions, so the check belongs here too.
+
+        False whenever the gap has not been measured or either side cannot be
+        ranked: a rule that withholds work must not fire on a guess.
+        """
+        gap = self._resolvable_gap()
+        if gap is None:
+            return False
+        champion = registry.champion()
+        if champion is None or champion.region_id == region.region_id:
+            return False
+        mine, theirs = region.elite_score(), champion.elite_score()
+        if mine is None or theirs is None:
+            return False
+        return abs(mine - theirs) <= gap
+
     def revive_tied(self, registry: RegionRegistry, at_run: int) -> Optional[Region]:
         """Bring back a tied-for-best region once there is nothing else to
         search -- at that point breaking the tie is the best remaining use of
@@ -1307,6 +1332,10 @@ class Agent4LandscapeExplorer:
             # rather than revisiting the place later, and nothing has changed
             # to justify a different answer.
             and (at_run - r.flag_since_run) >= self.reclaim_cooldown_runs
+            # And it must be DISTINGUISHABLE from the champion. Reclaiming a
+            # region we cannot rank against the best one spends runs on a
+            # question with no answer at this budget.
+            and not self._indistinguishable_from_champion(r, registry)
         ]
         if not candidates:
             return None

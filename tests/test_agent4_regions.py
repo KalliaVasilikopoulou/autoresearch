@@ -348,6 +348,48 @@ def test_a_paused_region_better_than_a_typical_new_one_is_reclaimed(agent4, regi
     assert registry.resumes_used("r0010") == 1
 
 
+def test_a_region_we_cannot_rank_is_not_reclaimed(agent4, registry, monkeypatch):
+    """THE TIE IDEA WHERE THE BUDGET ACTUALLY GOES. _tied_for_best only runs on
+    ACTIVE regions, and a region must reach MIN_RUNS_FOR_ELITE_SCORE to be
+    rankable -- most pause first. Measured: 5 of 20 regions ever reached 8
+    runs and the flag was never once set on real data. Reclaiming is where
+    runs get spent on unrankable regions, so the check belongs here."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    champ = _paused(registry, "r0010", [1.4199] * 8)
+    close = _paused(registry, "r0008", [1.4250] * 8)   # 0.0051 away: unrankable
+    far = _paused(registry, "r0014", [1.4400] * 8)     # 0.0201 away: separable
+    # Enough poor regions that the MEDIAN elite sits above `far` -- otherwise
+    # `far` fails the "better than a typical new region" gate and the test
+    # would pass for a reason that has nothing to do with the tie check.
+    _paused(registry, "r0015", [1.4815] * 8)
+    _paused(registry, "r0016", [1.4900] * 8)
+    _paused(registry, "r0018", [1.5000] * 8)
+    champ.set_flag(PAUSED, at_run=0)
+
+    assert registry.champion() is champ
+    assert agent4._indistinguishable_from_champion(close, registry) is True
+    assert agent4._indistinguishable_from_champion(far, registry) is False
+
+    # Spend the champion's own resume budget. It is paused and it IS the best
+    # ground, so it would rightly be reclaimed first -- which is not the choice
+    # under test here.
+    for _ in range(agent4.max_resumes):
+        registry.note_resume(champ.region_id)
+
+    got = agent4.reclaim_better_paused(registry, at_run=99)
+    assert got is not close, "reclaimed a region it cannot rank against the best"
+    assert got is far
+
+
+def test_the_tie_check_abstains_without_a_measured_gap(agent4, registry, monkeypatch):
+    """A rule that withholds work must not fire on a guess."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: None)
+    champ = _paused(registry, "r0010", [1.4199] * 8)
+    close = _paused(registry, "r0008", [1.4250] * 8)
+    assert agent4._indistinguishable_from_champion(close, registry) is False
+    assert agent4._indistinguishable_from_champion(champ, registry) is False
+
+
 def test_a_paused_region_no_better_than_average_is_left_alone(agent4, registry):
     """Otherwise this just reinstates 'always go back', which is the behaviour
     that livelocked 60 runs."""
