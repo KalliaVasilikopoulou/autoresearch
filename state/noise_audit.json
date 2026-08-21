@@ -1,0 +1,202 @@
+{
+  "token_budget": 4194304,
+  "n_configs": 13,
+  "n_runs": 53,
+  "sd_min": 0.000723623728190293,
+  "sd_median": 0.0029414894398926434,
+  "sd_max": 0.012485549835710078,
+  "sd_ratio": 17.254201803104397,
+  "sd_pooled": 0.0048860716966700295,
+  "resolvable_gap_at_k": {
+    "1": 0.013819897720316152,
+    "2": 0.009772143393340059,
+    "3": 0.007978921668997626,
+    "5": 0.006180446148944258,
+    "10": 0.004370235382676768
+  },
+  "configs": [
+    {
+      "n_repeats": 8,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.706261125,
+      "sd": 0.0029414894398926434,
+      "range": 0.00939599999999996,
+      "run_ids": [
+        "geom_anchor_s1",
+        "geom_anchor_s2",
+        "geom_anchor_s42",
+        "seedvar_c0_s1",
+        "seedvar_c0_s2",
+        "seedvar_c0_s3",
+        "seedvar_c0_s4",
+        "seedvar_c0_s42"
+      ]
+    },
+    {
+      "n_repeats": 6,
+      "n_layer": 15.0,
+      "n_embd": 828.0,
+      "mean": 1.424903,
+      "sd": 0.003663851634550717,
+      "range": 0.009068999999999994,
+      "run_ids": [
+        "run_0207",
+        "seedvar_c0_s1",
+        "seedvar_c0_s2",
+        "seedvar_c0_s3",
+        "seedvar_c0_s42",
+        "shape_L15"
+      ]
+    },
+    {
+      "n_repeats": 5,
+      "n_layer": 21.0,
+      "n_embd": 708.0,
+      "mean": 1.4358958,
+      "sd": 0.012485549835710078,
+      "range": 0.030464999999999964,
+      "run_ids": [
+        "seedvar_c1_s1",
+        "seedvar_c1_s2",
+        "seedvar_c1_s3",
+        "seedvar_c1_s42",
+        "shape_L21"
+      ]
+    },
+    {
+      "n_repeats": 5,
+      "n_layer": 18.0,
+      "n_embd": 800.0,
+      "mean": 1.7089121999999999,
+      "sd": 0.004072803236101638,
+      "range": 0.010620999999999992,
+      "run_ids": [
+        "seedvar_c1_s1",
+        "seedvar_c1_s2",
+        "seedvar_c1_s3",
+        "seedvar_c1_s4",
+        "seedvar_c1_s42"
+      ]
+    },
+    {
+      "n_repeats": 5,
+      "n_layer": 11.0,
+      "n_embd": 480.0,
+      "mean": 1.7258305999999999,
+      "sd": 0.000723623728190293,
+      "range": 0.001883000000000079,
+      "run_ids": [
+        "seedvar_c2_s1",
+        "seedvar_c2_s2",
+        "seedvar_c2_s3",
+        "seedvar_c2_s4",
+        "seedvar_c2_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.7054286666666667,
+      "sd": 0.0013361565527037675,
+      "range": 0.002418999999999949,
+      "run_ids": [
+        "geom_r0.02_c2_s1",
+        "geom_r0.02_c2_s2",
+        "geom_r0.02_c2_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.6853976666666666,
+      "sd": 0.002069617436468203,
+      "range": 0.00405499999999992,
+      "run_ids": [
+        "geom_r0.02_c4_s1",
+        "geom_r0.02_c4_s2",
+        "geom_r0.02_c4_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.691874,
+      "sd": 0.003257975291496218,
+      "range": 0.0063429999999999875,
+      "run_ids": [
+        "geom_r0.05_c4_s1",
+        "geom_r0.05_c4_s2",
+        "geom_r0.05_c4_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.73728,
+      "sd": 0.0016500548475731885,
+      "range": 0.0031569999999998544,
+      "run_ids": [
+        "geom_r0.10_c0_s1",
+        "geom_r0.10_c0_s2",
+        "geom_r0.10_c0_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.7284363333333332,
+      "sd": 0.007037732328906266,
+      "range": 0.012446999999999875,
+      "run_ids": [
+        "geom_r0.10_c2_s1",
+        "geom_r0.10_c2_s2",
+        "geom_r0.10_c2_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 960.0,
+      "mean": 1.5528143333333333,
+      "sd": 0.006438844332124688,
+      "range": 0.011855000000000171,
+      "run_ids": [
+        "geom_r0.10_c4_s1",
+        "geom_r0.10_c4_s2",
+        "geom_r0.10_c4_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 22.0,
+      "n_embd": 960.0,
+      "mean": 1.7063806666666668,
+      "sd": 0.00089489794576436,
+      "range": 0.0015529999999999156,
+      "run_ids": [
+        "geom_depth_neighbour_s1",
+        "geom_depth_neighbour_s2",
+        "geom_depth_neighbour_s42"
+      ]
+    },
+    {
+      "n_repeats": 3,
+      "n_layer": 21.0,
+      "n_embd": 768.0,
+      "mean": 1.7204596666666667,
+      "sd": 0.00202154033680592,
+      "range": 0.003573999999999966,
+      "run_ids": [
+        "geom_width_neighbour_s1",
+        "geom_width_neighbour_s2",
+        "geom_width_neighbour_s42"
+      ]
+    }
+  ]
+}

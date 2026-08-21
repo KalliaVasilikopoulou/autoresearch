@@ -30,6 +30,11 @@ NOISE_FLOOR_PATH_DEFAULT = "state/noise_floor.json"
 #: Looked for beside whatever noise_floor.json a caller passes, so redirecting
 #: a state directory redirects both. See _load_sigma.
 SEED_VARIANCE_FILENAME = "seed_variance.json"
+#: scripts/noise_audit.py -- every repeat ever measured at this budget,
+#: pooled. Preferred over the single-experiment files below because those
+#: are medians of two or three configurations of a quantity that varies
+#: 17x, which is why successive estimates of it disagreed by 3x.
+NOISE_AUDIT_FILENAME = "noise_audit.json"
 #: scripts/region_geometry.py's in-region measurement. Preferred over the
 #: seed-variance one because it is the RIGHT quantity for a within-region
 #: decision: measured with the architecture frozen, across configurations that
@@ -111,6 +116,15 @@ def measured_resolvable_gap(state_dir: str) -> Optional[float]:
     """
     from prepare import TOKEN_BUDGET
 
+    # Pooled audit first, for the same reason as measured_a_within: the
+    # seed_variance figure is a median over three configurations, and this
+    # quantity varies 17x between them.
+    audit = report_at_budget(Path(state_dir) / NOISE_AUDIT_FILENAME, TOKEN_BUDGET)
+    if audit:
+        gap = (audit.get("resolvable_gap_at_k") or {}).get("1")
+        if isinstance(gap, (int, float)) and gap > 0:
+            return float(gap)
+
     report = report_at_budget(Path(state_dir) / SEED_VARIANCE_FILENAME, TOKEN_BUDGET)
     if not report:
         return None
@@ -140,6 +154,19 @@ def measured_a_within(state_dir: str) -> Optional[float]:
     being searched after they had stopped paying.
     """
     from prepare import TOKEN_BUDGET
+
+    # The pooled audit first: 13 configurations and 53 runs, against
+    # region_geometry's ONE configuration measured 3 times. Its sd_median is
+    # what a TYPICAL configuration's repeat spread is, which is the quantity a
+    # saturation test wants as its global fallback. (sd_pooled, 0.004886, is
+    # larger because two noisy configurations dominate a mean of variances --
+    # using it as the fallback would make a typical region look saturated on
+    # arrival, so the median is the right one of the two here.)
+    audit = report_at_budget(Path(state_dir) / NOISE_AUDIT_FILENAME, TOKEN_BUDGET)
+    if audit:
+        value = audit.get("sd_median")
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
 
     data = report_at_budget(Path(state_dir) / REGION_GEOMETRY_FILENAME, TOKEN_BUDGET)
     if data is None:
@@ -187,6 +214,16 @@ def _load_sigma(noise_floor_path: str,
     # the noise keeps sub-noise parameters in the search and calls unresolvable
     # differences real. A report with no stamp is treated as stale, because
     # every report on disk when the stamp was added was measured at 12.5M.
+    # 0. noise_audit.json, ahead of all three: it pools every repeat measured
+    #    at this budget (13 configurations, 53 runs) instead of one experiment's
+    #    two or three. The spread varies 17x between configurations, so a
+    #    three-config median is a small sample of a wide distribution -- which
+    #    is exactly how successive estimates of this number came to disagree by
+    #    3x, each disagreement moving a threshold.
+    audit_sigma = measured_a_within(str(state_dir))
+    if audit_sigma is not None:
+        return audit_sigma
+
     geometry = report_at_budget(state_dir / REGION_GEOMETRY_FILENAME, TOKEN_BUDGET)
     if geometry:
         a_within = geometry.get("a_within")

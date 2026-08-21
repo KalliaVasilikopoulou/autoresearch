@@ -188,10 +188,19 @@ def test_a_plateau_at_the_top_is_reported_as_stopping(tmp_path):
     assert falling["still_falling_at_the_top"]
 
 
-def test_the_verdict_does_not_depend_on_how_well_the_law_fits(tmp_path):
+def test_the_verdict_does_not_depend_on_how_well_the_law_fits(tmp_path, monkeypatch):
     """THE POINT OF SEPARATING THE TWO. A textbook-clean descent can fit any
     given formula badly -- that is a fact about the formula, not about the
-    surface -- so fit quality must not be able to overturn a hill."""
+    surface -- so fit quality must not be able to overturn a hill.
+
+    The noise is PINNED. analyze() calls architecture_noise() with no argument,
+    so it reads the repo's real state/ directory and this assertion otherwise
+    tracks whatever was last measured there -- it flipped when noise_audit.json
+    moved the global sigma 0.002070 -> 0.002941. The fixture's residuals sit
+    between those two, so the test was measuring the ambient constant rather
+    than the behaviour it names."""
+    monkeypatch.setattr(size_sweep, "architecture_noise",
+                        lambda *a, **k: (0.002070, "pinned by test"))
     r = _report(MONOTONE, tmp_path)
     assert not r["predictable"]           # the law's residuals exceed the noise
     assert "ONE HILL" in r["verdict"]     # and it changes nothing

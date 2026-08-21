@@ -1,166 +1,104 @@
 {
-  "all_pairs_consistent": false,
+  "all_pairs_consistent": true,
   "configs": {
     "0": {
-      "batch_size": 23180.0,
-      "embedding_lr": 0.0886776573279423,
-      "matrix_lr": 0.023762701040555865,
-      "n_embd": 960.0,
-      "n_head": 6.0,
-      "n_layer": 21.0,
-      "scalar_lr": 0.2101414489776221,
-      "unembedding_lr": 0.003955934722681367,
-      "warmup_ratio": 0.17311601489782336,
-      "weight_decay": 0.09338780539110303,
-      "window_s_fraction": 0.36455016024410725
+      "ablation_k": 0,
+      "batch_size": 4960,
+      "embedding_lr": 0.8458438764231334,
+      "matrix_lr": 0.05350356953014288,
+      "n_embd": 828,
+      "n_head": 6,
+      "n_layer": 15,
+      "scalar_lr": 1.2242503787575716,
+      "token_xai_enabled": false,
+      "unembedding_lr": 0.007066240078030985,
+      "warmup_ratio": 0.05106673516855198,
+      "weight_decay": 0.08326492728316323,
+      "window_s_fraction": 0.8853783628388991
     },
     "1": {
-      "batch_size": 23180.0,
-      "embedding_lr": 0.0886776573279423,
-      "matrix_lr": 0.023762701040555865,
-      "n_embd": 800.0,
-      "n_head": 5.0,
-      "n_layer": 18.0,
-      "scalar_lr": 0.2101414489776221,
-      "unembedding_lr": 0.003955934722681367,
-      "warmup_ratio": 0.17311601489782336,
-      "weight_decay": 0.09338780539110303,
-      "window_s_fraction": 0.36455016024410725
-    },
-    "2": {
-      "batch_size": 23180.0,
-      "embedding_lr": 0.0886776573279423,
-      "matrix_lr": 0.023762701040555865,
-      "n_embd": 480.0,
-      "n_head": 3.0,
-      "n_layer": 11.0,
-      "scalar_lr": 0.2101414489776221,
-      "unembedding_lr": 0.003955934722681367,
-      "warmup_ratio": 0.17311601489782336,
-      "weight_decay": 0.09338780539110303,
-      "window_s_fraction": 0.36455016024410725
+      "ablation_k": 0,
+      "batch_size": 4960,
+      "embedding_lr": 0.8458438764231334,
+      "matrix_lr": 0.05350356953014288,
+      "n_embd": 708,
+      "n_head": 6,
+      "n_layer": 21,
+      "scalar_lr": 1.2242503787575716,
+      "token_xai_enabled": false,
+      "unembedding_lr": 0.007066240078030985,
+      "warmup_ratio": 0.05106673516855198,
+      "weight_decay": 0.08326492728316323,
+      "window_s_fraction": 0.8853783628388991
     }
   },
-  "independent_reference_sqrt2_sigma": 0.004547372538070736,
-  "mean_std_of_pairwise_gap": 0.004654877095611199,
-  "n_seeds": 5,
+  "independent_reference_sqrt2_sigma": 0.012807287518570567,
+  "mean_std_of_pairwise_gap": 0.009665895625858987,
+  "n_seeds": 4,
   "pairs": [
     {
-      "a_wins": 3,
-      "b_wins": 2,
+      "a_wins": 4,
+      "b_wins": 0,
       "config_a": 0,
       "config_b": 1,
-      "mean_gap": -0.0021391999999999635,
-      "n_seeds": 5,
-      "ranking_consistent": false,
-      "resolvable_gap_at_k_seeds": {
-        "1": 0.012022909913993414,
-        "10": 0.00380197794312383,
-        "2": 0.008501481129779713,
-        "3": 0.006941430275286718,
-        "5": 0.005376808771009084
-      },
-      "separation": 0.7957136253512295,
-      "std_of_gap": 0.006011454956996707
-    },
-    {
-      "a_wins": 5,
-      "b_wins": 0,
-      "config_a": 0,
-      "config_b": 2,
-      "mean_gap": -0.019057599999999963,
-      "n_seeds": 5,
+      "mean_gap": -0.01494224999999999,
+      "n_seeds": 4,
       "ranking_consistent": true,
       "resolvable_gap_at_k_seeds": {
-        "1": 0.008081146898800861,
-        "10": 0.002555483030661694,
-        "2": 0.005714233771906727,
-        "3": 0.0046656523373835865,
-        "5": 0.0036139987603760674
+        "1": 0.019331791251717974,
+        "10": 0.006113249160634626,
+        "2": 0.013669640686572554,
+        "3": 0.011161214883097025,
+        "5": 0.008645439873135426
       },
-      "separation": 10.546544846084483,
-      "std_of_gap": 0.0040405734494004305
-    },
-    {
-      "a_wins": 5,
-      "b_wins": 0,
-      "config_a": 1,
-      "config_b": 2,
-      "mean_gap": -0.0169184,
-      "n_seeds": 5,
-      "ranking_consistent": true,
-      "resolvable_gap_at_k_seeds": {
-        "1": 0.007825205760872917,
-        "10": 0.002474547336382933,
-        "2": 0.005533256057693277,
-        "3": 0.004517884652504189,
-        "5": 0.003499538403846961
-      },
-      "separation": 9.668932326275943,
-      "std_of_gap": 0.003912602880436458
+      "separation": 3.0917466064966135,
+      "std_of_gap": 0.009665895625858987
     }
   ],
   "per_config": {
     "0": {
-      "max": 1.713166,
-      "mean": 1.706773,
-      "min": 1.70377,
-      "n": 5,
-      "std": 0.003729147087471857,
+      "max": 1.429635,
+      "mean": 1.4239519999999999,
+      "min": 1.420566,
+      "n": 4,
+      "std": 0.004014061534157148,
       "values_by_seed": {
-        "1": 1.706382,
-        "2": 1.704536,
-        "3": 1.713166,
-        "4": 1.70377,
-        "42": 1.706011
+        "1": 1.420566,
+        "2": 1.423788,
+        "3": 1.429635,
+        "42": 1.421819
       }
     },
     "1": {
-      "max": 1.715322,
-      "mean": 1.7089121999999999,
-      "min": 1.704701,
-      "n": 5,
-      "std": 0.004072803236101638,
+      "max": 1.454367,
+      "mean": 1.43889425,
+      "min": 1.426146,
+      "n": 4,
+      "std": 0.012161986827132045,
       "values_by_seed": {
-        "1": 1.704701,
-        "2": 1.706202,
-        "3": 1.709002,
-        "4": 1.715322,
-        "42": 1.709334
-      }
-    },
-    "2": {
-      "max": 1.726731,
-      "mean": 1.7258305999999999,
-      "min": 1.724848,
-      "n": 5,
-      "std": 0.000723623728190293,
-      "values_by_seed": {
-        "1": 1.726303,
-        "2": 1.725733,
-        "3": 1.725538,
-        "4": 1.726731,
-        "42": 1.724848
+        "1": 1.441897,
+        "2": 1.433167,
+        "3": 1.454367,
+        "42": 1.426146
       }
     }
   },
   "resolvable_gap_at_k_seeds": {
-    "1": 0.009309754191222397,
-    "2": 0.006582990319793239,
-    "3": 0.005374989088391498,
-    "5": 0.004163448645077371
+    "1": 0.019331791251717974,
+    "2": 0.013669640686572554,
+    "3": 0.011161214883097025,
+    "5": 0.008645439873135426
   },
-  "results_path": "state/seed_variance_4M.tsv",
+  "results_path": "state/shape_confirm.tsv",
   "seeds": [
     1,
     2,
     3,
-    4,
     42
   ],
-  "shared_fraction_of_seed_effect": 0.0,
-  "sigma_seed": 0.0032154779582512986,
-  "timestamp": "2026-08-11T21:02:10",
+  "shared_fraction_of_seed_effect": 0.24528159363616708,
+  "sigma_seed": 0.009056119852987078,
+  "timestamp": "2026-08-21T00:04:38",
   "token_budget": 4194304,
-  "verdict": "RANKINGS FLIP -- at least one pair changed winner depending on the seed. Single-seed val_bpb cannot separate configs at that gap size; multi-seed evaluation is required for frontier decisions (plan tier 2)."
+  "verdict": "RANKINGS STABLE -- every pair kept the same winner across all seeds. Freezing the seed for screening is sound; keep one seed per config."
 }
