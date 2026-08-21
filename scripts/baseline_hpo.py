@@ -123,17 +123,35 @@ def run_baseline(method: str, n_runs: int, results_path: str, timeout: int,
         raise SystemExit(f"[baseline] unknown method {method!r}")
 
 
+#: Per-run hyperparameter YAMLs, mirroring what size_sweep does. The remote
+#: name must be unique per run or two dispatches would overwrite each other's
+#: settings file on the server.
+HP_DIR = Path("state/baseline_hyperparams")
+
+
 def _dispatch(run_id: str, hp: Dict[str, Any], results_path: str,
               timeout: int) -> Optional[float]:
-    """One training run, logged in the standard schema. None if it failed."""
+    """One training run, logged in the standard schema. None if it failed.
+
+    run_training_remote takes a PATH to a hyperparams YAML, not a dict -- it
+    uploads the file over SFTP and train.py reads it on the far side.
+    """
+    import yaml
+
     from agents import remote_runner
 
     gpus = remote_runner.discover_available_gpus()
     if not gpus:
         print(f"[baseline] {run_id}: no GPU available")
         return None
-    result = remote_runner.run_training_remote(hp, gpu_index=gpus[0]["index"],
-                                               timeout=timeout)
+    HP_DIR.mkdir(parents=True, exist_ok=True)
+    hp_path = HP_DIR / f"{run_id}.yaml"
+    with open(hp_path, "w", encoding="utf-8") as f:
+        yaml.dump(hp, f)
+    result = remote_runner.run_training_remote(
+        hyperparams_local_path=str(hp_path), gpu_index=gpus[0]["index"],
+        hp_remote_name=f"model_hyperparams_{run_id}.yaml",
+        run_label=f"GPU{gpus[0]['index']}", timeout=timeout)
     metrics = dict(result or {})
     val = metrics.get("val_bpb")
     metrics.setdefault("status", "remote_error")

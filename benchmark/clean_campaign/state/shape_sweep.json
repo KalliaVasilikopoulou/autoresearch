@@ -1,0 +1,118 @@
+{
+  "token_budget": 4194304,
+  "sigma": 0.0032154779582512986,
+  "sigma_source": "seed_variance.json (sigma_seed, this budget)",
+  "real_step": 0.006430955916502597,
+  "n_points": 6,
+  "points": [
+    {
+      "label": "L10",
+      "n_layer": 10,
+      "n_embd": 1020,
+      "n_head": 6,
+      "params": 124848000,
+      "param_drift": 0.011692221522089197,
+      "aspect": 102.0,
+      "val_bpb": 1.449654
+    },
+    {
+      "label": "L12",
+      "n_layer": 12,
+      "n_embd": 924,
+      "n_head": 6,
+      "params": 122943744,
+      "param_drift": 0.003738710354967444,
+      "aspect": 77.0,
+      "val_bpb": 1.438933
+    },
+    {
+      "label": "L15",
+      "n_layer": 15,
+      "n_embd": 828,
+      "n_head": 6,
+      "params": 123405120,
+      "param_drift": 0.0,
+      "aspect": 55.2,
+      "val_bpb": 1.428796
+    },
+    {
+      "label": "L18",
+      "n_layer": 18,
+      "n_embd": 756,
+      "n_head": 6,
+      "params": 123451776,
+      "param_drift": 0.0003780718336483932,
+      "aspect": 42.0,
+      "val_bpb": 1.434942
+    },
+    {
+      "label": "L21",
+      "n_layer": 21,
+      "n_embd": 708,
+      "n_head": 6,
+      "params": 126318528,
+      "param_drift": 0.02360848561226633,
+      "aspect": 33.714285714285715,
+      "val_bpb": 1.423902
+    },
+    {
+      "label": "L24",
+      "n_layer": 24,
+      "n_embd": 660,
+      "n_head": 6,
+      "params": 125452800,
+      "param_drift": 0.016593152699012813,
+      "aspect": 27.5,
+      "val_bpb": 1.461306
+    }
+  ],
+  "spread": 0.03740399999999999,
+  "spread_in_sigma": 11.632485274550517,
+  "best": {
+    "label": "L21",
+    "n_layer": 21,
+    "n_embd": 708,
+    "aspect": 33.714285714285715,
+    "val_bpb": 1.423902
+  },
+  "worst": {
+    "label": "L24",
+    "val_bpb": 1.461306
+  },
+  "steps": [
+    {
+      "from": "L10",
+      "to": "L12",
+      "delta": -0.01072099999999998,
+      "readable": true
+    },
+    {
+      "from": "L12",
+      "to": "L15",
+      "delta": -0.010137000000000063,
+      "readable": true
+    },
+    {
+      "from": "L15",
+      "to": "L18",
+      "delta": 0.006145999999999985,
+      "readable": false
+    },
+    {
+      "from": "L18",
+      "to": "L21",
+      "delta": -0.011039999999999939,
+      "readable": true
+    },
+    {
+      "from": "L21",
+      "to": "L24",
+      "delta": 0.03740399999999999,
+      "readable": true
+    }
+  ],
+  "n_readable_steps": 4,
+  "sign_changes": 1,
+  "max_param_drift": 0.02360848561226633,
+  "verdict": "SINGLE HILL -- 4 readable step(s), one change of direction. There IS a right aspect ratio: 33.7 (n_layer=21, n_embd=708) at 1.423902, against 1.461306 at the worst shape -- a 11.6 sigma penalty for getting it wrong. Regions anchored away from this ratio pay it."
+}

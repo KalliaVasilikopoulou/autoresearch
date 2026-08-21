@@ -1179,10 +1179,22 @@ def main():
     parser.add_argument("--interactive", action="store_true",
                          help="Prompt (blocking) before continuing past a pipeline_validator ERROR. "
                               "Off by default so unattended runs never block on a spurious warning.")
+    # ISOLATION, for benchmarking. A fair comparison against random search at
+    # n=30 needs this campaign to start knowing NOTHING: the surrogate fits on
+    # results.tsv, so pointing at the real one would hand the method 215 runs
+    # of prior knowledge and the comparison would measure history, not method.
+    # Also what the planned ablations need -- each arm must be its own world.
+    parser.add_argument("--root-dir", default=".",
+                        help="Where results.tsv and model_hyperparams.yaml live.")
+    parser.add_argument("--state-dir", default="./state",
+                        help="Where regions.json and the planner state live.")
+    parser.add_argument("--reports-dir", default="./reports")
 
     args = parser.parse_args()
 
-    orchestrator = Orchestrator(config_path=args.config, dry_run=args.dry_run, interactive=args.interactive)
+    orchestrator = Orchestrator(config_path=args.config, dry_run=args.dry_run,
+                                interactive=args.interactive, root_dir=args.root_dir,
+                                state_dir=args.state_dir, reports_dir=args.reports_dir)
     orchestrator.run(max_iterations=args.iterations)
 
 
