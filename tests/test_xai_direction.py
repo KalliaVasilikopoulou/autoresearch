@@ -27,8 +27,12 @@ def _fingerprint(**over):
     return fp
 
 
-def _evidence(**over):
-    return [{"token_fingerprint": _fingerprint(**over)}]
+def _evidence(n=1, **over):
+    """`n` copies of the same fingerprint. architecture_votes now requires
+    MIN_AGREEING_FINGERPRINTS readings to agree before a direction counts, so a
+    test of what one SIGNAL means either supplies enough agreeing readings or
+    passes min_agreeing=1 to isolate the rule from the gate."""
+    return [{"token_fingerprint": _fingerprint(**over)} for _ in range(n)]
 
 
 # --- which signals produce which direction ----------------------------------
@@ -37,12 +41,14 @@ def _evidence(**over):
 def test_late_layers_contributing_nothing_votes_to_reduce_depth():
     """The most actionable signal we have: if the last layers do not write to
     the output, the model is too deep."""
-    votes = xai_direction.architecture_votes(_evidence(dla=[1.0, 1.0, 1.0, 0.001]))
+    votes = xai_direction.architecture_votes(
+        _evidence(dla=[1.0, 1.0, 1.0, 0.001]), min_agreeing=1)
     assert votes["n_layer"] < 0
 
 
 def test_narrow_attention_votes_fewer_heads_and_more_width():
-    votes = xai_direction.architecture_votes(_evidence(attn_entropy=[0.2, 0.2, 0.2, 0.2]))
+    votes = xai_direction.architecture_votes(
+        _evidence(attn_entropy=[0.2, 0.2, 0.2, 0.2]), min_agreeing=1)
     assert votes["n_head"] < 0
     assert votes["n_embd"] > 0
 
@@ -52,7 +58,8 @@ def test_only_architecture_votes_come_through():
     vary safely inside a region (step 1: 0.05 vs 0.95 gave 46/46 identical
     tensors)."""
     votes = xai_direction.architecture_votes(
-        _evidence(attn_distance=[9.0, 9.5, 9.9, 10.0]))  # trips the window rule
+        _evidence(attn_distance=[9.0, 9.5, 9.9, 10.0]),  # trips the window rule
+        min_agreeing=1)
     assert set(votes) <= set(ARCHITECTURE_COLUMNS)
     assert "window_s_fraction" not in votes
 
@@ -63,6 +70,46 @@ def test_no_fingerprint_gives_no_direction():
     assert xai_direction.architecture_votes(None) == {}
     assert xai_direction.architecture_votes([]) == {}
     assert xai_direction.architecture_votes([{"report_id": "r1"}]) == {}
+
+
+# --- the agreement gate -----------------------------------------------------
+
+
+def test_one_fingerprint_alone_steers_nothing():
+    """A fingerprint is a measurement of a noisy training run. The same
+    variation that makes val_bpb differences under 0.0138 unreadable at one
+    seed also moves dead-head counts and per-layer contributions -- and an
+    architecture vote is expensive, since it opens a whole new region rather
+    than nudging a knob inside one."""
+    once = _evidence(n=1, dla=[1.0, 1.0, 1.0, 0.001])
+    assert xai_direction.architecture_votes(once) == {}
+    assert xai_direction.architecture_votes(once, min_agreeing=1)["n_layer"] < 0
+
+
+def test_two_agreeing_fingerprints_do_steer():
+    twice = _evidence(n=2, dla=[1.0, 1.0, 1.0, 0.001])
+    assert xai_direction.architecture_votes(twice)["n_layer"] < 0
+
+
+def test_disagreeing_fingerprints_cancel_rather_than_average():
+    """"The evidence does not know" is the honest answer, and it is different
+    from "the evidence says zero" -- averaging two opposite readings would
+    invent a confident middle."""
+    deep = {"token_fingerprint": _fingerprint(dla=[1.0, 1.0, 1.0, 0.001])}
+    shallow = {"token_fingerprint": _fingerprint(dla=[0.001, 1.0, 1.0, 1.0])}
+    votes = xai_direction.architecture_votes([shallow, deep])
+    assert "n_layer" not in votes
+
+
+def test_head_ablation_is_exempt_from_the_agreement_gate():
+    """It does not INFER redundancy -- it switches a head off and measures what
+    happens. dead_head_vote already requires a majority of probed heads to be
+    free, which is agreement within a single measurement."""
+    # One head that matters, three that can be switched off for free. All-zero
+    # impacts give peak == 0 and the rule abstains, which is correct: nothing
+    # was measured, not "every head is dead".
+    evidence = [{"head_ablation_impacts": {"0": 0.5, "1": 0.001, "2": 0.001, "3": 0.001}}]
+    assert xai_direction.architecture_votes(evidence)["n_head"] < 0
 
 
 # --- head ablation: the direct evidence -------------------------------------

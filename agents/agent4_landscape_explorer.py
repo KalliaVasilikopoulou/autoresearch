@@ -925,11 +925,25 @@ class Agent4LandscapeExplorer:
             return None
         first = region.val_bpbs[0]
         bar = champion.elite_score() + self.reject_margin_sigma * self.sigma_region
-        if first <= bar:
+
+        # THE OPENER MUST CLEAR THE BAR BY MORE THAN ONE RUN CAN WOBBLE.
+        # Measured in campaign 13, four consecutive openers landed at 1.5559,
+        # 1.5092, 1.4838 and 1.4707 against a 1.4728 bar -- the last two
+        # straddling it by 0.011 and 0.002. At that separation a single run
+        # decides by less than its own noise and the screen is a coin flip
+        # rather than a filter.
+        #
+        # The rule was justified by first-run rank predicting final rank at
+        # Spearman 0.952, but that held because good and bad regions were ~0.1
+        # apart. It does not license rejecting a region that is barely over.
+        slack = self._resolvable_gap() or 0.0
+        if first <= bar + slack:
             return None
         return self._retire(region, registry, NO_OPTIMUM, at_run, {
             "first_run": first,
             "bar": bar,
+            "one_run_slack": slack,
+            "effective_bar": bar + slack,
             "champion_elite": champion.elite_score(),
             "reject_margin_sigma": self.reject_margin_sigma,
             "sigma_region": self.sigma_region,

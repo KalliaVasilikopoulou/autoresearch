@@ -71,23 +71,72 @@ def dead_head_vote(evidence: Optional[Sequence[Dict[str, Any]]]) -> Optional[int
     return None
 
 
-def architecture_votes(evidence: Optional[Sequence[Dict[str, Any]]]) -> Dict[str, int]:
-    """Net +-1 votes on n_layer / n_embd / n_head, from the latest evidence.
+#: How many of the most recent fingerprints must AGREE on a direction before
+#: it is allowed to steer anything. One fingerprint is one measurement of a
+#: noisy model: the same run-to-run variation that makes val_bpb differences
+#: below 0.0138 unreadable also moves dead-head counts and layer contributions,
+#: so a single reading is an observation, not a finding.
+MIN_AGREEING_FINGERPRINTS = 2
+
+
+def _fingerprints(evidence: Optional[Sequence[Dict[str, Any]]],
+                  limit: int) -> List[Dict[str, Any]]:
+    """The most recent `limit` behavioural fingerprints, newest first."""
+    out: List[Dict[str, Any]] = []
+    for item in reversed(list(evidence or [])):
+        if isinstance(item, dict) and item.get("token_fingerprint"):
+            out.append(item["token_fingerprint"])
+            if len(out) >= limit:
+                break
+    return out
+
+
+def architecture_votes(evidence: Optional[Sequence[Dict[str, Any]]],
+                       min_agreeing: int = MIN_AGREEING_FINGERPRINTS) -> Dict[str, int]:
+    """Net +-1 votes on n_layer / n_embd / n_head, kept only where the last
+    `min_agreeing` fingerprints AGREE on the sign.
 
     Reuses Agent 1's fingerprint rules rather than restating them, so there is
     one definition of what a signal means. Only the architecture half is
     returned -- window_s_fraction stays with Agent 1, because it changes no
     weights and so can vary safely inside a region.
+
+    WHY AGREEMENT IS REQUIRED. This used to read the single latest fingerprint,
+    so one run could move an architecture. But a fingerprint is a measurement
+    of a noisy training run: the same variation that makes val_bpb differences
+    under 0.0138 unreadable at one seed also moves dead-head counts and
+    per-layer contributions. Acting on one reading is acting on noise, and
+    architecture decisions are the expensive kind -- they open a whole new
+    region rather than nudging a knob inside one.
+
+    A parameter whose recent fingerprints DISAGREE contributes nothing, which
+    is the honest answer: the evidence is telling us it does not know.
     """
     from agents.agent1_training_specialist import fingerprint_votes
 
-    votes: Dict[str, int] = {}
-    fingerprint = latest_fingerprint(evidence)
-    if fingerprint:
-        for param, cast in fingerprint_votes(fingerprint).items():
-            if param in ("n_layer", "n_embd", "n_head"):
-                votes[param] = votes.get(param, 0) + sum(cast)
+    need = max(1, int(min_agreeing))
+    recent = _fingerprints(evidence, need)
 
+    votes: Dict[str, int] = {}
+    if len(recent) >= need:
+        per_reading: List[Dict[str, int]] = []
+        for fingerprint in recent:
+            cast_here: Dict[str, int] = {}
+            for param, cast in fingerprint_votes(fingerprint).items():
+                if param in ("n_layer", "n_embd", "n_head"):
+                    cast_here[param] = cast_here.get(param, 0) + sum(cast)
+            per_reading.append(cast_here)
+
+        for param in ("n_layer", "n_embd", "n_head"):
+            signs = {(1 if r.get(param, 0) > 0 else -1 if r.get(param, 0) < 0 else 0)
+                     for r in per_reading}
+            # Every reading must be non-zero AND point the same way.
+            if len(signs) == 1 and 0 not in signs:
+                votes[param] = sum(r.get(param, 0) for r in per_reading) // len(per_reading)
+
+    # Head ablation is exempt: it does not INFER redundancy, it switches a head
+    # off and measures what happens. dead_head_vote already requires a majority
+    # of probed heads to be free, which is agreement within one measurement.
     head_vote = dead_head_vote(evidence)
     if head_vote:
         votes["n_head"] = votes.get("n_head", 0) + head_vote
