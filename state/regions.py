@@ -416,6 +416,34 @@ class Region:
                 best, last_improved = v, i
         return len(values) - 1 - last_improved
 
+    @staticmethod
+    def robust_spread(values: Sequence[float]) -> Optional[float]:
+        """The spread of these values, with outliers held down.
+
+        Median absolute deviation scaled by 1.4826, which makes it equal to a
+        standard deviation on normal data while a single wild value can move it
+        by at most one rank instead of dominating it.
+
+        WHY NOT stdev. real_signal subtracts noise from an observed spread, and
+        plain stdev is driven by the extremes -- so ONE bad run widened the
+        spread, RAISED the "real signal", and made a region look FURTHER from
+        saturation. Exactly backwards: a bad result bought the region more
+        runs. Measured on r0008 at n=11, when run_0149 came back at 1.490004,
+        the signal/noise ratio went 1.50x -> 3.07x on that single run.
+
+        Falls back to stdev when the MAD is zero, which happens when more than
+        half the values are identical -- there the MAD says "no spread" while a
+        few differing runs plainly are spread, and stdev is the better answer.
+        """
+        vals = [float(v) for v in values]
+        if len(vals) < 2:
+            return None
+        med = statistics.median(vals)
+        mad = statistics.median([abs(v - med) for v in vals])
+        if mad > 0:
+            return 1.4826 * mad
+        return statistics.stdev(vals)
+
     def real_signal(self, a_within: float, min_runs: int = 5) -> Optional[float]:
         """How much genuine configuration-to-configuration variation is left
         here, with the measurement noise removed.
@@ -426,13 +454,19 @@ class Region:
 
             real = sqrt(max(0, observed^2 - a_within^2))
 
+        `observed` is a ROBUST spread (see robust_spread), not a standard
+        deviation: this number decides whether to abandon a region, and one
+        unlucky run must not be able to move a verdict.
+
         None until `min_runs` measurements exist: a standard deviation from two
         or three points is mostly noise itself, and this number decides whether
         to abandon a region.
         """
         if len(self.val_bpbs) < max(2, min_runs):
             return None
-        observed = statistics.stdev(self.val_bpbs)
+        observed = self.robust_spread(self.val_bpbs)
+        if observed is None:
+            return None
         return math.sqrt(max(0.0, observed ** 2 - a_within ** 2))
 
     def is_saturated(self, a_within: float, min_runs: int = 5,

@@ -44,13 +44,36 @@ def test_real_signal_removes_the_noise_from_the_observed_spread(tmp_path):
     """Spreads add as squares, so the observed spread already contains the
     noise and has to have it subtracted, not compared against it directly."""
     _reg, r = _region(tmp_path, [1.20, 1.21, 1.22, 1.23, 1.24])
-    import statistics
 
-    observed = statistics.stdev(r.val_bpbs)
+    # robust_spread, not stdev: this number decides whether to abandon a
+    # region, so one unlucky run must not be able to move it. See the
+    # outlier test below.
+    observed = r.robust_spread(r.val_bpbs)
     expected = math.sqrt(observed ** 2 - A ** 2)
 
     assert r.real_signal(A) == pytest.approx(expected)
     assert r.real_signal(A) < observed, "the noise must come off"
+
+
+def test_one_bad_run_cannot_move_the_saturation_verdict(tmp_path):
+    """THE FAILURE THIS FIXES. real_signal used plain stdev, which the
+    extremes drive -- so a BAD run widened the observed spread, RAISED the
+    "real signal", and made the region look FURTHER from saturation. A bad
+    result bought the region more runs.
+
+    Measured on r0008 at n=11: run_0149 came back at 1.490004 and moved the
+    signal/noise ratio 1.50x -> 3.07x on that one run."""
+    clean = [1.4325, 1.4342, 1.4395, 1.4427, 1.4355, 1.4332, 1.4327, 1.4317]
+    _reg, without = _region(tmp_path, clean)
+    _reg2, with_outlier = _region(tmp_path / "b", clean + [1.4900])
+
+    a, b = without.robust_spread(clean), with_outlier.robust_spread(clean + [1.4900])
+    assert b / a < 1.25, "one outlier moved the spread more than 25%"
+
+    import statistics
+    sd_a = statistics.stdev(clean)
+    sd_b = statistics.stdev(clean + [1.4900])
+    assert sd_b / sd_a > 2.0, "fixture is wrong: stdev should blow up here"
 
 
 def test_a_region_of_pure_noise_has_no_real_signal(tmp_path):

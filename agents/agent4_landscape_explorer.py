@@ -245,12 +245,32 @@ class Agent4LandscapeExplorer:
         not be reached.
         """
         from agents.search_planner import measured_a_within
+        from state.regions import LOCAL_NOISE_MIN_RUNS
 
-        if region is not None:
-            local = self._local_noise(region)
-            if local is not None:
-                return local
-        return measured_a_within(str(self.registry_path.parent))
+        campaign = measured_a_within(str(self.registry_path.parent))
+        if region is None:
+            return campaign
+        local = self._local_noise(region)
+        if local is None:
+            return campaign
+        if campaign is None:
+            return local
+
+        # SHRINK toward the campaign figure rather than switching to the local
+        # one outright. The local estimator is unavailable until its runs pack
+        # closer than half the fence radius, and the moment that guard releases
+        # the yardstick used to change size -- measured on r0014, one added run
+        # moved it 0.002941 -> 0.008323 (4x) and flipped the region from
+        # "keep, signal 3.70x noise" to "saturated" on the same data.
+        #
+        # weight = n / (n + LOCAL_NOISE_MIN_RUNS): half local at 5 runs, 80% at
+        # 20. A local estimate earns its authority as its sample grows instead
+        # of seizing it in one step. This REDUCES the discontinuity rather than
+        # removing it -- the guard is still a threshold -- but it halves the
+        # jump and stops a single run from re-scaling every verdict.
+        n = max(0, int(region.n_measured))
+        weight = n / float(n + LOCAL_NOISE_MIN_RUNS) if n else 0.0
+        return weight * local + (1.0 - weight) * campaign
 
     def _local_noise(self, region: Region) -> Optional[float]:
         """`local_noise` for one region, or None if its runs cannot support it.
