@@ -161,6 +161,10 @@ class Agent4LandscapeExplorer:
         #: does not. At 5 sigma the screen kills r0007/r0012/r0013/r0016 --
         #: 20 of 74 runs -- and loses nothing good.
         self.reject_margin_sigma = float(cfg.get("reject_margin_sigma", 5.0))
+        #: Non-Sobol runs the campaign still has. None = unknown, and every
+        #: budget gate below is then inert, so nothing changes for callers that
+        #: do not set it. The orchestrator sets it once per wave.
+        self.runs_remaining: Optional[int] = None
         # A region still working through Agent 1's Sobol cold start is exempt
         # from the stuck rules -- see judge(). Read from agent1's block
         # because it is agent1's cold start; duplicating the number under
@@ -372,6 +376,25 @@ class Agent4LandscapeExplorer:
                 return local * self.improvement_sigma
         return self.improvement_margin
 
+    def _can_afford(self, runs_needed: int) -> bool:
+        """Is there budget left for an action that only pays off after
+        `runs_needed` more runs?
+
+        WHY LIFECYCLE MUST WATCH THE BUDGET. Opening a region costs
+        min_runs_before_judgement runs before it can even be judged, and a
+        migration costs the same again for its successor. Late in a campaign
+        those runs cannot be recovered: measured, a 30-run campaign spent its
+        last third exploring and never returned to the 1.4463 it had already
+        found. An action nobody can afford to finish is worse than no action,
+        because it also takes the runs that exploitation would have used.
+
+        True when the budget is unknown -- an unset budget must not silently
+        disable the search.
+        """
+        if self.runs_remaining is None:
+            return True
+        return int(self.runs_remaining) >= int(runs_needed)
+
     # -- job 1: propose regions ---------------------------------------------
 
     def propose_regions(
@@ -393,6 +416,14 @@ class Agent4LandscapeExplorer:
         somewhere no criterion actually recommended.
         """
         if n <= 0 or not self.enabled:
+            return []
+        # A new region needs min_runs_before_judgement runs before anything can
+        # be said about it. With fewer left, opening one spends the campaign's
+        # last runs somewhere unmeasurable instead of exploiting what is known.
+        if not self._can_afford(self.min_runs_before_judgement):
+            print(f"[Agent 4] Not opening a region: {self.runs_remaining} run(s) left, "
+                  f"and a new one needs {self.min_runs_before_judgement} to be judged. "
+                  f"Exploiting what is already known instead.")
             return []
 
         finite = [r["val_bpb"] for r in rows
@@ -1238,6 +1269,16 @@ class Agent4LandscapeExplorer:
         # kept trying to leave was recorded doing so and then ignored --
         # measured at 6 escapes in 6 proposals, coherence 0.75, pointing 0.203
         # away from an anchor with a 0.02 fence.
+        # Same budget test as opening: the successor needs
+        # min_runs_before_judgement runs to be worth anything, and a migration
+        # this late abandons a measured region for an unmeasured one with no
+        # time to measure it.
+        if not self._can_afford(self.min_runs_before_judgement):
+            print(f"[Agent 4] Region {region.region_id} wants to migrate, but "
+                  f"{self.runs_remaining} run(s) remain and its successor would need "
+                  f"{self.min_runs_before_judgement}. Staying put.")
+            return None
+
         successor = registry.open_region(pressure["target"], at_run=at_run,
                                          origin=f"migrated_from_{region.region_id}")
         region.successor_id = successor.region_id

@@ -1,1 +1,51 @@
-{"next_id": 1, "overlap_streaks": {}, "regions": [], "resume_counts": {}}
+{
+  "next_id": 2,
+  "overlap_streaks": {},
+  "regions": [
+    {
+      "anchor": {
+        "batch_size": 8192.0,
+        "embedding_lr": 0.6,
+        "matrix_lr": 0.04,
+        "n_embd": 512.0,
+        "n_head": 4.0,
+        "n_layer": 8.0,
+        "scalar_lr": 0.5,
+        "unembedding_lr": 0.004,
+        "warmup_ratio": 0.0,
+        "weight_decay": 0.2,
+        "window_s_fraction": 0.75
+      },
+      "center": {
+        "ablation_k": 10,
+        "batch_size": 6025,
+        "embedding_lr": 2.2650595826141093,
+        "matrix_lr": 0.01918674178647933,
+        "n_embd": 512,
+        "n_head": 4.0,
+        "n_layer": 8.0,
+        "region_id": "r0001",
+        "scalar_lr": 0.083785919084436,
+        "seed": 42,
+        "token_xai_enabled": true,
+        "unembedding_lr": 0.0019057474349345176,
+        "warmup_ratio": 0.08450692277401686,
+        "weight_decay": 0.2803512718528509,
+        "window_s_fraction": 0.8505854671820998
+      },
+      "created_at_run": 0,
+      "flag": "currently_exploiting",
+      "flag_since_run": 0,
+      "measured_run_ids": [],
+      "merged_into": null,
+      "origin": "bootstrap",
+      "region_id": "r0001",
+      "run_ids": [
+        "run_0000"
+      ],
+      "successor_id": null,
+      "val_bpbs": []
+    }
+  ],
+  "resume_counts": {}
+}

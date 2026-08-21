@@ -1,0 +1,54 @@
+{
+  "models": {},
+  "latest_summary": null,
+  "iteration": 0,
+  "results": [
+    {
+      "run_id": "run_0000",
+      "hyperparams": {
+        "n_layer": 8.0,
+        "n_head": 4.0,
+        "n_embd": 512,
+        "window_s_fraction": 0.8505854671820998,
+        "embedding_lr": 2.2650595826141093,
+        "unembedding_lr": 0.0019057474349345176,
+        "matrix_lr": 0.01918674178647933,
+        "scalar_lr": 0.083785919084436,
+        "batch_size": 6025,
+        "warmup_ratio": 0.08450692277401686,
+        "weight_decay": 0.2803512718528509,
+        "ablation_k": 10,
+        "seed": 42,
+        "region_id": "r0001",
+        "token_xai_enabled": true
+      },
+      "val_bpb": Infinity,
+      "training_time": 0.0,
+      "checkpoint_path": null,
+      "report_id": null,
+      "status": "remote_error",
+      "metadata": {
+        "val_bpb": Infinity,
+        "error": "[hyperparams] DEPTH=8 N_HEAD=4 target_n_embd=512 EMBEDDING_LR=2.2650595826141093 UNEMBEDDING_LR=0.0019057474349345176 MATRIX_LR=0.01918674178647933 SCALAR_LR=0.083785919084436 WEIGHT_DECAY=0.2803512718528509 WARMUP_RATIO=0.08450692277401686 TOTAL_BATCH_SIZE=6144 WINDOW_PATTERN=LSSSSSSS (window_s_fraction=0.8505854671820998) SEED=42\nVocab size: 8,192\nModel config: {'sequence_len': 2048, 'vocab_size': 8192, 'n_layer': 8, 'n_head': 4, 'n_kv_head': 4, 'n_embd': 512, 'window_pattern': 'LSSSSSSS'}\nParameter counts:\n  wte                     : 4,194,304\n  value_embeds            : 16,777,216\n  lm_head                 : 4,194,304\n  transformer_matrices    : 25,166,336\n  scalars                 : 16\n  total                   : 50,332,176\nEstimated FLOPs per token: 2.390784e+08\nScaling AdamW LRs by 1/sqrt(512/768) = 1.224745\n[train.py] torch.compile skipped (SDPA-only build, compiled SDPA is memory-inefficient)\n[train.py] Initializing dataloader...\n[train.py] Dataloader created, prefetching first batch...\n[train.py] First batch prefetched successfully\nToken budget: 4,194,304 tokens (safety cap 900s)\nGradient accumulation steps: 3\n[train.py] Starting training loop...\n[--------------------]   0.1% | loss: 9.011681 | lrm: 0.02 | tok/sec: 6,042 | mfu:   0.1% | remaining:  4.19M tok\n[--------------------]   0.9% | loss: 8.991862 | lrm: 0.10 | tok/sec: 45,110 | mfu:   1.1% | remaining:  4.16M tok\n[--------------------]   1.6% | loss: 8.866179 | lrm: 0.19 | tok/sec: 40,625 | mfu:   1.0% | remaining:  4.13M tok\n[--------------------]   2.3% | loss: 8.498149 | lrm: 0.28 | tok/sec: 41,197 | mfu:   1.0% | remaining:  4.10M tok\n[--------------------]   3.1% | loss: 8.063237 | lrm: 0.36 | tok/sec: 49,085 | mfu:   1.2% | remaining:  4.07M tok\n[--------------------]   3.8% | loss: 7.623226 | lrm: 0.45 | tok/sec: 39,464 | mfu:   1.0% | remaining:  4.03M tok\n[--------------------]   4.5% | loss: 7.323079 | lrm: 0.54 | tok/sec: 40,452 | mfu:   1.0% | remaining:  4.00M tok\n[=-------------------]   5.3% | loss: 7.116892 | lrm: 0.62 | tok/sec: 46,504 | mfu:   1.1% | remaining:  3.97M tok\n[=-------------------]   6.0% | loss: 6.916047 | lrm: 0.71 | tok/sec: 44,035 | mfu:   1.1% | remaining:  3.94M tok\n[=-------------------]   6.7% | loss: 6.771806 | lrm: 0.80 | tok/sec: 37,849 | mfu:   0.9% | remaining:  3.91M tok\n[=-------------------]   7.5% | loss: 6.605581 | lrm: 0.88 | tok/sec: 41,962 | mfu:   1.0% | remaining:  3.88M tok\n[=-------------------]   8.2% | loss: 6.497534 | lrm: 0.97 | tok/sec: 41,386 | mfu:   1.0% | remaining:  3.85M tok\n[=-------------------]   8.9% | loss: 6.436140 | lrm: 1.00 | tok/sec: 37,384 | mfu:   0.9% | remaining:  3.82M tok\n[=-------------------]   9.7% | loss: 6.321586 | lrm: 1.00 | tok/sec: 31,176 | mfu:   0.8% | remaining:  3.79M tok\n[==------------------]  10.4% | loss: 6.327691 | lrm: 1.00 | tok/sec: 37,861 | mfu:   0.9% | remaining:  3.76M tok\n[==------------------]  11.1% | loss: 6.197879 | lrm: 1.00 | tok/sec: 40,791 | mfu:   1.0% | remaining:  3.73M tok\n[==------------------]  11.9% | loss: 6.092106 | lrm: 1.00 | tok/sec: 38,010 | mfu:   0.9% | remaining:  3.70M tok\n[==------------------]  12.6% | loss: 6.057356 | lrm: 1.00 | tok/sec: 37,589 | mfu:   0.9% | remaining:  3.67M tok\nTerminated",
+        "status": "remote_error",
+        "device": 5
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "report_id": "report_0000",
+      "model_id": "run_0000",
+      "important_heads": [],
+      "hyperparameter_importance": {},
+      "stuck_signal": true,
+      "confidence": 0.72,
+      "notes": [
+        "Observed validation bpb inf",
+        "Run status: remote_error",
+        "Training time: 0s"
+      ],
+      "token_fingerprint": {}
+    }
+  ]
+}

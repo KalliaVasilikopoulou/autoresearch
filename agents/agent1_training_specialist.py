@@ -286,6 +286,11 @@ class Agent1TrainingSpecialist:
         self.current_hyperparams = self._init_hyperparams()
         self.total_api_cost = 0.0
         self.best_val_bpb = float("inf")
+        #: How much EI's uncertainty term is still worth paying for, 1.0 down
+        #: to 0.0. Set by the orchestrator each iteration from the campaign's
+        #: REMAINING non-Sobol runs; 1.0 when nobody sets it, so every existing
+        #: caller and test behaves exactly as before.
+        self.exploration_weight = 1.0
         # Set only inside search_region(): several regions decided in one
         # wave would otherwise each overwrite model_hyperparams.yaml, leaving
         # the file describing whichever region happened to be decided last.
@@ -779,6 +784,7 @@ class Agent1TrainingSpecialist:
             rows=rows,
             current_best_hyperparams=self.current_hyperparams,
             current_best_val_bpb=self.best_val_bpb,
+            exploration_weight=self.exploration_weight,
             iteration=iteration,
             cold_start_n=self.surrogate_cold_start_n,
             cycle_runs=self.surrogate_cycle_runs,

@@ -309,6 +309,10 @@ def propose_next(
     search_columns: Optional[Sequence[str]] = None,
     fence_center: Optional[Dict[str, Any]] = None,
     fence_radius: Optional[float] = None,
+    #: 1.0 = textbook EI. Falls toward 0 as the campaign's non-Sobol runs
+    #: deplete, annealing EI's uncertainty term -- exploration is only worth
+    #: paying for while runs remain to exploit what it finds.
+    exploration_weight: float = 1.0,
 ) -> Optional[Dict[str, Any]]:
     """Returns a full hyperparams dict (pass-through keys like `ablation_k`
     from current_best_hyperparams are preserved), or None when scipy/
@@ -516,6 +520,7 @@ def propose_next(
         # so "region" named a starting point rather than a place.
         fence_center=fence_center, fence_radius=fence_radius,
         fence_dims=len(search_params),
+        exploration_weight=exploration_weight,
     )
     full = dict(current_best_hyperparams)
     full.update(proposal)

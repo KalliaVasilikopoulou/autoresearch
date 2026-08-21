@@ -520,6 +520,7 @@ def propose_via_ei(
     fence_center: Optional[Dict[str, Any]] = None,
     fence_radius: Optional[float] = None,
     fence_dims: Optional[int] = None,
+    exploration_weight: float = 1.0,
 ) -> Any:
     """Random-search EI maximization: draws `n_candidates` points uniformly
     (in normalized space) over `free_params`, holds everything else at
@@ -583,7 +584,23 @@ def propose_via_ei(
     mus = tree_preds.mean(axis=0)
     sigmas = tree_preds.std(axis=0)
 
-    eis = [expected_improvement(float(mu), float(sigma), f_best) for mu, sigma in zip(mus, sigmas)]
+    # BUDGET-AWARE EXPLORATION. EI = promise + uncertainty, and the second term
+    # is only worth paying for while there are runs left to EXPLOIT what it
+    # teaches. Scaling sigma by `exploration_weight` anneals that term: at 1.0
+    # this is textbook EI, and as it approaches 0 the acquisition collapses to
+    # max(f_best - mu, 0), which is monotone in -mu -- i.e. pure exploitation,
+    # "take the best predicted point".
+    #
+    # THE FAILURE THIS FIXES. With a flat weight, EI spent the last third of a
+    # 30-run campaign chasing variance it had no budget left to use. Measured
+    # at iterations 22/25/28, it chose candidates predicted at 1.5688 / 1.5638 /
+    # 1.5701 while candidates predicted at 1.4532 / 1.4809 / 1.4898 sat in the
+    # same batch -- because sigma at the chosen points was 0.186 / 0.087 /
+    # 0.067, up to 64x the 0.0029 noise floor. The run that had found 1.4463
+    # was never revisited.
+    w = max(0.0, float(exploration_weight))
+    eis = [expected_improvement(float(mu), float(sigma) * w, f_best)
+           for mu, sigma in zip(mus, sigmas)]
     # Two winners: the one we run (inside the fence) and the one the search
     # WANTED (ignoring it). Their gap is the escape pressure.
     unfenced_best = int(np.argmax(eis[:n_unfenced]))
@@ -593,6 +610,12 @@ def propose_via_ei(
         return winner
 
     diagnostics = {
+        # THE INCUMBENT THE ACQUISITION MEASURED AGAINST. It was not recorded,
+        # so every plan on disk says `f_best used = None` and the log cannot
+        # show what "improvement" meant for that proposal -- the same blind
+        # spot as the migration gain, which hid four bugs.
+        "f_best": float(f_best),
+        "exploration_weight": w,
         "free_params": list(free_params),
         "candidate_values": {p: [c[p] for c in candidates] for p in free_params},
         "mus": [float(v) for v in mus],

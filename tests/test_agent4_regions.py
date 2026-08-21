@@ -503,6 +503,23 @@ def _paused_active(registry, region_id, values):
     return r
 
 
+def test_no_new_region_when_there_is_no_budget_to_judge_it(agent4, registry):
+    """A new region needs min_runs_before_judgement runs before anything can be
+    said about it. Opening one with fewer left spends the campaign's last runs
+    somewhere unmeasurable instead of exploiting what is known."""
+    agent4.runs_remaining = agent4.min_runs_before_judgement - 1
+    assert agent4.propose_regions(_rows(), registry, n=1, at_run=50) == []
+
+    agent4.runs_remaining = agent4.min_runs_before_judgement
+    assert agent4._can_afford(agent4.min_runs_before_judgement) is True
+
+
+def test_an_unknown_budget_disables_the_gate(agent4, registry):
+    """An unset budget must not silently switch the search off."""
+    assert agent4.runs_remaining is None
+    assert agent4._can_afford(999) is True
+
+
 def test_a_hopeless_opening_run_is_rejected_immediately(agent4, registry):
     """20 of 74 runs went to regions whose FIRST run already said no: r0007
     opened at 1.6027, r0012 at 1.6002, r0013 at 1.5632, r0016 at 1.4961, all

@@ -370,6 +370,7 @@ class Orchestrator:
             print(f"\n{'='*60}")
             print(f"[Orchestrator] Iteration {iteration + 1}")
             print(f"{'='*60}")
+            self._apply_budget(iteration, max_iterations)
 
             wave_result = self._run_parallel_wave(iteration, report_batch, max_iterations)
             if wave_result is not None:
@@ -467,6 +468,39 @@ class Orchestrator:
         print(f"Total API cost: ${self.agent1.total_api_cost:.2f}")
         print(f"{'='*60}\n")
         return summary
+
+    def _apply_budget(self, iteration: int, max_iterations: int) -> None:
+        """Tell Agent 1 and Agent 4 how much budget is left, before deciding.
+
+        THE FAILURE THIS ADDRESSES. Exploration is only worth paying for while
+        runs remain to exploit what it finds, and nothing in the search knew how
+        many there were. Measured on a 30-run campaign: EI spent iterations 22,
+        25 and 28 on candidates it predicted at 1.5688 / 1.5638 / 1.5701 while
+        candidates predicted at 1.4532 / 1.4809 / 1.4898 sat in the same batch
+        -- sigma at the chosen points was up to 64x the 0.0029 noise floor, so
+        the uncertainty term won every time. The 1.4463 found at iteration 19
+        was never revisited and 8 of 30 runs went into ground there was no
+        budget left to use.
+
+        THE COLD START IS EXCLUDED from both totals. Its runs are a
+        space-filling sample rather than choices the search made, so counting
+        them would report the budget half spent before the search had taken a
+        single decision.
+        """
+        cold = int(self.agent4.cold_start_n)
+        search_total = max(1, max_iterations - cold)
+        search_done = max(0, iteration - cold)
+        remaining = max(0, search_total - search_done)
+
+        # Linear decay: full EI on the first search run, pure exploitation on
+        # the last. Linear because the value of information falls roughly with
+        # the runs left to act on it, and because a rule this consequential
+        # should be legible.
+        self.agent1.exploration_weight = remaining / float(search_total)
+        self.agent4.runs_remaining = remaining
+        if iteration >= cold:
+            print(f"[Orchestrator] Budget: {remaining}/{search_total} search runs left "
+                  f"-> exploration weight {self.agent1.exploration_weight:.2f}")
 
     def _set_holdout_threshold(self, hyperparams: Dict[str, Any]) -> None:
         """Ask train.py to also score the held-out shard if this run turns out
