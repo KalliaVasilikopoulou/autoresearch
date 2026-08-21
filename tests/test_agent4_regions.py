@@ -368,14 +368,63 @@ def test_the_resume_budget_is_what_keeps_the_livelock_dead(agent4, registry):
     _paused(registry, "r0015", [1.4815] * 8)
     _paused(registry, "r0013", [1.5548] * 8)
 
+    # Space the attempts past reclaim_cooldown_runs so the BUDGET is what
+    # stops this, not the cooldown -- otherwise the test would pass for the
+    # wrong reason and stop covering max_resumes at all.
+    step = agent4.reclaim_cooldown_runs
+    at = 50
     for i in range(agent4.max_resumes):
-        got = agent4.reclaim_better_paused(registry, at_run=50 + i)
+        got = agent4.reclaim_better_paused(registry, at_run=at)
         assert got is good, f"resume {i} should have been allowed"
-        good.set_flag(_P, at_run=50 + i)   # it pauses again immediately
+        good.set_flag(_P, at_run=at)       # it pauses again immediately
+        at += step
 
     assert registry.resumes_used("r0010") == agent4.max_resumes
-    assert agent4.reclaim_better_paused(registry, at_run=99) is None
+    assert agent4.reclaim_better_paused(registry, at_run=at + step) is None
     assert good.flag == _P
+
+
+def test_a_region_is_not_reclaimed_on_the_iteration_it_paused(agent4, registry):
+    """THE MEASURED FAILURE. In campaign 12 r0010 hit stuck=15, paused, and
+    was reclaimed in the SAME iteration -- overturning a verdict the instant it
+    was made, with nothing changed in between. Reclaim means "go back to good
+    ground the search abandoned", which is about the past."""
+    from state.regions import PAUSED as _P
+    good = _paused(registry, "r0010", [1.4287] * 8)
+    _paused(registry, "r0015", [1.4815] * 8)
+    _paused(registry, "r0013", [1.5548] * 8)
+    good.set_flag(_P, at_run=100)
+
+    assert agent4.reclaim_better_paused(registry, at_run=100) is None
+    assert agent4.reclaim_better_paused(
+        registry, at_run=100 + agent4.reclaim_cooldown_runs - 1) is None
+    got = agent4.reclaim_better_paused(
+        registry, at_run=100 + agent4.reclaim_cooldown_runs)
+    assert got is good
+
+
+def test_a_lone_region_is_still_judged_against_the_champion(agent4, registry, monkeypatch):
+    """_worse_than_field_by only read registry.active(), so under one GPU --
+    where the scheduled region is usually the ONLY active one -- it silently
+    never fired. Measured in campaign 12: r0019 sat 0.03 behind the champion
+    for six runs and was stopped by stagnation rather than by being bad."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: None)
+    champ = _paused(registry, "r0001", [1.40] * 8)      # paused, not live
+    lone = _paused_active(registry, "r0002", [1.48] * 8)  # the only live one
+
+    assert registry.active() == [lone]
+    assert registry.champion() is champ
+
+    behind = agent4._worse_than_field_by(lone, registry)
+    assert behind is not None, "no live rival, so the rule used to give up here"
+    assert behind == pytest.approx(1.48 - 1.40)
+    assert agent4.judge(lone, registry, at_run=20) == NO_OPTIMUM
+
+
+def test_the_champion_is_never_judged_worse_than_itself(agent4, registry):
+    champ = _paused_active(registry, "r0001", [1.40] * 8)
+    assert registry.champion() is champ
+    assert agent4._worse_than_field_by(champ, registry) is None
 
 
 def test_nothing_is_reclaimed_before_any_region_can_be_judged(agent4, registry):

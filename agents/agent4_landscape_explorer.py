@@ -143,6 +143,15 @@ class Agent4LandscapeExplorer:
         #: pause. Bounded because unbounded resuming is what livelocked a
         #: 60-run campaign; see reclaim_better_paused.
         self.max_resumes = int(cfg.get("max_resumes", 2))
+        #: How many runs must pass after an exploitation pause before that
+        #: region may be reclaimed. Without it reclaim fires in the SAME
+        #: iteration as the pause and overturns a verdict the instant it is
+        #: made -- measured in campaign 12: r0010 hit stuck=15, paused, and was
+        #: reclaimed in the same breath with nothing changed in between. The
+        #: intent is "go back to good ground the search abandoned", which is a
+        #: statement about the past, not about the decision just taken.
+        self.reclaim_cooldown_runs = int(
+            cfg.get("reclaim_cooldown_runs", self.min_runs_before_judgement))
         #: How far past the champion a region's FIRST run may land before it is
         #: rejected outright, in multiples of sigma_region. Deliberately wide:
         #: across 10 regions, first-run rank vs final-elite rank correlated at
@@ -764,8 +773,14 @@ class Agent4LandscapeExplorer:
                 "best_val_bpb": region.best_val_bpb,
             })
 
+        # No `alone` guard. It was there so the campaign was never left with
+        # nowhere to search -- but the allocator opens a new region in the same
+        # wave, exactly as it does after the one-run rejection screen, and
+        # under one GPU requiring company disabled this rule almost entirely.
+        # A region 3 sigma behind the best known IS bad, and the champion's
+        # result is banked whatever happens to this one.
         worse_by = self._worse_than_field_by(region, registry)
-        if (worse_by is not None and not alone
+        if (worse_by is not None
                 and worse_by > self.retire_margin_sigma * self.sigma_region):
             return self._retire(region, registry, NO_OPTIMUM, at_run, {
                 "worse_than_best_live_by": worse_by,
@@ -863,7 +878,23 @@ class Agent4LandscapeExplorer:
             and r.n_measured >= self.min_runs_before_judgement
         ]
         if not rivals:
-            return None
+            # NOTHING ELSE IS LIVE -- fall back to the champion. Under one GPU
+            # the scheduled region is usually the only ACTIVE one, so a rule
+            # that only reads registry.active() silently never fires: measured
+            # in campaign 12, r0019 sat 0.03 behind the champion for six runs
+            # and was stopped by stagnation rather than by being bad.
+            #
+            # "Worse than somewhere better" does not depend on what happens to
+            # be SCHEDULED. A paused or terminal champion is still somewhere we
+            # could run instead -- reclaim_better_paused and revive_tied both
+            # exist to go back to one -- so it is a legitimate comparator, and
+            # it is the same benchmark the one-run rejection screen uses.
+            champion = registry.champion()
+            if champion is None or champion.region_id == region.region_id:
+                return None
+            if champion.elite_score() is None:
+                return None
+            return mine - champion.elite_score()
         return mine - min(rivals)
 
     def _resolvable_gap(self):
@@ -1257,6 +1288,11 @@ class Agent4LandscapeExplorer:
             and r.elite_score() is not None
             and r.elite_score() < typical
             and registry.resumes_used(r.region_id) < self.max_resumes
+            # Evidence must have accumulated since the pause. Reclaiming a
+            # region on the same iteration it paused overturns the verdict
+            # rather than revisiting the place later, and nothing has changed
+            # to justify a different answer.
+            and (at_run - r.flag_since_run) >= self.reclaim_cooldown_runs
         ]
         if not candidates:
             return None
