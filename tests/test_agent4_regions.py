@@ -463,6 +463,32 @@ def test_a_region_inside_the_resolvable_gap_is_marked_tied(agent4, registry, mon
     assert not rival.schedulable
 
 
+def test_the_champion_is_never_tied_with_itself(agent4, registry, monkeypatch):
+    """A region is trivially indistinguishable from itself, so without a guard
+    the champion is set aside the moment it becomes rankable and the campaign
+    stops exploiting its best region for good. Observed on the first iteration
+    of campaign 12: r0017 -> tied_for_best, champion r0017, difference 0.0."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    champ = _champion(registry, values=(1.40,) * 8)
+    assert registry.champion() is champ
+
+    assert agent4._tied_for_best(champ, registry, at_run=20) is None
+    # It then falls through to the ORDINARY rules, which is the whole point:
+    # the champion is governed like any region with no rival above it. This
+    # fixture is eight identical values, so stagnation pauses it -- correctly.
+    # What must never happen is tied_for_best.
+    assert agent4.judge(champ, registry, at_run=20) != TIED_FOR_BEST
+    assert champ.flag == PAUSED
+
+
+def test_a_runner_up_inside_the_gap_is_still_tied(agent4, registry, monkeypatch):
+    """The guard is only about self-comparison -- everything else still ties."""
+    monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
+    _champion(registry, values=(1.40,) * 8)
+    rival = _paused_active(registry, "r0002", (1.4050,) * 8)
+    assert agent4.judge(rival, registry, at_run=20) == TIED_FOR_BEST
+
+
 def test_a_separable_region_is_not_marked_tied(agent4, registry, monkeypatch):
     monkeypatch.setattr(agent4, "_resolvable_gap", lambda: 0.0093)
     _champion(registry, values=(1.40,) * 8)

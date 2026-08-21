@@ -921,6 +921,19 @@ class Agent4LandscapeExplorer:
         champion = registry.champion()
         if mine is None or champion is None or champion.elite_score() is None:
             return None
+        # NEVER TIE THE CHAMPION WITH ITSELF. A region is trivially
+        # indistinguishable from itself (difference 0.0), so without this the
+        # champion is set aside the moment it becomes rankable and the campaign
+        # stops exploiting its best region for good. Observed on the first
+        # iteration of campaign 12: r0017 -> tied_for_best, champion r0017,
+        # difference 0.0.
+        #
+        # The rule means "we cannot show this is better than the best", which is
+        # a statement about a PAIR. The champion is what the others are measured
+        # against; it stops when saturation or stagnation says so, like any
+        # region with no rival above it.
+        if region.region_id == champion.region_id:
+            return None
         difference = abs(mine - champion.elite_score())
         if difference > gap:
             return None
