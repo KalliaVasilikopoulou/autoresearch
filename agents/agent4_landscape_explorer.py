@@ -174,6 +174,24 @@ class Agent4LandscapeExplorer:
         #: region is being explored, not mis-anchored. 0.6 demands the mean
         #: vector keep most of its length through the averaging.
         self.escape_coherence = float(cfg.get("escape_coherence", 0.6))
+        #: The furthest a single migration may move an anchor, in fence radii.
+        #: The gate checks DIRECTION (coherence) and that the predicted mean is
+        #: better -- never DISTANCE, so a region could relocate 17 fences on 5
+        #: runs of evidence. Measured in campaign 11: steps of 0.0554, 0.1902
+        #: and 0.3305 against a 0.02 fence, growing.
+        #:
+        #: A cap does not forbid going far, it forbids going far IN ONE STEP.
+        #: A truncated migration re-anchors, spends min_runs_before_judgement
+        #: runs measuring where it landed, and migrates again if it still wants
+        #: to -- so the same destination is reached with evidence at every stop
+        #: instead of one extrapolation into ground the surrogate has no data
+        #: on. That is how r0007 (1.6704) and r0012 (1.5936) happened.
+        #:
+        #: 10 is provisional: it bounds the pre-fix runaway (which reached
+        #: 0.206 and was still growing) while allowing both steps this campaign
+        #: has seen pay off. The truncation is logged so it can be re-derived
+        #: from how often it actually bites.
+        self.max_migration_radii = float(cfg.get("max_migration_radii", 10.0))
 
         #: How hard XAI may push the architecture proposal, before being scaled
         #: down by the surrogate's own accuracy. Deliberately SMALL: the
@@ -1024,7 +1042,8 @@ class Agent4LandscapeExplorer:
                         and isinstance(e.get("mean_outside"), (int, float))]
         if len(improvements) < self.escape_runs_to_migrate:
             return None
-        if statistics.mean(improvements) < self.sigma_region:
+        mean_gain = statistics.mean(improvements)
+        if mean_gain < self.sigma_region:
             # Lower val_bpb is better, so a positive gap means the outside
             # candidate is predicted better. One sigma_region is the smallest
             # difference between two configurations this campaign can read.
@@ -1049,8 +1068,50 @@ class Agent4LandscapeExplorer:
             # It wants to go somewhere the fence already allows, so there is
             # nothing to migrate to -- the search can simply go there.
             return None
+
+        # CAP THE STEP. Scaling the mean direction and re-deriving the target
+        # keeps the destination on the same ray, just nearer; the mapping back
+        # out of normalized space is not exactly linear, so the distance is
+        # re-measured rather than assumed.
+        capped_at = self.max_migration_radii * self.region_radius
+        truncated_from = None
+        if capped_at > 0 and travelled > capped_at:
+            # BISECT on the scale factor rather than scaling once. Distance is
+            # NOT linear in the shift: _escape_target maps back through
+            # log-scaled axes and clips at the box, so scaling the direction by
+            # cap/travelled overshot by 2.4x on the first fixture that tried it
+            # (0.1329 -> 0.0958 against a 0.04 cap). Twelve halvings is exact
+            # to ~0.02% of the cap and costs nothing -- no training is involved.
+            lo, hi = 0.0, 1.0
+            best = None
+            for _ in range(12):
+                mid = (lo + hi) / 2.0
+                probe = self._escape_target(
+                    region, {p: v * mid for p, v in mean_vec.items()})
+                if probe is None:
+                    hi = mid
+                    continue
+                reach = distance(probe, region.anchor, None)
+                if reach <= capped_at:
+                    best, lo = (probe, reach), mid
+                else:
+                    hi = mid
+            if best is not None and best[1] > self.region_radius:
+                truncated_from = travelled
+                target, travelled = best
+                print(f"[Agent 4] Region {region.region_id} wanted to move "
+                      f"{truncated_from:.4f} ({truncated_from / self.region_radius:.0f} "
+                      f"fences); capped to {travelled:.4f}. It can migrate again "
+                      f"from there once it has measured where it landed.")
+
         return {"n_escapes": len(escapes), "coherence": coherence,
-                "mean_direction": mean_vec, "distance": travelled, "target": target}
+                "mean_direction": mean_vec, "distance": travelled, "target": target,
+                # The number the migration gate actually turns on. It was not
+                # recorded, so the decision log could show that migration fired
+                # but not that the margin was met, or by how much -- the exact
+                # blind spot that hid four bugs in this same code.
+                "mean_gain": mean_gain, "gain_bar": self.sigma_region,
+                "truncated_from": truncated_from}
 
     def _escape_target(self, region: Region, mean_vec: Dict[str, float]) -> Optional[Dict[str, Any]]:
         """Where the successor should be anchored: the region's anchor shifted
@@ -1106,6 +1167,10 @@ class Agent4LandscapeExplorer:
             "region_id": region.region_id, "successor_id": successor.region_id,
             "n_escapes": pressure["n_escapes"], "coherence": pressure["coherence"],
             "distance": pressure["distance"],
+            "mean_gain": pressure.get("mean_gain"),
+            "gain_bar": pressure.get("gain_bar"),
+            "truncated_from": pressure.get("truncated_from"),
+            "max_migration_radii": self.max_migration_radii,
         }, region_id=region.region_id)
         return successor
 

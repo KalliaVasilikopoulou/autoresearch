@@ -299,3 +299,62 @@ def test_escape_records_without_predicted_means_are_skipped(tmp_path):
                        "distance": 0.09, "radius": 0.05}}))
 
     assert a4.escape_pressure(r) is None
+
+
+def test_a_migration_step_is_capped(tmp_path):
+    """The gate checks DIRECTION and predicted MEAN, never DISTANCE -- so a
+    region could relocate 17 fence-widths on 5 runs of evidence. Measured in
+    campaign 11: 0.0554, then 0.1902, then 0.3305 against a 0.02 fence.
+
+    A cap does not forbid going far, it forbids going far IN ONE STEP: the
+    successor re-anchors, measures where it landed, and migrates again if it
+    still wants to."""
+    # A cap of 2 fences (0.04). The default 10 does not bite on this fixture --
+    # the escape target is bounded by the search space, so even a maximal pull
+    # only reaches ~0.13 -- and a test that never triggers the mechanism it
+    # names passes vacuously.
+    a4 = _agent4(tmp_path, region_radius=0.02, max_migration_radii=2.0)
+    reg = RegionRegistry(str(tmp_path / 'state' / 'regions.json'))
+    r = reg.open_region(dict(BASE), at_run=0)
+    for i in range(6):
+        reg.assign_run(r.region_id, f'run_{i:04d}', 1.30)
+    # a long coherent pull on one axis
+    _write_escapes(tmp_path, r, [{'scalar_lr': 0.9}] * 4)
+
+    p = a4.escape_pressure(r)
+    assert p is not None
+    cap = a4.max_migration_radii * a4.region_radius
+    assert p['truncated_from'] is not None, 'the cap never fired -- vacuous test'
+    assert p['truncated_from'] > cap
+    assert p['distance'] <= cap * 1.05, f"step {p['distance']} exceeded cap {cap}"
+    assert p['distance'] > a4.region_radius, 'truncated inside the fence, so nowhere to go'
+
+
+def test_a_step_inside_the_cap_is_left_alone(tmp_path):
+    a4 = _agent4(tmp_path, region_radius=0.02, max_migration_radii=10.0)
+    reg = RegionRegistry(str(tmp_path / 'state' / 'regions.json'))
+    r = reg.open_region(dict(BASE), at_run=0)
+    for i in range(6):
+        reg.assign_run(r.region_id, f'run_{i:04d}', 1.30)
+    _write_escapes(tmp_path, r, [{'scalar_lr': 0.25}] * 4)
+
+    p = a4.escape_pressure(r)
+    assert p is not None and p['truncated_from'] is None
+
+
+def test_the_number_the_gate_turns_on_is_recorded(tmp_path):
+    """The decision log carried coherence, distance and escape count but NOT
+    the predicted-mean gain the gate actually tests -- so it could show that
+    migration fired and not that the margin was met. That blind spot hid four
+    bugs in this same code."""
+    a4 = _agent4(tmp_path, region_radius=0.02)
+    reg = RegionRegistry(str(tmp_path / 'state' / 'regions.json'))
+    r = reg.open_region(dict(BASE), at_run=0)
+    for i in range(6):
+        reg.assign_run(r.region_id, f'run_{i:04d}', 1.30)
+    _write_escapes(tmp_path, r, [{'scalar_lr': 0.25}] * 4)
+
+    p = a4.escape_pressure(r)
+    assert p is not None
+    assert 'mean_gain' in p and isinstance(p['mean_gain'], float)
+    assert p['mean_gain'] >= p['gain_bar'], 'gate passed, so the margin was met'
