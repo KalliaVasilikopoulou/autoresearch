@@ -61,9 +61,14 @@ def _registry(tmp_path, n=2):
     reg = RegionRegistry(str(tmp_path / "state" / "regions.json"))
     regions = [reg.open_region({**BASE, "matrix_lr": 0.04 + 0.05 * i}, at_run=0)
                for i in range(n)]
-    for r in regions:
+    # GLOBAL run ids, as the orchestrator issues them (run_{iteration:04d}).
+    # escape_pressure matches plan_NNNN.json against the region's own run ids to
+    # ignore plans left behind by an earlier campaign, so a region-prefixed id
+    # here would make every plan look like it belonged to someone else. Each
+    # region gets its own decade so two regions never claim the same run.
+    for k, r in enumerate(regions):
         for i, v in enumerate([1.30, 1.28, 1.26, 1.25, 1.24, 1.23]):
-            reg.assign_run(r.region_id, f"{r.region_id}_{i}", v)
+            reg.assign_run(r.region_id, f"run_{k * 10 + i:04d}", v)
     return reg, regions
 
 
@@ -358,3 +363,32 @@ def test_the_number_the_gate_turns_on_is_recorded(tmp_path):
     assert p is not None
     assert 'mean_gain' in p and isinstance(p['mean_gain'], float)
     assert p['mean_gain'] >= p['gain_bar'], 'gate passed, so the margin was met'
+
+
+def test_stale_plans_from_an_earlier_campaign_are_ignored(tmp_path):
+    """THE MEASURED FAILURE. After a fresh start the live campaign wrote
+    plan_0000-0029, but plan_0030-0121 from an archived campaign were still on
+    disk. escape_pressure takes the last `escape_window` files BY NAME, so it
+    read the stale ones, whose escapes predate mean_inside/mean_outside -- and
+    returned None, which is indistinguishable from "the search does not want to
+    leave". Six consecutive real escapes, gains 0.005-0.100 against a 0.0106
+    bar, were never looked at."""
+    a4 = _agent4(tmp_path, region_radius=0.02)
+    reg = RegionRegistry(str(tmp_path / 'state' / 'regions.json'))
+    r = reg.open_region(dict(BASE), at_run=0)
+    for i in range(6):
+        reg.assign_run(r.region_id, f'run_{i:04d}', 1.30)
+
+    # the live campaign's escapes, run_0000-0005
+    _write_escapes(tmp_path, r, [{'scalar_lr': 0.25}] * 6)
+    assert a4.escape_pressure(r) is not None, 'live escapes should migrate'
+
+    # now drop stale plans with HIGHER numbers, as an archived campaign leaves
+    d = Path(tmp_path / 'reports' / 'agent1_search_plan' / r.region_id)
+    for i in range(100, 106):
+        (d / f'plan_{i:04d}.json').write_text(json.dumps(
+            {'iteration': i, 'escape': {'escaped': True, 'direction': {'scalar_lr': -0.9},
+                                        'distance': 0.5}}), encoding='utf-8')
+
+    # they sort last, but they belong to no run this region has
+    assert a4.escape_pressure(r) is not None, 'stale plans hijacked the window'

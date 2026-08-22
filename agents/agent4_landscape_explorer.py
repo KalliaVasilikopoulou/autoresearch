@@ -1126,8 +1126,32 @@ class Agent4LandscapeExplorer:
         plan_dir = Path(region.report_dir(self._search_plan_root))
         if not plan_dir.exists():
             return None
+        # ONLY PLANS THIS REGION ACTUALLY RAN. The window is the last
+        # `escape_window` files BY NAME, and nothing inside a plan ties it to
+        # the run it produced -- so a directory still holding plans from an
+        # earlier campaign silently wins the sort.
+        #
+        # Measured: after a fresh start the live campaign wrote plan_0000-0029,
+        # but plan_0030-0121 from an archived campaign were still on disk, so
+        # escape_pressure read plan_0116-0121. Those predate the
+        # mean_inside/mean_outside fields, both came back None, the improvements
+        # list was empty, and the function returned None -- INDISTINGUISHABLE
+        # from "the search does not want to leave". The live campaign's six
+        # consecutive escapes, gains 0.005-0.100 against a 0.0106 bar, were
+        # never looked at, and the region stayed fenced 17 fence-widths away
+        # from its own best run.
+        #
+        # plan_NNNN.json is written for the proposal that becomes run_NNNN, so
+        # membership in the region's own run ids is an exact test and needs no
+        # new state.
+        own_runs = {str(rid) for rid in region.run_ids}
+
+        def _belongs(path: Path) -> bool:
+            return f"run_{path.stem.rsplit('_', 1)[-1]}" in own_runs
+
+        mine = [p for p in sorted(plan_dir.glob("plan_*.json")) if _belongs(p)]
         escapes: List[Dict[str, Any]] = []
-        for path in sorted(plan_dir.glob("plan_*.json"))[-self.escape_window:]:
+        for path in mine[-self.escape_window:]:
             try:
                 esc = json.loads(path.read_text(encoding="utf-8")).get("escape")
             except (OSError, ValueError, UnicodeDecodeError):
